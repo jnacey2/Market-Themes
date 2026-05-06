@@ -1,16 +1,7 @@
-import type { SourceClass } from "@market-themes/db";
+import type { PersistableDocument, SourceClass } from "@market-themes/db";
+import { createSecFilingsConnector } from "./sec";
 
-export type RawDocument = {
-  sourceId: string;
-  sourceClass: SourceClass;
-  title: string;
-  publisher: string;
-  url: string;
-  publishedAt: string;
-  tickers: string[];
-  body: string;
-  retrievalMethod: "api" | "rss" | "credentialed" | "scrape" | "manual";
-};
+export type RawDocument = PersistableDocument;
 
 export type SourceConnector = {
   id: string;
@@ -46,11 +37,7 @@ export function createPlaceholderConnector(
 }
 
 export const defaultConnectors: SourceConnector[] = [
-  createPlaceholderConnector(
-    "sec-filings",
-    "filing",
-    "SEC filing connector for S&P 500 and Nasdaq-100 backfills."
-  ),
+  createSecFilingsConnector(),
   createPlaceholderConnector(
     "company-ir",
     "press_release",

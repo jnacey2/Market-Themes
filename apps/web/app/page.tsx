@@ -16,6 +16,7 @@ export default function HomePage() {
           <a href="#storyboards">Storyboards</a>
           <a href="#brief">Daily Brief</a>
           <a href="#copilot">Copilot</a>
+          <Link href="/ingestion">Ingestion</Link>
         </div>
       </nav>
 

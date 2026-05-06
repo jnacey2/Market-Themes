@@ -22,9 +22,13 @@ create table if not exists documents (
   tickers text[] not null default '{}',
   summary text not null default '',
   retrieval_method text not null,
+  metadata jsonb not null default '{}',
   content_hash text not null unique,
   created_at timestamptz not null default now()
 );
+
+alter table documents
+  add column if not exists metadata jsonb not null default '{}';
 
 create table if not exists document_chunks (
   id text primary key,

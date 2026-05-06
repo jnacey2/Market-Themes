@@ -1,0 +1,94 @@
+import Link from "next/link";
+import { getIngestionStatus } from "@market-themes/db";
+
+export const dynamic = "force-dynamic";
+
+export default async function IngestionPage() {
+  const status = await getIngestionStatus();
+
+  return (
+    <div className="shell">
+      <nav className="nav">
+        <Link className="brand" href="/">
+          Market Themes
+        </Link>
+        <div className="nav-links">
+          <Link href="/">Dashboard</Link>
+        </div>
+      </nav>
+
+      <section className="hero">
+        <div>
+          <p className="eyebrow">Ingestion Status</p>
+          <h1>SEC filing pipeline</h1>
+          <p className="lede">
+            Monitor whether official SEC filing ingestion is connected, writing
+            documents, and producing chunks for later Claude analysis.
+          </p>
+        </div>
+        <div className="panel">
+          <p className="eyebrow">Database</p>
+          <h2>{status.databaseConfigured ? "Connected" : "Not configured"}</h2>
+          <p>
+            {status.databaseConfigured
+              ? "The app can query Postgres for ingestion status."
+              : "Set DATABASE_URL to enable live ingestion status."}
+          </p>
+        </div>
+      </section>
+
+      <section className="grid three">
+        <div className="panel">
+          <span className="label">Total documents</span>
+          <h2>{status.totalDocuments}</h2>
+          <p>All normalized documents currently stored.</p>
+        </div>
+        <div className="panel">
+          <span className="label">SEC documents</span>
+          <h2>{status.secDocuments}</h2>
+          <p>Documents inserted by the official SEC connector.</p>
+        </div>
+        <div className="panel">
+          <span className="label">Latest SEC filing</span>
+          <h2>{formatDate(status.latestSecDocumentAt)}</h2>
+          <p>Most recent SEC `published_at` timestamp in Postgres.</p>
+        </div>
+      </section>
+
+      <section className="section grid two">
+        <div className="panel">
+          <p className="eyebrow">Source counts</p>
+          <div className="grid">
+            {status.sourceCounts.length === 0 ? (
+              <p>No documents have been stored yet.</p>
+            ) : (
+              status.sourceCounts.map((source) => (
+                <div className="metric" key={source.sourceClass}>
+                  <span>{source.sourceClass.replace("_", " ")}</span>
+                  <strong>{source.count}</strong>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="panel">
+          <p className="eyebrow">Operational commands</p>
+          <div className="copilot-box">npm run db:apply</div>
+          <div className="copilot-box">npm run sec:smoke</div>
+          <div className="copilot-box">npm run sec:backfill</div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return "None yet";
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(value));
+}

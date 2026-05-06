@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node --import tsx src/worker.ts",
     "poll:sources": "node --import tsx src/jobs/poll-sources.ts",
+    "sec:smoke": "node --import tsx src/jobs/sec-smoke.ts",
+    "sec:backfill": "node --import tsx src/jobs/sec-backfill.ts",
     "brief:daily": "node --import tsx src/jobs/generate-daily-brief.ts",
     "trends:recompute": "node --import tsx src/jobs/recompute-theme-trends.ts",
     "typecheck": "tsc --noEmit"

@@ -167,6 +167,10 @@ Priority source classes:
 The app should use credentials where possible and scraping only where explicitly
 configured. Keep `SCRAPING_ENABLED=false` until a source has a clear rule set.
 
+SEC ingestion uses official SEC JSON endpoints and filing document downloads,
+not browser scraping. Configure `SEC_USER_AGENT` with an app name and contact
+email before running SEC jobs.
+
 For copyrighted or paywalled sources, default to storing metadata, embeddings,
 extracted signals, and short citation snippets unless source-specific terms
 allow full-text retention.
@@ -223,6 +227,13 @@ SESSION_SECRET=replace-with-a-long-random-secret
 SOURCE_CONFIG_JSON={}
 SCRAPING_ENABLED=false
 SCRAPER_USER_AGENT=MarketThemesBot/0.1 contact@example.com
+SEC_USER_AGENT=MarketThemesBot/0.1 contact@example.com
+SEC_TARGET_TICKERS=AAPL,MSFT,JPM,WMT,XOM
+SEC_POLL_LOOKBACK_DAYS=7
+SEC_BACKFILL_MONTHS=12
+SEC_BACKFILL_BATCH_SIZE=10
+SEC_BACKFILL_BATCH_INDEX=0
+SEC_RATE_LIMIT_MS=220
 EMAIL_PROVIDER_API_KEY=
 ```
 
@@ -237,10 +248,17 @@ npm run build
 npm run typecheck
 npm run lint
 npm run db:schema
+npm run db:apply
 npm run poll:sources --workspace @market-themes/workers
+npm run sec:smoke
+npm run sec:backfill
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
+
+SEC smoke ingestion uses `AAPL`, `MSFT`, `JPM`, `WMT`, and `XOM`. Full SEC
+backfills use `SEC_BACKFILL_BATCH_INDEX` and `SEC_BACKFILL_BATCH_SIZE` so the
+job can be resumed in manageable batches.
 
 ## Database Setup
 
@@ -301,6 +319,8 @@ Current worker scripts are smoke-testable scaffolds:
 
 ```bash
 npm run poll:sources --workspace @market-themes/workers
+npm run sec:smoke
+npm run sec:backfill
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -308,18 +328,21 @@ npm run trends:recompute --workspace @market-themes/workers
 The worker uses `node --import tsx` so TypeScript entrypoints run locally and on
 Render without a separate build step.
 
+Open `/ingestion` in the web app to see a minimal operational status page for
+stored SEC documents and source counts.
+
 ## Development Roadmap
 
 Near-term:
 
-1. Replace mock storyboard reads with Postgres queries.
-2. Add migrations or a migration runner.
-3. Add manual document paste/upload.
-4. Add SEC filing ingestion for the target universe.
+1. Expand the checked-in SEC ticker seed to the full S&P 500 plus Nasdaq-100.
+2. Replace mock storyboard reads with Postgres queries.
+3. Add migrations or a migration runner.
+4. Add manual document paste/upload.
 5. Add company IR press release ingestion.
 6. Add public/licensed earnings transcript ingestion.
 7. Wire Claude extraction into the worker.
-8. Store document chunks, embeddings, signals, and evidence cards.
+8. Store embeddings, signals, and evidence cards.
 9. Recompute trend baselines and z-scores from real data.
 10. Generate storyboards and daily briefs from stored evidence.
 

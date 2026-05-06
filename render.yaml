@@ -29,6 +29,12 @@ services:
         value: "false"
       - key: SCRAPER_USER_AGENT
         value: "MarketThemesBot/0.1"
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: SEC_POLL_LOOKBACK_DAYS
+        value: "7"
+      - key: SEC_RATE_LIMIT_MS
+        value: "220"
 
   - type: worker
     name: themes-worker
@@ -49,6 +55,18 @@ services:
         value: "false"
       - key: SCRAPER_USER_AGENT
         value: "MarketThemesBot/0.1"
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: SEC_POLL_LOOKBACK_DAYS
+        value: "7"
+      - key: SEC_BACKFILL_MONTHS
+        value: "12"
+      - key: SEC_BACKFILL_BATCH_SIZE
+        value: "10"
+      - key: SEC_BACKFILL_BATCH_INDEX
+        value: "0"
+      - key: SEC_RATE_LIMIT_MS
+        value: "220"
 
   - type: cron
     name: poll-sources
@@ -67,6 +85,12 @@ services:
         value: "{}"
       - key: SCRAPING_ENABLED
         value: "false"
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: SEC_POLL_LOOKBACK_DAYS
+        value: "7"
+      - key: SEC_RATE_LIMIT_MS
+        value: "220"
 
   - type: cron
     name: generate-daily-brief

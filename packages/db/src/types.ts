@@ -17,6 +17,31 @@ export type Document = {
   publishedAt: string;
   tickers: string[];
   summary: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type PersistableDocument = Document & {
+  body: string;
+  retrievalMethod: "api" | "rss" | "credentialed" | "scrape" | "manual";
+  contentHash?: string;
+};
+
+export type PersistDocumentsResult = {
+  insertedDocuments: number;
+  skippedDocuments: number;
+  insertedChunks: number;
+};
+
+export type IngestionStatus = {
+  databaseConfigured: boolean;
+  totalDocuments: number;
+  secDocuments: number;
+  latestSecDocumentAt: string | null;
+  latestCreatedAt: string | null;
+  sourceCounts: Array<{
+    sourceClass: SourceClass;
+    count: number;
+  }>;
 };
 
 export type EvidenceCard = {
