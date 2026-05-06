@@ -2,76 +2,373 @@
 
 Storyboard-first narrative intelligence for market research.
 
-The app ingests market-relevant text from filings, press releases, transcripts,
-credentialed news, controlled scraping, and manual uploads. Claude-powered
-analysis turns those documents into emergent themes, z-score based trend
-signals, evidence cards, daily briefs, and research copilot answers.
+Market Themes is a Render-deployable web app for tracking the market narratives
+that are getting stronger, weaker, broader, or more urgent across company
+filings, earnings calls, press releases, credentialed news, controlled scraping,
+and manual uploads.
+
+The goal is not to generate trade recommendations. The goal is to help a
+research user decide what themes, risks, and opportunities deserve deeper work.
+
+## Product Goal
+
+The app should answer questions like:
+
+- Which market themes are becoming unusually prominent?
+- Which risks are broadening across companies, sectors, or source types?
+- Where is bullishness increasing?
+- Is a topic genuinely accelerating, or is it just always present in markets?
+- What evidence supports the signal?
+- What should I read or investigate next?
+
+The first product surface is the **theme storyboard**. A storyboard explains the
+narrative, trend, statistical unusualness, evidence, affected entities, source
+mix, and follow-up research questions for a market theme.
+
+## Current Scope
+
+- **Primary user:** personal investment/research workflow.
+- **Primary job:** research prioritization.
+- **Initial universe:** US equities plus macro themes.
+- **Company coverage target:** S&P 500 plus Nasdaq-100.
+- **Signal horizons:** days, weeks, and months.
+- **Core output:** ranked narrative storyboards with evidence cards.
+- **Supporting outputs:** daily brief and research copilot.
+- **Out of scope:** automated buy/sell recommendations, portfolio execution,
+  real-time trading alerts, and unsupported claims without citations.
 
 ## What Exists Now
 
 - Render-friendly npm workspace monorepo.
 - Next.js dashboard with storyboard cards and detail pages.
-- Mock data shaped like the production objects.
-- Postgres schema for sources, documents, chunks, themes, signals, trends,
-  storyboards, briefs, and alerts.
+- Mock data shaped like production objects.
+- Postgres schema for sources, documents, chunks, entities, themes, signals,
+  trends, storyboards, briefs, and alerts.
 - Analysis helpers for baseline-aware z-score scoring.
+- Claude prompt scaffolding for extraction and storyboard generation.
 - Connector interfaces for source ingestion.
 - Worker and cron job entrypoints.
 - `render.yaml` blueprint for Render deployment.
+
+## Architecture
+
+```text
+Content Sources
+  -> Source Connectors
+  -> Normalization and Deduplication
+  -> Postgres + pgvector
+  -> Claude Extraction
+  -> Theme Clustering and Signal Scoring
+  -> Baselines, Z-Scores, and Alerts
+  -> Storyboards, Daily Brief, and Copilot
+```
+
+Recommended production services:
+
+- **Web:** Next.js app for dashboard, storyboards, daily brief, copilot UI, and
+  API routes.
+- **Worker:** ingestion, parsing, Claude analysis, embeddings, scoring, and
+  storyboard generation.
+- **Cron jobs:** source polling, daily brief generation, and trend recompute.
+- **Database:** Render Managed Postgres with pgvector.
+- **Optional object storage:** raw document storage if documents grow too large
+  or source terms require separate retention.
 
 ## Project Structure
 
 ```text
 apps/web             Next.js app and API surface
-packages/db          Types, mock data, and SQL schema
+packages/db          Types, mock data, SQL schema, schema print script
 packages/analysis    Claude prompts and scoring helpers
 packages/ingest      Source connector interfaces
 workers              Worker and cron job entrypoints
 render.yaml          Render blueprint
+.env.example         Local environment variable template
 ```
+
+## Data Model
+
+The schema lives in `packages/db/src/schema.sql`.
+
+Core tables:
+
+- `sources`: publisher/company/feed/API configuration and access method.
+- `documents`: normalized articles, filings, PRs, transcripts, and manual docs.
+- `document_chunks`: searchable chunks with pgvector embeddings.
+- `entities`: companies, tickers, sectors, geographies, and macro topics.
+- `themes`: stable canonical theme IDs.
+- `signals`: per-document extracted theme evidence, tones, confidence, and
+  citation snippets.
+- `theme_trends`: aggregate windows with baselines, z-scores, percentiles, and
+  source mix.
+- `storyboards`: narrative pages generated from themes, signals, trends, and
+  evidence.
+- `briefs`: daily or weekly narrative summaries.
+- `alerts`: in-app or email flags when worry/bullishness accelerates.
+
+## Scoring Methodology
+
+Some themes are always present in markets. Inflation, rates, AI, regulation,
+consumer weakness, and credit quality should not be flagged just because they
+appear frequently.
+
+The app ranks themes by **normalized surprise**, not raw popularity.
+
+For each canonical theme, the system calculates intensity from:
+
+- Document count and mention count.
+- Source diversity across filings, PRs, transcripts, newspapers, and manual
+  documents.
+- Entity breadth across companies, sectors, and macro variables.
+- Risk/worry tone.
+- Bullish/opportunity tone.
+- Evidence quality.
+- Extraction confidence.
+
+Then it compares current intensity to historical baselines:
+
+```text
+z_score = (current_intensity - baseline_mean) / baseline_stddev
+```
+
+The first scoring implementation also tracks percentile rank and requires
+minimum evidence before promotion. A theme should rank highly when it has:
+
+- Elevated z-score.
+- High percentile versus its own history.
+- Multiple independent evidence cards.
+- Broader source mix or entity breadth.
+- Clear tone shift.
+
+New themes should start as emerging/unconfirmed and graduate into ranked alerts
+only after enough evidence, clustering stability, and baseline history.
+
+## Source Strategy
+
+The source layer is designed around connectors. Each connector should define:
+
+- Source ID and source class.
+- Credential or access method.
+- Rate limits.
+- Terms/compliance notes.
+- Retrieval method.
+- Parser.
+- Deduplication behavior.
+
+Priority source classes:
+
+- SEC filings.
+- Company investor-relations press releases.
+- Earnings call transcripts.
+- Credentialed newspapers and financial publications.
+- Controlled scraping where needed.
+- Manual paste/upload for hard-to-access sources.
+
+The app should use credentials where possible and scraping only where explicitly
+configured. Keep `SCRAPING_ENABLED=false` until a source has a clear rule set.
+
+For copyrighted or paywalled sources, default to storing metadata, embeddings,
+extracted signals, and short citation snippets unless source-specific terms
+allow full-text retention.
+
+## Claude Usage
+
+Claude is intended for:
+
+- Document classification.
+- Theme/risk/opportunity extraction.
+- Evidence snippet selection.
+- Tone scoring.
+- Theme normalization and clustering support.
+- Storyboard generation.
+- Daily brief generation.
+- Copilot answers over retrieved evidence.
+
+Important product rule: distinguish sourced evidence from model interpretation.
+The UI should make it clear when a statement is a citation-backed source claim
+versus Claude's synthesis.
+
+Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 
 ## Local Development
 
+Requirements:
+
+- Node.js 20 or newer.
+- npm.
+
+Install dependencies:
+
 ```bash
 npm install
+```
+
+Run the web app:
+
+```bash
 npm run dev
 ```
 
 The app runs at `http://localhost:3000`.
 
+## Environment Variables
+
+Copy `.env.example` to `.env.local` for local development when needed.
+
+```text
+DATABASE_URL=postgres://user:password@host:5432/market_themes
+ANTHROPIC_API_KEY=sk-ant-api03-example
+APP_BASE_URL=http://localhost:3000
+SESSION_SECRET=replace-with-a-long-random-secret
+SOURCE_CONFIG_JSON={}
+SCRAPING_ENABLED=false
+SCRAPER_USER_AGENT=MarketThemesBot/0.1 contact@example.com
+EMAIL_PROVIDER_API_KEY=
+```
+
+Current mock-data UI does not require a live database or Anthropic key. Real
+ingestion and analysis will require `DATABASE_URL` and `ANTHROPIC_API_KEY`.
+
 ## Useful Commands
 
 ```bash
+npm run dev
 npm run build
 npm run typecheck
+npm run lint
 npm run db:schema
 npm run poll:sources --workspace @market-themes/workers
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
 
+## Database Setup
+
+Print the SQL schema:
+
+```bash
+npm run db:schema
+```
+
+Apply that SQL to your Postgres database. The schema enables pgvector:
+
+```sql
+create extension if not exists vector;
+```
+
+On Render, use a Postgres plan that supports pgvector. If pgvector is not
+enabled by default, enable it before creating `document_chunks`.
+
 ## Render Deployment
 
-1. Create a new Render Blueprint from this repository.
-2. Render will provision:
-   - `themes-web`
-   - `themes-worker`
-   - `themes-postgres`
-   - `poll-sources`
-   - `generate-daily-brief`
-   - `recompute-theme-trends`
-3. Set required secrets:
+This repo includes a `render.yaml` blueprint.
+
+The blueprint defines:
+
+- `themes-web`: Next.js web service.
+- `themes-worker`: background worker service.
+- `themes-postgres`: managed Postgres database.
+- `poll-sources`: cron job for source polling.
+- `generate-daily-brief`: cron job for daily brief generation.
+- `recompute-theme-trends`: cron job for z-score and baseline refreshes.
+
+Deployment steps:
+
+1. Push this repository to GitHub.
+2. In Render, create a new Blueprint from the repository.
+3. Let Render provision the web service, worker, cron jobs, and Postgres.
+4. Set required secrets:
    - `ANTHROPIC_API_KEY`
    - `APP_BASE_URL`
    - source credentials in `SOURCE_CONFIG_JSON` or separate env vars
-4. Keep `SCRAPING_ENABLED=false` until each source has explicit configuration.
-5. Run the SQL from `npm run db:schema` against the Render Postgres database.
+5. Keep `SCRAPING_ENABLED=false` until each source has explicit configuration.
+6. Apply the SQL from `npm run db:schema` to the Render Postgres database.
+7. Deploy `themes-web`.
+8. Confirm the cron job logs show expected output.
 
-## Next Build Steps
+Render implementation notes:
+
+- Services should be stateless except Postgres or object storage.
+- Ingestion jobs should be idempotent.
+- Cron retries should not create duplicate documents.
+- Durable data should not be written to the local filesystem.
+- Logs should include source ID, retrieval method, document counts, Claude usage,
+  scoring job IDs, and error context.
+
+## Worker Jobs
+
+Current worker scripts are smoke-testable scaffolds:
+
+```bash
+npm run poll:sources --workspace @market-themes/workers
+npm run brief:daily --workspace @market-themes/workers
+npm run trends:recompute --workspace @market-themes/workers
+```
+
+The worker uses `node --import tsx` so TypeScript entrypoints run locally and on
+Render without a separate build step.
+
+## Development Roadmap
+
+Near-term:
 
 1. Replace mock storyboard reads with Postgres queries.
-2. Add SEC and company IR connectors for S&P 500 plus Nasdaq-100.
-3. Add a manual document upload/paste flow.
-4. Wire Claude extraction into the worker.
-5. Store extracted signals and recompute trend baselines.
-6. Generate storyboards and daily briefs from real evidence.
+2. Add migrations or a migration runner.
+3. Add manual document paste/upload.
+4. Add SEC filing ingestion for the target universe.
+5. Add company IR press release ingestion.
+6. Add public/licensed earnings transcript ingestion.
+7. Wire Claude extraction into the worker.
+8. Store document chunks, embeddings, signals, and evidence cards.
+9. Recompute trend baselines and z-scores from real data.
+10. Generate storyboards and daily briefs from stored evidence.
+
+Then:
+
+1. Add credentialed newspaper connectors source by source.
+2. Add controlled scraping configuration where needed.
+3. Add source-specific retention policies.
+4. Add user review controls for merging, splitting, and dismissing themes.
+5. Add daily email delivery.
+6. Add historical evaluation sets for false positives and false negatives.
+7. Add copilot retrieval over chunks, signals, and storyboards.
+
+## Quality And Evaluation
+
+Before trusting alerts, build a small historical evaluation set of known market
+themes. For each historical theme, evaluate:
+
+- Did the app surface it early?
+- Did the z-score move before the theme became obvious?
+- Were the evidence cards actually relevant?
+- Did Claude overstate the implication?
+- Were false positives caused by one noisy source or real breadth?
+
+This evaluation loop should guide thresholds, source weights, and theme
+clustering behavior.
+
+## Security And Compliance
+
+- Store credentials in Render environment variables or a secrets manager.
+- Do not commit real credentials.
+- Keep `.env` and `.env.local` ignored.
+- Keep scraping disabled by default.
+- Track source access method and retrieval logs.
+- Respect rate limits.
+- Prefer snippets and metadata for copyrighted sources unless terms allow full
+  text.
+- Make citation-backed evidence visible for all generated claims.
+
+## Known Limitations
+
+- The current UI uses mock data.
+- Connectors are placeholders.
+- The database schema is present, but the app is not yet reading from Postgres.
+- Claude prompts are scaffolded but not wired to the worker.
+- The copilot is a UI preview, not a live retrieval system yet.
+- Lint currently delegates to TypeScript checks; add ESLint before production
+  hardening.
+
+## Repository
+
+GitHub: `https://github.com/jnacey2/Market-Themes.git`
