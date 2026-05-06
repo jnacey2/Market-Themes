@@ -1,0 +1,22 @@
+{
+  "name": "market-themes",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @market-themes/web",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "worker": "npm run start --workspace @market-themes/workers",
+    "db:schema": "node packages/db/scripts/print-schema.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

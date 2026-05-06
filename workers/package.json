@@ -1,0 +1,23 @@
+{
+  "name": "@market-themes/workers",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --import tsx src/worker.ts",
+    "poll:sources": "node --import tsx src/jobs/poll-sources.ts",
+    "brief:daily": "node --import tsx src/jobs/generate-daily-brief.ts",
+    "trends:recompute": "node --import tsx src/jobs/recompute-theme-trends.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@market-themes/analysis": "0.1.0",
+    "@market-themes/db": "0.1.0",
+    "@market-themes/ingest": "0.1.0",
+    "tsx": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}

@@ -1,0 +1,260 @@
+:root {
+  --background: #0b1020;
+  --panel: #11182d;
+  --panel-soft: #17213a;
+  --text: #edf2ff;
+  --muted: #9da9c3;
+  --line: rgba(255, 255, 255, 0.1);
+  --accent: #7dd3fc;
+  --accent-strong: #38bdf8;
+  --risk: #fb7185;
+  --bullish: #86efac;
+  --warning: #fde68a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), transparent 34rem),
+    radial-gradient(circle at top right, rgba(134, 239, 172, 0.08), transparent 28rem),
+    var(--background);
+  color: var(--text);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.shell {
+  margin: 0 auto;
+  max-width: 1180px;
+  padding: 32px 24px 56px;
+}
+
+.nav {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 56px;
+}
+
+.brand {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.nav-links {
+  color: var(--muted);
+  display: flex;
+  gap: 20px;
+  font-size: 14px;
+}
+
+.hero {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+  margin-bottom: 34px;
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  margin: 0 0 12px;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: clamp(42px, 7vw, 76px);
+  letter-spacing: -0.07em;
+  line-height: 0.95;
+  margin-bottom: 20px;
+}
+
+h2 {
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+
+h3 {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.7;
+  max-width: 760px;
+}
+
+.grid {
+  display: grid;
+  gap: 18px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.panel,
+.storyboard-card,
+.evidence-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025));
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+}
+
+.panel {
+  padding: 24px;
+}
+
+.metric-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.metric {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.metric span,
+.label {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metric strong {
+  display: block;
+  font-size: 28px;
+  margin-top: 8px;
+}
+
+.section {
+  margin-top: 34px;
+}
+
+.storyboard-card {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 1fr auto;
+  padding: 22px;
+}
+
+.storyboard-card p,
+.evidence-card p,
+.panel p {
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pill {
+  background: rgba(125, 211, 252, 0.1);
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  border-radius: 999px;
+  color: #bae6fd;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
+.score-stack {
+  display: grid;
+  gap: 10px;
+  min-width: 150px;
+}
+
+.score {
+  background: #0d1427;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.score strong {
+  display: block;
+  font-size: 24px;
+}
+
+.chart {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(7, 1fr);
+  height: 150px;
+  padding-top: 18px;
+}
+
+.bar {
+  background: linear-gradient(180deg, var(--accent-strong), rgba(56, 189, 248, 0.22));
+  border-radius: 999px 999px 6px 6px;
+  min-height: 12px;
+}
+
+.evidence-card {
+  padding: 18px;
+}
+
+.brief {
+  border-left: 3px solid var(--accent);
+}
+
+.copilot-box {
+  background: #080d1b;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  color: var(--muted);
+  padding: 18px;
+}
+
+@media (max-width: 840px) {
+  .hero,
+  .grid.two,
+  .grid.three,
+  .storyboard-card {
+    grid-template-columns: 1fr;
+  }
+
+  .nav {
+    align-items: flex-start;
+    gap: 18px;
+    flex-direction: column;
+  }
+}
