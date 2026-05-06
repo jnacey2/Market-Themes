@@ -68,7 +68,7 @@ create table if not exists signals (
 create table if not exists theme_trends (
   id text primary key,
   theme_id text not null references themes(id),
-  window text not null,
+  trend_window text not null,
   date date not null,
   intensity numeric not null,
   baseline_mean numeric not null,
@@ -77,7 +77,7 @@ create table if not exists theme_trends (
   percentile_rank numeric not null,
   source_mix jsonb not null default '{}',
   created_at timestamptz not null default now(),
-  unique (theme_id, window, date)
+  unique (theme_id, trend_window, date)
 );
 
 create table if not exists storyboards (
