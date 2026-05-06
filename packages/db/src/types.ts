@@ -36,7 +36,9 @@ export type IngestionStatus = {
   databaseConfigured: boolean;
   totalDocuments: number;
   secDocuments: number;
+  fmpTranscriptDocuments: number;
   latestSecDocumentAt: string | null;
+  latestFmpTranscriptAt: string | null;
   latestCreatedAt: string | null;
   sourceCounts: Array<{
     sourceClass: SourceClass;

@@ -20,10 +20,10 @@ export default async function IngestionPage() {
       <section className="hero">
         <div>
           <p className="eyebrow">Ingestion Status</p>
-          <h1>SEC filing pipeline</h1>
+          <h1>Ingestion pipelines</h1>
           <p className="lede">
-            Monitor whether official SEC filing ingestion is connected, writing
-            documents, and producing chunks for later Claude analysis.
+            Monitor whether source ingestion is connected, writing documents,
+            and producing chunks for later Claude analysis.
           </p>
         </div>
         <div className="panel">
@@ -56,6 +56,23 @@ export default async function IngestionPage() {
       </section>
 
       <section className="section grid two">
+        <IngestionCard
+          title="SEC filings"
+          description="Official SEC submissions and filing document downloads."
+          documents={status.secDocuments}
+          latest={status.latestSecDocumentAt}
+          commands={["npm run sec:smoke", "npm run sec:backfill"]}
+        />
+        <IngestionCard
+          title="FMP transcripts"
+          description="Financial Modeling Prep earnings call transcript ingestion."
+          documents={status.fmpTranscriptDocuments}
+          latest={status.latestFmpTranscriptAt}
+          commands={["npm run fmp:smoke", "npm run fmp:backfill", "npm run fmp:poll"]}
+        />
+      </section>
+
+      <section className="section grid two">
         <div className="panel">
           <p className="eyebrow">Source counts</p>
           <div className="grid">
@@ -78,6 +95,44 @@ export default async function IngestionPage() {
           <div className="copilot-box">npm run sec:backfill</div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function IngestionCard({
+  title,
+  description,
+  documents,
+  latest,
+  commands
+}: {
+  title: string;
+  description: string;
+  documents: number;
+  latest: string | null;
+  commands: string[];
+}) {
+  return (
+    <div className="panel">
+      <p className="eyebrow">{title}</p>
+      <p>{description}</p>
+      <div className="metric-row">
+        <div className="metric">
+          <span>Documents</span>
+          <strong>{documents}</strong>
+        </div>
+        <div className="metric">
+          <span>Latest source date</span>
+          <strong>{formatDate(latest)}</strong>
+        </div>
+      </div>
+      <div className="grid">
+        {commands.map((command) => (
+          <div className="copilot-box" key={command}>
+            {command}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

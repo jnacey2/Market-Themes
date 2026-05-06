@@ -8,6 +8,9 @@
     "poll:sources": "node --import tsx src/jobs/poll-sources.ts",
     "sec:smoke": "node --import tsx src/jobs/sec-smoke.ts",
     "sec:backfill": "node --import tsx src/jobs/sec-backfill.ts",
+    "fmp:smoke": "node --import tsx src/jobs/fmp-smoke.ts",
+    "fmp:backfill": "node --import tsx src/jobs/fmp-backfill.ts",
+    "fmp:poll": "node --import tsx src/jobs/fmp-poll.ts",
     "brief:daily": "node --import tsx src/jobs/generate-daily-brief.ts",
     "trends:recompute": "node --import tsx src/jobs/recompute-theme-trends.ts",
     "typecheck": "tsc --noEmit"

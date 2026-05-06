@@ -50,6 +50,12 @@ export async function persistDocuments(
     for (const document of documents) {
       await upsertSource(client, document);
       const contentHash = document.contentHash ?? hashContent(document.body);
+      const documentId = await resolveDocumentId(client, document.id, contentHash);
+
+      if (!documentId) {
+        skippedDocuments += 1;
+        continue;
+      }
 
       const insertResult = await client.query<{ id: string }>(
         `insert into documents (
@@ -69,7 +75,7 @@ export async function persistDocuments(
         on conflict (content_hash) do nothing
         returning id`,
         [
-          document.id,
+          documentId,
           document.sourceId,
           document.sourceClass,
           document.title,
@@ -101,7 +107,7 @@ export async function persistDocuments(
             content
           ) values ($1, $2, $3, $4)
           on conflict (document_id, chunk_index) do nothing`,
-          [`${document.id}:chunk:${index}`, document.id, index, content]
+          [`${documentId}:chunk:${index}`, documentId, index, content]
         );
         insertedChunks += 1;
       }
@@ -131,13 +137,17 @@ export async function getIngestionStatus(
     const totals = await client.query<{
       total_documents: string;
       sec_documents: string;
+      fmp_transcript_documents: string;
       latest_sec_document_at: string | null;
+      latest_fmp_transcript_at: string | null;
       latest_created_at: string | null;
     }>(
       `select
         count(*)::text as total_documents,
         count(*) filter (where source_id = 'sec-filings')::text as sec_documents,
+        count(*) filter (where source_id = 'fmp-transcripts')::text as fmp_transcript_documents,
         max(published_at) filter (where source_id = 'sec-filings')::text as latest_sec_document_at,
+        max(published_at) filter (where source_id = 'fmp-transcripts')::text as latest_fmp_transcript_at,
         max(created_at)::text as latest_created_at
       from documents`
     );
@@ -158,7 +168,9 @@ export async function getIngestionStatus(
       databaseConfigured: true,
       totalDocuments: Number(row?.total_documents ?? 0),
       secDocuments: Number(row?.sec_documents ?? 0),
+      fmpTranscriptDocuments: Number(row?.fmp_transcript_documents ?? 0),
       latestSecDocumentAt: row?.latest_sec_document_at ?? null,
+      latestFmpTranscriptAt: row?.latest_fmp_transcript_at ?? null,
       latestCreatedAt: row?.latest_created_at ?? null,
       sourceCounts: sourceCounts.rows.map((countRow) => ({
         sourceClass: countRow.source_class,
@@ -176,12 +188,40 @@ export function hashContent(content: string) {
   return createHash("sha256").update(content).digest("hex");
 }
 
+async function resolveDocumentId(
+  client: DbClient,
+  preferredId: string,
+  contentHash: string
+) {
+  const existing = await client.query<{ id: string; content_hash: string }>(
+    `select id, content_hash
+     from documents
+     where id = $1 or content_hash = $2
+     limit 1`,
+    [preferredId, contentHash]
+  );
+
+  const row = existing.rows[0];
+
+  if (!row) {
+    return preferredId;
+  }
+
+  if (row.content_hash === contentHash) {
+    return null;
+  }
+
+  return `${preferredId}:rev:${contentHash.slice(0, 8)}`;
+}
+
 function emptyStatus(databaseConfigured: boolean): IngestionStatus {
   return {
     databaseConfigured,
     totalDocuments: 0,
     secDocuments: 0,
+    fmpTranscriptDocuments: 0,
     latestSecDocumentAt: null,
+    latestFmpTranscriptAt: null,
     latestCreatedAt: null,
     sourceCounts: []
   };
@@ -210,6 +250,8 @@ async function upsertSource(client: DbClient, document: PersistableDocument) {
       document.retrievalMethod,
       document.sourceId === "sec-filings"
         ? "Official SEC endpoints and filing document downloads."
+        : document.sourceId === "fmp-transcripts"
+          ? "Financial Modeling Prep earnings call transcript API."
         : null
     ]
   );
@@ -218,6 +260,10 @@ async function upsertSource(client: DbClient, document: PersistableDocument) {
 function sourceName(sourceId: string) {
   if (sourceId === "sec-filings") {
     return "SEC Filings";
+  }
+
+  if (sourceId === "fmp-transcripts") {
+    return "FMP Transcripts";
   }
 
   return sourceId;

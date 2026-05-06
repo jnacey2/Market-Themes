@@ -171,6 +171,11 @@ SEC ingestion uses official SEC JSON endpoints and filing document downloads,
 not browser scraping. Configure `SEC_USER_AGENT` with an app name and contact
 email before running SEC jobs.
 
+FMP transcript ingestion uses Financial Modeling Prep earnings call transcript
+endpoints. Configure `FMP_API_KEY` in Render or local env before running FMP
+jobs. FMP runs separately from SEC because transcripts update on a different
+cadence.
+
 For copyrighted or paywalled sources, default to storing metadata, embeddings,
 extracted signals, and short citation snippets unless source-specific terms
 allow full-text retention.
@@ -234,6 +239,13 @@ SEC_BACKFILL_MONTHS=12
 SEC_BACKFILL_BATCH_SIZE=10
 SEC_BACKFILL_BATCH_INDEX=0
 SEC_RATE_LIMIT_MS=220
+FMP_API_KEY=
+FMP_TARGET_TICKERS=AAPL,MSFT,JPM,WMT,XOM
+FMP_BACKFILL_QUARTERS=8
+FMP_BACKFILL_BATCH_SIZE=10
+FMP_BACKFILL_BATCH_INDEX=0
+FMP_RATE_LIMIT_MS=250
+FMP_SMOKE_QUARTERS=2
 EMAIL_PROVIDER_API_KEY=
 ```
 
@@ -252,6 +264,9 @@ npm run db:apply
 npm run poll:sources --workspace @market-themes/workers
 npm run sec:smoke
 npm run sec:backfill
+npm run fmp:smoke
+npm run fmp:backfill
+npm run fmp:poll
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -259,6 +274,10 @@ npm run trends:recompute --workspace @market-themes/workers
 SEC smoke ingestion uses `AAPL`, `MSFT`, `JPM`, `WMT`, and `XOM`. Full SEC
 backfills use `SEC_BACKFILL_BATCH_INDEX` and `SEC_BACKFILL_BATCH_SIZE` so the
 job can be resumed in manageable batches.
+
+FMP smoke ingestion also uses `AAPL`, `MSFT`, `JPM`, `WMT`, and `XOM`.
+FMP backfills use `FMP_BACKFILL_BATCH_INDEX`, `FMP_BACKFILL_BATCH_SIZE`, and
+`FMP_BACKFILL_QUARTERS`. FMP polling is intended to run daily overnight.
 
 ## Database Setup
 
@@ -287,6 +306,7 @@ The blueprint defines:
 - `themes-worker`: background worker service.
 - `themes-postgres`: managed Postgres database.
 - `poll-sources`: cron job for source polling.
+- `poll-fmp-transcripts`: daily cron job for FMP transcript polling.
 - `generate-daily-brief`: cron job for daily brief generation.
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
 
@@ -298,6 +318,7 @@ Deployment steps:
 4. Set required secrets:
    - `ANTHROPIC_API_KEY`
    - `APP_BASE_URL`
+   - `FMP_API_KEY`
    - source credentials in `SOURCE_CONFIG_JSON` or separate env vars
 5. Keep `SCRAPING_ENABLED=false` until each source has explicit configuration.
 6. Apply the SQL from `npm run db:schema` to the Render Postgres database.
@@ -321,6 +342,9 @@ Current worker scripts are smoke-testable scaffolds:
 npm run poll:sources --workspace @market-themes/workers
 npm run sec:smoke
 npm run sec:backfill
+npm run fmp:smoke
+npm run fmp:backfill
+npm run fmp:poll
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -328,19 +352,19 @@ npm run trends:recompute --workspace @market-themes/workers
 The worker uses `node --import tsx` so TypeScript entrypoints run locally and on
 Render without a separate build step.
 
-Open `/ingestion` in the web app to see a minimal operational status page for
-stored SEC documents and source counts.
+Open `/ingestion` in the web app to see separate operational cards for SEC
+filings and FMP transcripts.
 
 ## Development Roadmap
 
 Near-term:
 
 1. Expand the checked-in SEC ticker seed to the full S&P 500 plus Nasdaq-100.
-2. Replace mock storyboard reads with Postgres queries.
-3. Add migrations or a migration runner.
-4. Add manual document paste/upload.
-5. Add company IR press release ingestion.
-6. Add public/licensed earnings transcript ingestion.
+2. Run FMP transcript smoke and backfill jobs.
+3. Replace mock storyboard reads with Postgres queries.
+4. Add migrations or a migration runner.
+5. Add manual document paste/upload.
+6. Add company IR press release ingestion.
 7. Wire Claude extraction into the worker.
 8. Store embeddings, signals, and evidence cards.
 9. Recompute trend baselines and z-scores from real data.

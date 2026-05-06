@@ -35,6 +35,8 @@ services:
         value: "7"
       - key: SEC_RATE_LIMIT_MS
         value: "220"
+      - key: FMP_API_KEY
+        sync: false
 
   - type: worker
     name: themes-worker
@@ -67,6 +69,16 @@ services:
         value: "0"
       - key: SEC_RATE_LIMIT_MS
         value: "220"
+      - key: FMP_API_KEY
+        sync: false
+      - key: FMP_BACKFILL_QUARTERS
+        value: "8"
+      - key: FMP_BACKFILL_BATCH_SIZE
+        value: "10"
+      - key: FMP_BACKFILL_BATCH_INDEX
+        value: "0"
+      - key: FMP_RATE_LIMIT_MS
+        value: "250"
 
   - type: cron
     name: poll-sources
@@ -91,6 +103,22 @@ services:
         value: "7"
       - key: SEC_RATE_LIMIT_MS
         value: "220"
+
+  - type: cron
+    name: poll-fmp-transcripts
+    runtime: node
+    schedule: "30 6 * * 1-6"
+    buildCommand: npm install
+    startCommand: npm run fmp:poll --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: FMP_API_KEY
+        sync: false
+      - key: FMP_RATE_LIMIT_MS
+        value: "250"
 
   - type: cron
     name: generate-daily-brief
