@@ -617,7 +617,7 @@ export async function claimNextBackfillJob(
         updated_at = now()
       from next_job
       where bj.id = next_job.id
-      returning ${claimableBackfillJobSelectColumns}`,
+      returning ${claimableBackfillJobReturnColumns}`,
       [jobType, workerId]
     );
 
@@ -2630,6 +2630,34 @@ const claimableBackfillJobSelectColumns = `
   excluded_sec_filing_categories,
   model,
   prompt_version
+`;
+
+const claimableBackfillJobReturnColumns = `
+  bj.id,
+  bj.job_type,
+  bj.status,
+  bj.batch_size,
+  bj.max_batches,
+  bj.concurrency,
+  bj.document_timeout_ms,
+  bj.stale_after_minutes,
+  bj.selected_documents,
+  bj.completed_documents,
+  bj.failed_documents,
+  bj.inserted_signals,
+  bj.themes_touched,
+  bj.current_document_ids,
+  bj.last_message,
+  bj.last_error,
+  bj.stop_requested_at::text as stop_requested_at,
+  bj.started_at::text as started_at,
+  bj.completed_at::text as completed_at,
+  bj.created_at::text as created_at,
+  bj.updated_at::text as updated_at,
+  bj.lookback_days,
+  bj.excluded_sec_filing_categories,
+  bj.model,
+  bj.prompt_version
 `;
 
 async function ensureBackfillJobsSchema(client: DbClient) {
