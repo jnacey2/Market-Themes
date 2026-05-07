@@ -25,6 +25,12 @@ services:
         value: market_signal_extraction_v1
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
         value: "20"
+      - key: CLAUDE_EXTRACTION_BATCH_SIZE
+        value: "25"
+      - key: CLAUDE_EXTRACTION_MAX_BATCHES
+        value: "1"
+      - key: CLAUDE_STALE_RUN_MINUTES
+        value: "90"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
@@ -85,6 +91,12 @@ services:
         value: market_signal_extraction_v1
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
         value: "20"
+      - key: CLAUDE_EXTRACTION_BATCH_SIZE
+        value: "25"
+      - key: CLAUDE_EXTRACTION_MAX_BATCHES
+        value: "1"
+      - key: CLAUDE_STALE_RUN_MINUTES
+        value: "90"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
@@ -155,6 +167,12 @@ services:
         value: market_signal_extraction_v1
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
         value: "20"
+      - key: CLAUDE_EXTRACTION_BATCH_SIZE
+        value: "25"
+      - key: CLAUDE_EXTRACTION_MAX_BATCHES
+        value: "1"
+      - key: CLAUDE_STALE_RUN_MINUTES
+        value: "90"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES

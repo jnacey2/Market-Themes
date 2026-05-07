@@ -270,7 +270,10 @@ ANTHROPIC_API_KEY=sk-ant-api03-example
 ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 CLAUDE_PROMPT_VERSION=market_signal_extraction_v1
 CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
+CLAUDE_EXTRACTION_BATCH_SIZE=25
+CLAUDE_EXTRACTION_MAX_BATCHES=1
 CLAUDE_EXTRACTION_LOOKBACK_DAYS=
+CLAUDE_STALE_RUN_MINUTES=90
 CLAUDE_MAX_EVIDENCE_CHARS=800
 CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
 THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v2
@@ -326,6 +329,7 @@ npm run fmp:smoke
 npm run fmp:backfill
 npm run fmp:poll
 npm run claude:extract:smoke
+npm run claude:extract:backfill
 npm run themes:normalize
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
@@ -355,6 +359,18 @@ npm run claude:extract:smoke
 ```
 
 Then inspect `/analysis` before scheduling any automated Claude cron.
+
+For broader corpus coverage, use the controlled Claude backfill job instead of
+one very large extraction command:
+
+```bash
+CLAUDE_EXTRACTION_BATCH_SIZE=25 CLAUDE_EXTRACTION_MAX_BATCHES=4 npm run claude:extract:backfill
+```
+
+The backfill job recovers stale `running` analysis rows, processes bounded
+batches, keeps the same source priority order as smoke extraction, and continues
+to exclude `capital_markets` SEC filings by default. After each larger backfill,
+run theme normalization and trend recompute.
 
 Theme normalization maps company-specific extracted themes into overall market
 themes and optional sector sub-themes:

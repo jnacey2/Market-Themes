@@ -336,6 +336,50 @@ export async function selectDocumentsForAnalysis(
   }
 }
 
+export async function recoverStaleDocumentAnalysisRuns(
+  options: {
+    analysisType: string;
+    model: string;
+    promptVersion: string;
+    staleAfterMinutes: number;
+  },
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const result = await client.query<{ document_id: string }>(
+      `update document_analysis_runs
+       set
+        status = 'failed',
+        error_message = $5,
+        completed_at = now(),
+        updated_at = now()
+       where analysis_type = $1
+        and model = $2
+        and prompt_version = $3
+        and status = 'running'
+        and updated_at < now() - ($4::text || ' minutes')::interval
+       returning document_id`,
+      [
+        options.analysisType,
+        options.model,
+        options.promptVersion,
+        options.staleAfterMinutes,
+        `Marked stale after ${options.staleAfterMinutes} minutes so extraction can retry.`
+      ]
+    );
+
+    return {
+      recoveredRuns: result.rowCount ?? 0,
+      documentIds: result.rows.map((row) => row.document_id)
+    };
+  } finally {
+    await client.end();
+  }
+}
+
 export async function startDocumentAnalysisRun(
   documentId: string,
   options: AnalysisRunOptions,

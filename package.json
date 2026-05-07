@@ -20,6 +20,7 @@
     "fmp:backfill": "npm run fmp:backfill --workspace @market-themes/workers",
     "fmp:poll": "npm run fmp:poll --workspace @market-themes/workers",
     "claude:extract:smoke": "npm run claude:extract:smoke --workspace @market-themes/workers",
+    "claude:extract:backfill": "npm run claude:extract:backfill --workspace @market-themes/workers",
     "themes:normalize": "npm run themes:normalize --workspace @market-themes/workers",
     "db:schema": "node packages/db/scripts/print-schema.mjs",
     "db:apply": "node packages/db/scripts/apply-schema.mjs"
