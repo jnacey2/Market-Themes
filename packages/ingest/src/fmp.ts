@@ -79,7 +79,9 @@ export async function fetchFmpTranscripts({
   apiKey,
   rateLimitMs = DEFAULT_RATE_LIMIT_MS
 }: FmpTranscriptOptions): Promise<PersistableDocument[]> {
-  if (!apiKey) {
+  const resolvedApiKey = apiKey ?? process.env.FMP_API_KEY;
+
+  if (!resolvedApiKey) {
     throw new Error("FMP_API_KEY is required for FMP transcript ingestion.");
   }
 
@@ -87,7 +89,7 @@ export async function fetchFmpTranscripts({
 
   for (const ticker of normalizeTickers(tickers ?? SEC_TARGET_TICKERS)) {
     await sleep(rateLimitMs);
-    const targets = await discoverTranscriptTargets(ticker, apiKey);
+    const targets = await discoverTranscriptTargets(ticker, resolvedApiKey);
     const selectedTargets = targets
       .sort((left, right) => sortTranscriptTargets(left, right))
       .slice(0, latestOnly ? 1 : quarters);
@@ -99,7 +101,7 @@ export async function fetchFmpTranscripts({
 
     for (const target of selectedTargets) {
       await sleep(rateLimitMs);
-      const transcript = await fetchTranscript(target, apiKey);
+      const transcript = await fetchTranscript(target, resolvedApiKey);
 
       if (!transcript) {
         console.log(
