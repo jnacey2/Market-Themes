@@ -171,6 +171,23 @@ SEC ingestion uses official SEC JSON endpoints and filing document downloads,
 not browser scraping. Configure `SEC_USER_AGENT` with an app name and contact
 email before running SEC jobs.
 
+SEC coverage is designed for theme detection rather than filing completeness.
+The connector ingests:
+
+- Core narrative filings: `10-K`, `10-Q`, `8-K`.
+- 8-K exhibits: relevant `EX-99.1`, `EX-99.2`, investor presentations,
+  earnings releases, merger decks, restructuring decks, financing, guidance,
+  impairment, regulatory, and operations-related exhibits.
+- Proxy/governance filings: `DEF 14A`, `DEFA14A`, `PRE 14A`.
+- Capital markets and transaction filings: `S-1`, `S-3`, `S-4`, and `424B*`.
+- Activism and ownership-change filings: `SC 13D`, `SC 13D/A`, `SC 13G`,
+  `SC 13G/A`.
+- Stress filings: `NT 10-K`, `NT 10-Q`, and amended `10-K/A`, `10-Q/A`, `8-K/A`.
+
+`13F-HR` and Form `4` are intentionally off by default. They are useful, but
+should be interpreted later as structured/aggregate signals rather than raw
+narrative text.
+
 FMP transcript ingestion uses Financial Modeling Prep earnings call transcript
 endpoints. Configure `FMP_API_KEY` in Render or local env before running FMP
 jobs. FMP runs separately from SEC because transcripts update on a different
@@ -239,6 +256,13 @@ SEC_BACKFILL_MONTHS=12
 SEC_BACKFILL_BATCH_SIZE=10
 SEC_BACKFILL_BATCH_INDEX=0
 SEC_RATE_LIMIT_MS=220
+SEC_INCLUDE_CORE_FORMS=true
+SEC_INCLUDE_PROXY_FORMS=true
+SEC_INCLUDE_CAPITAL_MARKETS_FORMS=true
+SEC_INCLUDE_OWNERSHIP_FORMS=true
+SEC_INCLUDE_STRESS_FORMS=true
+SEC_INCLUDE_8K_EXHIBITS=true
+SEC_INCLUDE_STRUCTURED_OWNERSHIP_FORMS=false
 FMP_API_KEY=
 FMP_TARGET_TICKERS=AAPL,MSFT,JPM,WMT,XOM
 FMP_BACKFILL_QUARTERS=8
@@ -274,6 +298,11 @@ npm run trends:recompute --workspace @market-themes/workers
 SEC smoke ingestion uses `AAPL`, `MSFT`, `JPM`, `WMT`, and `XOM`. Full SEC
 backfills use `SEC_BACKFILL_BATCH_INDEX` and `SEC_BACKFILL_BATCH_SIZE` so the
 job can be resumed in manageable batches.
+
+Expanded SEC documents are categorized in `documents.metadata.filingCategory`:
+`core`, `exhibit`, `proxy`, `capital_markets`, `ownership`, `stress`, or
+`structured_ownership`. The `/ingestion` page shows category counts so you can
+confirm which SEC source families are landing.
 
 FMP smoke ingestion also uses `AAPL`, `MSFT`, `JPM`, `WMT`, and `XOM`.
 FMP backfills use `FMP_BACKFILL_BATCH_INDEX`, `FMP_BACKFILL_BATCH_SIZE`, and

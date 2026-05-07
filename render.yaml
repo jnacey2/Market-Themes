@@ -35,6 +35,20 @@ services:
         value: "7"
       - key: SEC_RATE_LIMIT_MS
         value: "220"
+      - key: SEC_INCLUDE_CORE_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_PROXY_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_CAPITAL_MARKETS_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_OWNERSHIP_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_STRESS_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_8K_EXHIBITS
+        value: "true"
+      - key: SEC_INCLUDE_STRUCTURED_OWNERSHIP_FORMS
+        value: "false"
       - key: FMP_API_KEY
         sync: false
 
@@ -69,6 +83,20 @@ services:
         value: "0"
       - key: SEC_RATE_LIMIT_MS
         value: "220"
+      - key: SEC_INCLUDE_CORE_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_PROXY_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_CAPITAL_MARKETS_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_OWNERSHIP_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_STRESS_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_8K_EXHIBITS
+        value: "true"
+      - key: SEC_INCLUDE_STRUCTURED_OWNERSHIP_FORMS
+        value: "false"
       - key: FMP_API_KEY
         sync: false
       - key: FMP_BACKFILL_QUARTERS
@@ -103,6 +131,20 @@ services:
         value: "7"
       - key: SEC_RATE_LIMIT_MS
         value: "220"
+      - key: SEC_INCLUDE_CORE_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_PROXY_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_CAPITAL_MARKETS_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_OWNERSHIP_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_STRESS_FORMS
+        value: "true"
+      - key: SEC_INCLUDE_8K_EXHIBITS
+        value: "true"
+      - key: SEC_INCLUDE_STRUCTURED_OWNERSHIP_FORMS
+        value: "false"
 
   - type: cron
     name: poll-fmp-transcripts

@@ -162,6 +162,18 @@ export async function getIngestionStatus(
        order by source_class`
     );
 
+    const secCategoryCounts = await client.query<{
+      category: string;
+      count: string;
+    }>(
+      `select coalesce(metadata->>'filingCategory', 'uncategorized') as category,
+        count(*)::text as count
+       from documents
+       where source_id = 'sec-filings'
+       group by category
+       order by category`
+    );
+
     const row = totals.rows[0];
 
     return {
@@ -174,6 +186,10 @@ export async function getIngestionStatus(
       latestCreatedAt: row?.latest_created_at ?? null,
       sourceCounts: sourceCounts.rows.map((countRow) => ({
         sourceClass: countRow.source_class,
+        count: Number(countRow.count)
+      })),
+      secCategoryCounts: secCategoryCounts.rows.map((countRow) => ({
+        category: countRow.category,
         count: Number(countRow.count)
       }))
     };
@@ -223,7 +239,8 @@ function emptyStatus(databaseConfigured: boolean): IngestionStatus {
     latestSecDocumentAt: null,
     latestFmpTranscriptAt: null,
     latestCreatedAt: null,
-    sourceCounts: []
+    sourceCounts: [],
+    secCategoryCounts: []
   };
 }
 

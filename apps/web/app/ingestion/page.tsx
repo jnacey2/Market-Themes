@@ -62,6 +62,10 @@ export default async function IngestionPage() {
           documents={status.secDocuments}
           latest={status.latestSecDocumentAt}
           commands={["npm run sec:smoke", "npm run sec:backfill"]}
+          breakdown={status.secCategoryCounts.map((category) => ({
+            label: categoryLabel(category.category),
+            value: category.count
+          }))}
         />
         <IngestionCard
           title="FMP transcripts"
@@ -104,13 +108,18 @@ function IngestionCard({
   description,
   documents,
   latest,
-  commands
+  commands,
+  breakdown = []
 }: {
   title: string;
   description: string;
   documents: number;
   latest: string | null;
   commands: string[];
+  breakdown?: Array<{
+    label: string;
+    value: number;
+  }>;
 }) {
   return (
     <div className="panel">
@@ -126,6 +135,16 @@ function IngestionCard({
           <strong>{formatDate(latest)}</strong>
         </div>
       </div>
+      {breakdown.length > 0 ? (
+        <div className="grid">
+          {breakdown.map((item) => (
+            <div className="metric" key={item.label}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="grid">
         {commands.map((command) => (
           <div className="copilot-box" key={command}>
@@ -135,6 +154,10 @@ function IngestionCard({
       </div>
     </div>
   );
+}
+
+function categoryLabel(category: string) {
+  return category.replaceAll("_", " ");
 }
 
 function formatDate(value: string | null) {

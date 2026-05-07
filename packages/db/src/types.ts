@@ -44,6 +44,10 @@ export type IngestionStatus = {
     sourceClass: SourceClass;
     count: number;
   }>;
+  secCategoryCounts: Array<{
+    category: string;
+    count: number;
+  }>;
 };
 
 export type EvidenceCard = {

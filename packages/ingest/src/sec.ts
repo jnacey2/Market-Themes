@@ -7,7 +7,52 @@ const SEC_SUBMISSIONS_BASE_URL = "https://data.sec.gov/submissions";
 const SEC_ARCHIVES_BASE_URL = "https://www.sec.gov/Archives/edgar/data";
 const DEFAULT_USER_AGENT = "MarketThemesBot/0.1 contact@example.com";
 const DEFAULT_RATE_LIMIT_MS = 220;
-const CORE_FORMS = new Set(["10-K", "10-Q", "8-K"]);
+const coreNarrativeForms = new Set(["10-K", "10-Q", "8-K"]);
+const proxyForms = new Set(["DEF 14A", "DEFA14A", "PRE 14A"]);
+const capitalMarketsForms = new Set([
+  "S-1",
+  "S-1/A",
+  "S-3",
+  "S-3/A",
+  "S-4",
+  "S-4/A",
+  "424B1",
+  "424B2",
+  "424B3",
+  "424B4",
+  "424B5"
+]);
+const ownershipForms = new Set(["SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A"]);
+const stressForms = new Set(["NT 10-K", "NT 10-Q", "10-K/A", "10-Q/A", "8-K/A"]);
+const structuredOwnershipForms = new Set(["13F-HR", "4"]);
+const relevantExhibitTypes = new Set([
+  "EX-99.1",
+  "EX-99.2",
+  "EX-99",
+  "EX-10.1",
+  "EX-10.2",
+  "EX-2.1"
+]);
+const relevantExhibitExtensions = [".htm", ".html", ".txt"];
+
+type FilingCategory =
+  | "core"
+  | "exhibit"
+  | "proxy"
+  | "capital_markets"
+  | "ownership"
+  | "stress"
+  | "structured_ownership";
+
+type SecFormConfig = {
+  includeCoreForms: boolean;
+  includeProxyForms: boolean;
+  includeCapitalMarketsForms: boolean;
+  includeOwnershipForms: boolean;
+  includeStressForms: boolean;
+  includeStructuredOwnershipForms: boolean;
+  include8kExhibits: boolean;
+};
 
 export type SecConnectorOptions = {
   tickers?: string[];
@@ -16,6 +61,7 @@ export type SecConnectorOptions = {
   maxFilingsPerTicker?: number;
   userAgent?: string;
   rateLimitMs?: number;
+  formConfig?: Partial<SecFormConfig>;
 };
 
 type SecTickerRecord = {
@@ -49,7 +95,7 @@ type SecSubmissionResponse = {
   };
 };
 
-type SecFiling = {
+type SecFilingTarget = {
   ticker: string;
   cik: string;
   companyName: string;
@@ -61,8 +107,29 @@ type SecFiling = {
   items: string;
   primaryDocument: string;
   primaryDocDescription: string;
+  documentFile: string;
+  documentType: string;
+  documentDescription: string;
+  documentKind: "primary" | "exhibit";
   archiveUrl: string;
   relevanceTier: "high" | "medium" | "low";
+  filingCategory: FilingCategory;
+  themeUseCase: string;
+  parentAccessionNumber?: string;
+  parentForm?: string;
+  exhibitType?: string;
+  exhibitDescription?: string;
+};
+
+type SecFilingIndexResponse = {
+  directory?: {
+    item?: Array<{
+      name: string;
+      type?: string;
+      size?: string;
+      "last-modified"?: string;
+    }>;
+  };
 };
 
 export function createSecFilingsConnector(options: SecConnectorOptions = {}) {
@@ -82,6 +149,7 @@ export function createSecFilingsConnector(options: SecConnectorOptions = {}) {
   );
   const tickers =
     options.tickers ?? parseTickers(process.env.SEC_TARGET_TICKERS) ?? SEC_TARGET_TICKERS;
+  const formConfig = resolveSecFormConfig(options.formConfig);
 
   return {
     id: "sec-filings",
@@ -93,6 +161,7 @@ export function createSecFilingsConnector(options: SecConnectorOptions = {}) {
         userAgent,
         rateLimitMs,
         maxFilingsPerTicker,
+        formConfig,
         since: lookbackMonths > 0
           ? monthsAgo(lookbackMonths)
           : daysAgo(lookbackDays)
@@ -106,12 +175,14 @@ export async function fetchSecFilings({
   userAgent,
   rateLimitMs = DEFAULT_RATE_LIMIT_MS,
   maxFilingsPerTicker = 10,
+  formConfig = resolveSecFormConfig(),
   since
 }: {
   tickers: string[];
   userAgent: string;
   rateLimitMs?: number;
   maxFilingsPerTicker?: number;
+  formConfig?: SecFormConfig;
   since: Date;
 }): Promise<PersistableDocument[]> {
   const tickerMap = await fetchTickerMap(userAgent);
@@ -133,7 +204,8 @@ export async function fetchSecFilings({
       cik: company.cik,
       submission,
       since,
-      maxFilings: maxFilingsPerTicker
+      maxFilings: maxFilingsPerTicker,
+      formConfig
     });
 
     for (const filing of filings) {
@@ -145,6 +217,21 @@ export async function fetchSecFilings({
       }
 
       documents.push(toPersistableDocument(filing, body));
+
+      if (formConfig.include8kExhibits && filing.form === "8-K") {
+        const exhibits = await fetchRelevantExhibits(filing, userAgent);
+
+        for (const exhibit of exhibits) {
+          await sleep(rateLimitMs);
+          const exhibitBody = await fetchFilingText(exhibit.archiveUrl, userAgent);
+
+          if (!exhibitBody.trim()) {
+            continue;
+          }
+
+          documents.push(toPersistableDocument(exhibit, exhibitBody));
+        }
+      }
     }
   }
 
@@ -181,7 +268,8 @@ function selectFilings({
   companyName,
   submission,
   since,
-  maxFilings
+  maxFilings,
+  formConfig
 }: {
   ticker: string;
   cik: string;
@@ -189,15 +277,17 @@ function selectFilings({
   submission: SecSubmissionResponse;
   since: Date;
   maxFilings: number;
+  formConfig: SecFormConfig;
 }) {
   const recent = submission.filings.recent;
-  const filings: SecFiling[] = [];
+  const filings: SecFilingTarget[] = [];
+  const enabledForms = getEnabledForms(formConfig);
 
   for (let index = 0; index < recent.accessionNumber.length; index += 1) {
     const form = recent.form[index];
     const filingDate = recent.filingDate[index];
 
-    if (!CORE_FORMS.has(form) || new Date(filingDate) < since) {
+    if (!enabledForms.has(form) || new Date(filingDate) < since) {
       continue;
     }
 
@@ -206,6 +296,7 @@ function selectFilings({
     const primaryDocument = recent.primaryDocument[index];
     const cikNoLeadingZeros = String(Number(cik));
     const items = recent.items[index] ?? "";
+    const filingCategory = categorizeForm(form);
 
     filings.push({
       ticker: normalizeTicker(ticker),
@@ -219,8 +310,14 @@ function selectFilings({
       items,
       primaryDocument,
       primaryDocDescription: recent.primaryDocDescription[index] ?? "",
+      documentFile: primaryDocument,
+      documentType: form,
+      documentDescription: recent.primaryDocDescription[index] ?? "",
+      documentKind: "primary",
       archiveUrl: `${SEC_ARCHIVES_BASE_URL}/${cikNoLeadingZeros}/${accessionNumberNoDashes}/${primaryDocument}`,
-      relevanceTier: classifyRelevance(form, items, recent.primaryDocDescription[index] ?? "")
+      relevanceTier: classifyRelevance(form, items, recent.primaryDocDescription[index] ?? ""),
+      filingCategory,
+      themeUseCase: themeUseCaseForCategory(filingCategory)
     });
 
     if (filings.length >= maxFilings) {
@@ -229,6 +326,43 @@ function selectFilings({
   }
 
   return filings;
+}
+
+async function fetchRelevantExhibits(
+  filing: SecFilingTarget,
+  userAgent: string
+): Promise<SecFilingTarget[]> {
+  const indexUrl = `${SEC_ARCHIVES_BASE_URL}/${String(Number(filing.cik))}/${filing.accessionNumberNoDashes}/index.json`;
+  const response = await secFetch(indexUrl, userAgent);
+  const data = (await response.json()) as SecFilingIndexResponse;
+  const items = data.directory?.item ?? [];
+  const exhibits: SecFilingTarget[] = [];
+
+  for (const item of items) {
+    if (!isRelevantExhibit(item, filing.primaryDocument)) {
+      continue;
+    }
+
+    const exhibitType = normalizeExhibitType(item.type ?? inferExhibitType(item.name));
+
+    exhibits.push({
+      ...filing,
+      documentFile: item.name,
+      documentType: exhibitType,
+      documentDescription: item.type ?? item.name,
+      documentKind: "exhibit",
+      archiveUrl: `${SEC_ARCHIVES_BASE_URL}/${String(Number(filing.cik))}/${filing.accessionNumberNoDashes}/${item.name}`,
+      filingCategory: "exhibit",
+      themeUseCase: "market_narrative",
+      parentAccessionNumber: filing.accessionNumber,
+      parentForm: filing.form,
+      exhibitType,
+      exhibitDescription: item.type ?? item.name,
+      relevanceTier: classifyExhibitRelevance(exhibitType, item.name)
+    });
+  }
+
+  return exhibits;
 }
 
 async function fetchFilingText(url: string, userAgent: string) {
@@ -266,27 +400,29 @@ async function secFetch(url: string, userAgent: string, attempts = 3): Promise<R
 }
 
 function toPersistableDocument(
-  filing: SecFiling,
+  filing: SecFilingTarget,
   body: string
 ): PersistableDocument {
   const sectionLabel = detectSectionLabel(body);
   const contentHash = createHash("sha256")
-    .update(`${filing.accessionNumber}:${filing.primaryDocument}:${body}`)
+    .update(`${filing.accessionNumber}:${filing.documentFile}:${body}`)
     .digest("hex");
 
   return {
-    id: `sec:${filing.accessionNumber}:${filing.primaryDocument}`.replaceAll(
+    id: `sec:${filing.accessionNumber}:${filing.documentFile}`.replaceAll(
       /[^a-zA-Z0-9:._-]/g,
       "-"
     ),
     sourceId: "sec-filings",
     sourceClass: "filing",
-    title: `${filing.ticker} ${filing.form} filed ${filing.filingDate}`,
+    title: filing.documentKind === "exhibit"
+      ? `${filing.ticker} ${filing.form} ${filing.exhibitType} exhibit filed ${filing.filingDate}`
+      : `${filing.ticker} ${filing.form} filed ${filing.filingDate}`,
     publisher: filing.companyName,
     url: filing.archiveUrl,
     publishedAt: filing.filingDate,
     tickers: [filing.ticker],
-    summary: `${filing.companyName} ${filing.form} filing${sectionLabel ? `; detected section focus: ${sectionLabel}` : ""}.`,
+    summary: `${filing.companyName} ${filing.form} ${filing.documentKind}${sectionLabel ? `; detected section focus: ${sectionLabel}` : ""}.`,
     body,
     retrievalMethod: "api",
     contentHash,
@@ -301,8 +437,18 @@ function toPersistableDocument(
       items: filing.items,
       primaryDocument: filing.primaryDocument,
       primaryDocDescription: filing.primaryDocDescription,
+      documentFile: filing.documentFile,
+      documentType: filing.documentType,
+      documentDescription: filing.documentDescription,
+      documentKind: filing.documentKind,
       secUrl: filing.archiveUrl,
       relevanceTier: filing.relevanceTier,
+      filingCategory: filing.filingCategory,
+      themeUseCase: filing.themeUseCase,
+      parentAccessionNumber: filing.parentAccessionNumber,
+      parentForm: filing.parentForm,
+      exhibitType: filing.exhibitType,
+      exhibitDescription: filing.exhibitDescription,
       detectedSection: sectionLabel
     }
   };
@@ -313,8 +459,18 @@ function classifyRelevance(
   items: string,
   description: string
 ): "high" | "medium" | "low" {
-  if (form === "10-K" || form === "10-Q") {
+  const filingCategory = categorizeForm(form);
+
+  if (form === "10-K" || form === "10-Q" || filingCategory === "stress") {
     return "high";
+  }
+
+  if (filingCategory === "proxy" || filingCategory === "capital_markets") {
+    return "medium";
+  }
+
+  if (filingCategory === "ownership") {
+    return "medium";
   }
 
   const haystack = `${items} ${description}`.toLowerCase();
@@ -354,6 +510,203 @@ function classifyRelevance(
   }
 
   return "low";
+}
+
+function classifyExhibitRelevance(
+  exhibitType: string,
+  name: string
+): "high" | "medium" | "low" {
+  const haystack = `${exhibitType} ${name}`.toLowerCase();
+
+  if (
+    haystack.includes("99.1") ||
+    haystack.includes("99.2") ||
+    haystack.includes("earnings") ||
+    haystack.includes("presentation") ||
+    haystack.includes("investor")
+  ) {
+    return "high";
+  }
+
+  if (haystack.includes("10.") || haystack.includes("2.1")) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function resolveSecFormConfig(
+  overrides: Partial<SecFormConfig> = {}
+): SecFormConfig {
+  return {
+    includeCoreForms: envFlag("SEC_INCLUDE_CORE_FORMS", true),
+    includeProxyForms: envFlag("SEC_INCLUDE_PROXY_FORMS", true),
+    includeCapitalMarketsForms: envFlag("SEC_INCLUDE_CAPITAL_MARKETS_FORMS", true),
+    includeOwnershipForms: envFlag("SEC_INCLUDE_OWNERSHIP_FORMS", true),
+    includeStressForms: envFlag("SEC_INCLUDE_STRESS_FORMS", true),
+    includeStructuredOwnershipForms: envFlag(
+      "SEC_INCLUDE_STRUCTURED_OWNERSHIP_FORMS",
+      false
+    ),
+    include8kExhibits: envFlag("SEC_INCLUDE_8K_EXHIBITS", true),
+    ...overrides
+  };
+}
+
+function getEnabledForms(config: SecFormConfig) {
+  const forms = new Set<string>();
+
+  if (config.includeCoreForms) {
+    addForms(forms, coreNarrativeForms);
+  }
+
+  if (config.includeProxyForms) {
+    addForms(forms, proxyForms);
+  }
+
+  if (config.includeCapitalMarketsForms) {
+    addForms(forms, capitalMarketsForms);
+  }
+
+  if (config.includeOwnershipForms) {
+    addForms(forms, ownershipForms);
+  }
+
+  if (config.includeStressForms) {
+    addForms(forms, stressForms);
+  }
+
+  if (config.includeStructuredOwnershipForms) {
+    addForms(forms, structuredOwnershipForms);
+  }
+
+  return forms;
+}
+
+function addForms(target: Set<string>, source: Set<string>) {
+  for (const form of source) {
+    target.add(form);
+  }
+}
+
+function categorizeForm(form: string): FilingCategory {
+  if (coreNarrativeForms.has(form)) {
+    return "core";
+  }
+
+  if (proxyForms.has(form)) {
+    return "proxy";
+  }
+
+  if (capitalMarketsForms.has(form)) {
+    return "capital_markets";
+  }
+
+  if (ownershipForms.has(form)) {
+    return "ownership";
+  }
+
+  if (stressForms.has(form)) {
+    return "stress";
+  }
+
+  if (structuredOwnershipForms.has(form)) {
+    return "structured_ownership";
+  }
+
+  return "core";
+}
+
+function themeUseCaseForCategory(category: FilingCategory) {
+  switch (category) {
+    case "exhibit":
+      return "market_narrative";
+    case "proxy":
+      return "governance_political_regulatory";
+    case "capital_markets":
+      return "capital_markets_risk_appetite";
+    case "ownership":
+      return "activism_ownership_change";
+    case "stress":
+      return "accounting_operational_stress";
+    case "structured_ownership":
+      return "structured_positioning";
+    case "core":
+    default:
+      return "formal_disclosure";
+  }
+}
+
+function isRelevantExhibit(
+  item: { name: string; type?: string },
+  primaryDocument: string
+) {
+  const name = item.name.toLowerCase();
+
+  if (
+    item.name === primaryDocument ||
+    name.endsWith(".xml") ||
+    name.endsWith(".xsd") ||
+    name.endsWith(".jpg") ||
+    name.endsWith(".jpeg") ||
+    name.endsWith(".png") ||
+    name.endsWith(".gif")
+  ) {
+    return false;
+  }
+
+  if (!relevantExhibitExtensions.some((extension) => name.endsWith(extension))) {
+    return false;
+  }
+
+  const exhibitType = normalizeExhibitType(item.type ?? inferExhibitType(item.name));
+
+  if (relevantExhibitTypes.has(exhibitType)) {
+    return true;
+  }
+
+  return [
+    "earnings",
+    "presentation",
+    "investor",
+    "merger",
+    "restructuring",
+    "financing",
+    "guidance",
+    "impairment"
+  ].some((signal) => name.includes(signal));
+}
+
+function normalizeExhibitType(type: string) {
+  return type.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function inferExhibitType(name: string) {
+  const lower = name.toLowerCase();
+
+  if (lower.includes("ex99") || lower.includes("ex-99")) {
+    return "EX-99";
+  }
+
+  if (lower.includes("ex10") || lower.includes("ex-10")) {
+    return "EX-10";
+  }
+
+  if (lower.includes("ex2") || lower.includes("ex-2")) {
+    return "EX-2";
+  }
+
+  return name;
+}
+
+function envFlag(name: string, defaultValue: boolean) {
+  const value = process.env[name];
+
+  if (value === undefined) {
+    return defaultValue;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
 function normalizeFilingText(text: string) {
