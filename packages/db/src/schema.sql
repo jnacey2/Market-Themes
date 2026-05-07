@@ -190,6 +190,40 @@ create table if not exists document_analysis_sections (
   unique (run_id, section_index)
 );
 
+create table if not exists backfill_jobs (
+  id text primary key,
+  job_type text not null,
+  status text not null,
+  batch_size integer not null,
+  max_batches integer not null,
+  concurrency integer not null,
+  document_timeout_ms integer not null,
+  stale_after_minutes integer not null default 90,
+  lookback_days integer,
+  excluded_sec_filing_categories text[] not null default '{}',
+  model text not null,
+  prompt_version text not null,
+  selected_documents integer not null default 0,
+  completed_documents integer not null default 0,
+  failed_documents integer not null default 0,
+  inserted_signals integer not null default 0,
+  themes_touched integer not null default 0,
+  current_document_ids text[] not null default '{}',
+  worker_id text,
+  last_message text,
+  last_error text,
+  stop_requested_at timestamptz,
+  started_at timestamptz,
+  completed_at timestamptz,
+  metadata jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists backfill_jobs_active_job_idx
+  on backfill_jobs (job_type)
+  where status in ('queued', 'running', 'stop_requested');
+
 create table if not exists theme_trends (
   id text primary key,
   theme_id text not null references themes(id),

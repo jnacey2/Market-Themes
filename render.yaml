@@ -39,6 +39,8 @@ services:
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
         value: capital_markets
+      - key: BACKFILL_WORKER_POLL_INTERVAL_MS
+        value: "45000"
       - key: THEME_NORMALIZATION_PROMPT_VERSION
         value: theme_normalization_v2
       - key: THEME_NORMALIZATION_BATCH_SIZE
@@ -109,6 +111,8 @@ services:
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
         value: capital_markets
+      - key: BACKFILL_WORKER_POLL_INTERVAL_MS
+        value: "45000"
       - key: THEME_NORMALIZATION_PROMPT_VERSION
         value: theme_normalization_v2
       - key: THEME_NORMALIZATION_BATCH_SIZE

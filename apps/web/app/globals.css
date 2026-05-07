@@ -199,6 +199,40 @@ h3 {
   padding: 7px 10px;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.button {
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  color: #07111f;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 12px 16px;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.button.danger {
+  background: var(--risk);
+}
+
+.control-metrics {
+  margin: 18px 0;
+}
+
+.error-text {
+  color: var(--risk) !important;
+}
+
 .score-stack {
   display: grid;
   gap: 10px;

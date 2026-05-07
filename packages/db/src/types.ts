@@ -113,8 +113,53 @@ export type AnalysisStatus = {
   unreadDocumentCount: number;
   runningDocumentCount: number;
   failedDocumentCount: number;
+  backfillControl: BackfillControlStatus;
   recentSignals: AnalysisSignalSummary[];
   recentRuns: AnalysisRunSummary[];
+};
+
+export type BackfillJobStatus =
+  | "queued"
+  | "running"
+  | "stop_requested"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type BackfillJobSummary = {
+  id: string;
+  jobType: string;
+  status: BackfillJobStatus;
+  batchSize: number;
+  maxBatches: number;
+  concurrency: number;
+  documentTimeoutMs: number;
+  staleAfterMinutes: number;
+  selectedDocuments: number;
+  completedDocuments: number;
+  failedDocuments: number;
+  insertedSignals: number;
+  themesTouched: number;
+  currentDocumentIds: string[];
+  lastMessage: string | null;
+  lastError: string | null;
+  stopRequestedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BackfillJobRunConfig = BackfillJobSummary & {
+  lookbackDays: number | null;
+  excludedSecFilingCategories: string[];
+  model: string;
+  promptVersion: string;
+};
+
+export type BackfillControlStatus = {
+  activeJob: BackfillJobSummary | null;
+  recentJobs: BackfillJobSummary[];
 };
 
 export type TrendWindow = "7d" | "30d";

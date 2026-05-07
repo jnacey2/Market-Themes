@@ -232,7 +232,9 @@ The first live Claude integration extracts market signals from SEC/FMP documents
 
 Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
-runs before using them in production storyboards.
+runs before using them in production storyboards. The same page can queue and
+stop bounded Claude extraction backfill jobs; the web app writes job requests to
+Postgres and the worker executes them cooperatively in the background.
 
 Trend aggregation turns stored Claude signals into deterministic `theme_trends`
 rows. It computes 7-day and 30-day rolling windows from source `published_at`
@@ -278,6 +280,7 @@ CLAUDE_EXTRACTION_LOOKBACK_DAYS=
 CLAUDE_STALE_RUN_MINUTES=90
 CLAUDE_MAX_EVIDENCE_CHARS=800
 CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
+BACKFILL_WORKER_POLL_INTERVAL_MS=45000
 THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v2
 THEME_NORMALIZATION_BATCH_SIZE=25
 TREND_LOOKBACK_DAYS=120
@@ -362,8 +365,9 @@ npm run claude:extract:smoke
 
 Then inspect `/analysis` before scheduling any automated Claude cron.
 
-For broader corpus coverage, use the controlled Claude backfill job instead of
-one very large extraction command:
+For broader corpus coverage, open `/analysis` and use the Backfill Control panel
+to start or stop a bounded worker-backed run. The manual command is still useful
+for local testing:
 
 ```bash
 CLAUDE_EXTRACTION_BATCH_SIZE=25 CLAUDE_EXTRACTION_MAX_BATCHES=4 CLAUDE_EXTRACTION_CONCURRENCY=2 npm run claude:extract:backfill

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getAnalysisStatus } from "@market-themes/db";
+import { BackfillControls } from "./BackfillControls";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,11 @@ export default async function AnalysisPage() {
           Counts include SEC and FMP documents eligible for market signal extraction,
           excluding capital markets filings by default.
         </p>
+      </section>
+
+      <section className="section">
+        <p className="eyebrow">Backfill Control</p>
+        <BackfillControls status={status.backfillControl} />
       </section>
 
       <section className="section">

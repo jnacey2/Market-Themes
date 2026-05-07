@@ -6,6 +6,10 @@ import type {
   AnalysisRunSummary,
   AnalysisSignalSummary,
   AnalysisStatus,
+  BackfillControlStatus,
+  BackfillJobRunConfig,
+  BackfillJobStatus,
+  BackfillJobSummary,
   ExtractedSignalInput,
   IngestionStatus,
   LiveDashboardStatus,
@@ -39,6 +43,51 @@ type SelectAnalysisDocumentsOptions = {
   limit?: number;
   lookbackDays?: number;
   excludedSecFilingCategories?: string[];
+};
+
+type CreateBackfillJobOptions = {
+  jobType?: string;
+  batchSize?: number;
+  maxBatches?: number;
+  concurrency?: number;
+  documentTimeoutMs?: number;
+  staleAfterMinutes?: number;
+  lookbackDays?: number;
+  excludedSecFilingCategories?: string[];
+  model?: string;
+  promptVersion?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type BackfillJobRow = {
+  id: string;
+  job_type: string;
+  status: BackfillJobStatus;
+  batch_size: number;
+  max_batches: number;
+  concurrency: number;
+  document_timeout_ms: number;
+  stale_after_minutes: number;
+  selected_documents: number;
+  completed_documents: number;
+  failed_documents: number;
+  inserted_signals: number;
+  themes_touched: number;
+  current_document_ids: string[];
+  last_message: string | null;
+  last_error: string | null;
+  stop_requested_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ClaimableBackfillJobRow = BackfillJobRow & {
+  lookback_days: number | null;
+  excluded_sec_filing_categories: string[];
+  model: string;
+  prompt_version: string;
 };
 
 type AnalysisRunOptions = {
@@ -392,6 +441,288 @@ export async function recoverStaleDocumentAnalysisRuns(
   }
 }
 
+export async function createBackfillJob(
+  options: CreateBackfillJobOptions = {},
+  databaseUrl = process.env.DATABASE_URL
+): Promise<BackfillJobSummary> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  const jobType = options.jobType ?? "claude_extraction";
+
+  try {
+    const active = await client.query<BackfillJobRow>(
+      `select ${backfillJobSelectColumns}
+       from backfill_jobs
+       where job_type = $1
+        and status in ('queued', 'running', 'stop_requested')
+       order by created_at desc
+       limit 1`,
+      [jobType]
+    );
+
+    if (active.rows[0]) {
+      return rowToBackfillJob(active.rows[0]);
+    }
+
+    const id = `backfill:${hashContent(`${jobType}:${Date.now()}:${Math.random()}`).slice(0, 24)}`;
+    const result = await client.query<BackfillJobRow>(
+      `insert into backfill_jobs (
+        id,
+        job_type,
+        status,
+        batch_size,
+        max_batches,
+        concurrency,
+        document_timeout_ms,
+        stale_after_minutes,
+        lookback_days,
+        excluded_sec_filing_categories,
+        model,
+        prompt_version,
+        metadata,
+        last_message
+      ) values ($1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      returning ${backfillJobSelectColumns}`,
+      [
+        id,
+        jobType,
+        options.batchSize ?? 10,
+        options.maxBatches ?? 5,
+        options.concurrency ?? 2,
+        options.documentTimeoutMs ?? 600_000,
+        options.staleAfterMinutes ?? 90,
+        options.lookbackDays ?? null,
+        options.excludedSecFilingCategories ?? ["capital_markets"],
+        options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+        options.promptVersion ?? process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1",
+        JSON.stringify(options.metadata ?? {}),
+        "Queued Claude extraction backfill."
+      ]
+    );
+
+    return rowToBackfillJob(result.rows[0]);
+  } finally {
+    await client.end();
+  }
+}
+
+export async function requestBackfillStop(
+  options: { jobId?: string; jobType?: string } = {},
+  databaseUrl = process.env.DATABASE_URL
+): Promise<BackfillJobSummary | null> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const params = [options.jobId ?? null, options.jobType ?? "claude_extraction"];
+    const result = await client.query<BackfillJobRow>(
+      `update backfill_jobs
+       set
+        status = case
+          when status = 'queued' then 'cancelled'
+          when status = 'running' then 'stop_requested'
+          else status
+        end,
+        stop_requested_at = now(),
+        completed_at = case when status = 'queued' then now() else completed_at end,
+        last_message = case
+          when status = 'queued' then 'Cancelled before the worker started.'
+          when status = 'running' then 'Stop requested. The worker will finish in-flight documents first.'
+          else last_message
+        end,
+        updated_at = now()
+       where ($1::text is null or id = $1)
+        and job_type = $2
+        and status in ('queued', 'running')
+       returning ${backfillJobSelectColumns}`,
+      params
+    );
+
+    return result.rows[0] ? rowToBackfillJob(result.rows[0]) : null;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function getBackfillControlStatus(
+  databaseUrl = process.env.DATABASE_URL
+): Promise<BackfillControlStatus> {
+  if (!databaseUrl) {
+    return emptyBackfillControlStatus();
+  }
+
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const active = await client.query<BackfillJobRow>(
+      `select ${backfillJobSelectColumns}
+       from backfill_jobs
+       where status in ('queued', 'running', 'stop_requested')
+       order by created_at desc
+       limit 1`
+    );
+    const recent = await client.query<BackfillJobRow>(
+      `select ${backfillJobSelectColumns}
+       from backfill_jobs
+       order by created_at desc
+       limit 5`
+    );
+
+    return {
+      activeJob: active.rows[0] ? rowToBackfillJob(active.rows[0]) : null,
+      recentJobs: recent.rows.map(rowToBackfillJob)
+    };
+  } catch {
+    return emptyBackfillControlStatus();
+  } finally {
+    await client.end();
+  }
+}
+
+export async function claimNextBackfillJob(
+  workerId: string,
+  jobType = "claude_extraction",
+  databaseUrl = process.env.DATABASE_URL
+): Promise<BackfillJobRunConfig | null> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const result = await client.query<ClaimableBackfillJobRow>(
+      `with next_job as (
+        select id
+        from backfill_jobs
+        where job_type = $1
+          and status = 'queued'
+        order by created_at
+        limit 1
+        for update skip locked
+      )
+      update backfill_jobs bj
+      set
+        status = 'running',
+        worker_id = $2,
+        started_at = coalesce(started_at, now()),
+        last_message = 'Worker claimed job.',
+        updated_at = now()
+      from next_job
+      where bj.id = next_job.id
+      returning ${claimableBackfillJobSelectColumns}`,
+      [jobType, workerId]
+    );
+
+    return result.rows[0] ? rowToBackfillJobRunConfig(result.rows[0]) : null;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function updateBackfillJobProgress(
+  jobId: string,
+  progress: {
+    status?: BackfillJobStatus;
+    selectedDocumentsDelta?: number;
+    completedDocumentsDelta?: number;
+    failedDocumentsDelta?: number;
+    insertedSignalsDelta?: number;
+    themesTouchedDelta?: number;
+    currentDocumentIds?: string[];
+    lastMessage?: string | null;
+    lastError?: string | null;
+    completedAtNow?: boolean;
+  },
+  databaseUrl = process.env.DATABASE_URL
+): Promise<BackfillJobSummary | null> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const updates: string[] = ["updated_at = now()"];
+    const values: unknown[] = [];
+
+    function addValue(value: unknown) {
+      values.push(value);
+      return `$${values.length}`;
+    }
+
+    if (progress.status) {
+      updates.push(`status = ${addValue(progress.status)}`);
+    }
+
+    if (progress.selectedDocumentsDelta) {
+      updates.push(`selected_documents = selected_documents + ${addValue(progress.selectedDocumentsDelta)}`);
+    }
+
+    if (progress.completedDocumentsDelta) {
+      updates.push(`completed_documents = completed_documents + ${addValue(progress.completedDocumentsDelta)}`);
+    }
+
+    if (progress.failedDocumentsDelta) {
+      updates.push(`failed_documents = failed_documents + ${addValue(progress.failedDocumentsDelta)}`);
+    }
+
+    if (progress.insertedSignalsDelta) {
+      updates.push(`inserted_signals = inserted_signals + ${addValue(progress.insertedSignalsDelta)}`);
+    }
+
+    if (progress.themesTouchedDelta) {
+      updates.push(`themes_touched = themes_touched + ${addValue(progress.themesTouchedDelta)}`);
+    }
+
+    if (progress.currentDocumentIds) {
+      updates.push(`current_document_ids = ${addValue(progress.currentDocumentIds)}`);
+    }
+
+    if (progress.lastMessage !== undefined) {
+      updates.push(`last_message = ${addValue(progress.lastMessage)}`);
+    }
+
+    if (progress.lastError !== undefined) {
+      updates.push(`last_error = ${addValue(progress.lastError)}`);
+    }
+
+    if (progress.completedAtNow) {
+      updates.push("completed_at = now()");
+    }
+
+    const idParam = addValue(jobId);
+    const result = await client.query<BackfillJobRow>(
+      `update backfill_jobs
+       set ${updates.join(",\n        ")}
+       where id = ${idParam}
+       returning ${backfillJobSelectColumns}`,
+      values
+    );
+
+    return result.rows[0] ? rowToBackfillJob(result.rows[0]) : null;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function getBackfillJobForWorker(
+  jobId: string,
+  databaseUrl = process.env.DATABASE_URL
+): Promise<BackfillJobRunConfig | null> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const result = await client.query<ClaimableBackfillJobRow>(
+      `select ${claimableBackfillJobSelectColumns}
+       from backfill_jobs
+       where id = $1`,
+      [jobId]
+    );
+
+    return result.rows[0] ? rowToBackfillJobRunConfig(result.rows[0]) : null;
+  } finally {
+    await client.end();
+  }
+}
+
 export async function startDocumentAnalysisRun(
   documentId: string,
   options: AnalysisRunOptions,
@@ -688,6 +1019,7 @@ export async function getAnalysisStatus(
       unreadDocumentCount: Number(row?.unread_document_count ?? 0),
       runningDocumentCount: Number(row?.running_document_count ?? 0),
       failedDocumentCount: Number(row?.failed_document_count ?? 0),
+      backfillControl: await getBackfillControlStatus(databaseUrl),
       recentSignals: recentSignals.rows,
       recentRuns: recentRuns.rows.map((run) => ({
         ...run,
@@ -2256,6 +2588,81 @@ async function resolveDocumentId(
   return `${preferredId}:rev:${contentHash.slice(0, 8)}`;
 }
 
+const backfillJobSelectColumns = `
+  id,
+  job_type,
+  status,
+  batch_size,
+  max_batches,
+  concurrency,
+  document_timeout_ms,
+  stale_after_minutes,
+  selected_documents,
+  completed_documents,
+  failed_documents,
+  inserted_signals,
+  themes_touched,
+  current_document_ids,
+  last_message,
+  last_error,
+  stop_requested_at::text,
+  started_at::text,
+  completed_at::text,
+  created_at::text,
+  updated_at::text
+`;
+
+const claimableBackfillJobSelectColumns = `
+  ${backfillJobSelectColumns},
+  lookback_days,
+  excluded_sec_filing_categories,
+  model,
+  prompt_version
+`;
+
+function rowToBackfillJob(row: BackfillJobRow): BackfillJobSummary {
+  return {
+    id: row.id,
+    jobType: row.job_type,
+    status: row.status,
+    batchSize: row.batch_size,
+    maxBatches: row.max_batches,
+    concurrency: row.concurrency,
+    documentTimeoutMs: row.document_timeout_ms,
+    staleAfterMinutes: row.stale_after_minutes,
+    selectedDocuments: row.selected_documents,
+    completedDocuments: row.completed_documents,
+    failedDocuments: row.failed_documents,
+    insertedSignals: row.inserted_signals,
+    themesTouched: row.themes_touched,
+    currentDocumentIds: row.current_document_ids ?? [],
+    lastMessage: row.last_message,
+    lastError: row.last_error,
+    stopRequestedAt: row.stop_requested_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function rowToBackfillJobRunConfig(row: ClaimableBackfillJobRow): BackfillJobRunConfig {
+  return {
+    ...rowToBackfillJob(row),
+    lookbackDays: row.lookback_days,
+    excludedSecFilingCategories: row.excluded_sec_filing_categories ?? [],
+    model: row.model,
+    promptVersion: row.prompt_version
+  };
+}
+
+function emptyBackfillControlStatus(): BackfillControlStatus {
+  return {
+    activeJob: null,
+    recentJobs: []
+  };
+}
+
 function emptyStatus(databaseConfigured: boolean): IngestionStatus {
   return {
     databaseConfigured,
@@ -2356,6 +2763,7 @@ function emptyAnalysisStatus(databaseConfigured: boolean): AnalysisStatus {
     unreadDocumentCount: 0,
     runningDocumentCount: 0,
     failedDocumentCount: 0,
+    backfillControl: emptyBackfillControlStatus(),
     recentSignals: [],
     recentRuns: []
   };
