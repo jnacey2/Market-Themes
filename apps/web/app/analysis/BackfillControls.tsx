@@ -36,11 +36,13 @@ export function BackfillControls({ status }: { status: BackfillControlStatus }) 
       <div className="pill-row">
         <span className="pill">{activeJob ? activeJob.status : "idle"}</span>
         {activeJob ? <span className="pill">job {activeJob.id.slice(-8)}</span> : null}
+        {activeJob ? <span className="pill">concurrency {activeJob.concurrency}</span> : null}
       </div>
       <h2>Document Analysis Backfill</h2>
       <p>
-        Start queues a bounded Claude extraction job. Stop is cooperative: the
-        worker finishes any in-flight documents, then stops before selecting more.
+        Start queues Claude extraction across the unread eligible backlog at
+        concurrency 4. Stop is cooperative: the worker finishes any in-flight
+        documents, then stops before selecting more.
       </p>
 
       {activeJob ? (

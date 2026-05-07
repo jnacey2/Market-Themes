@@ -366,8 +366,9 @@ npm run claude:extract:smoke
 Then inspect `/analysis` before scheduling any automated Claude cron.
 
 For broader corpus coverage, open `/analysis` and use the Backfill Control panel
-to start or stop a bounded worker-backed run. The manual command is still useful
-for local testing:
+to start or stop a worker-backed run. UI-started jobs default to concurrency `4`
+and keep selecting batches until the eligible unread backlog is empty. The manual
+command is still useful for local testing:
 
 ```bash
 CLAUDE_EXTRACTION_BATCH_SIZE=25 CLAUDE_EXTRACTION_MAX_BATCHES=4 CLAUDE_EXTRACTION_CONCURRENCY=2 npm run claude:extract:backfill
