@@ -267,6 +267,7 @@ CLAUDE_PROMPT_VERSION=market_signal_extraction_v1
 CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
 CLAUDE_EXTRACTION_LOOKBACK_DAYS=
 CLAUDE_MAX_EVIDENCE_CHARS=800
+CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
 APP_BASE_URL=http://localhost:3000
 SESSION_SECRET=replace-with-a-long-random-secret
 SOURCE_CONFIG_JSON={}
@@ -333,7 +334,9 @@ FMP backfills use `FMP_BACKFILL_BATCH_INDEX`, `FMP_BACKFILL_BATCH_SIZE`, and
 `FMP_BACKFILL_QUARTERS`. FMP polling is intended to run daily overnight.
 
 Claude smoke extraction uses the newest SEC/FMP documents that have not already
-completed the current prompt version. Start with:
+completed the current prompt version. It excludes `capital_markets` SEC filings
+by default because prospectus-style `424B*` documents are often long and
+low-signal for the first quality pass. Start with:
 
 ```bash
 npm run db:apply

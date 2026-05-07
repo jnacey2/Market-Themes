@@ -168,7 +168,31 @@ function validateSignals(
     throw new Error("Claude extraction JSON must include a signals array.");
   }
 
-  return parsed.signals.map((candidate, index) => {
+  const validSignals: ExtractedSignalInput[] = [];
+
+  for (const [index, candidate] of parsed.signals.entries()) {
+    const signal = validateSignal(candidate, index, document, section, options);
+
+    if (signal) {
+      validSignals.push(signal);
+    }
+  }
+
+  return validSignals;
+}
+
+function validateSignal(
+  candidate: unknown,
+  index: number,
+  document: AnalysisDocument,
+  section: { label: string; text: string },
+  options: {
+    model: string;
+    promptVersion: string;
+    maxEvidenceChars: number;
+  }
+): ExtractedSignalInput | null {
+  try {
     if (!isObject(candidate)) {
       throw new Error(`Signal ${index} must be an object.`);
     }
@@ -235,7 +259,9 @@ function validateSignals(
         sourceClass: document.sourceClass
       })
     };
-  });
+  } catch {
+    return null;
+  }
 }
 
 function splitIntoSections(text: string, sectionChars: number, overlap: number) {

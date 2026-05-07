@@ -27,6 +27,8 @@ services:
         value: "20"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
         value: "800"
+      - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
+        value: capital_markets
       - key: APP_BASE_URL
         sync: false
       - key: SESSION_SECRET
@@ -81,6 +83,8 @@ services:
         value: "20"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
         value: "800"
+      - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
+        value: capital_markets
       - key: SOURCE_CONFIG_JSON
         value: "{}"
       - key: SCRAPING_ENABLED
@@ -145,6 +149,8 @@ services:
         value: "20"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
         value: "800"
+      - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
+        value: capital_markets
       - key: SOURCE_CONFIG_JSON
         value: "{}"
       - key: SCRAPING_ENABLED

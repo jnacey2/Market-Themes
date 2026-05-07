@@ -26,6 +26,7 @@ type SelectAnalysisDocumentsOptions = {
   promptVersion: string;
   limit?: number;
   lookbackDays?: number;
+  excludedSecFilingCategories?: string[];
 };
 
 type AnalysisRunOptions = {
@@ -155,6 +156,7 @@ export async function selectDocumentsForAnalysis(
   try {
     const limit = options.limit ?? 20;
     const lookbackDays = options.lookbackDays ?? null;
+    const excludedSecFilingCategories = options.excludedSecFilingCategories ?? [];
     const result = await client.query<{
       id: string;
       source_id: string;
@@ -193,6 +195,10 @@ export async function selectDocumentsForAnalysis(
         and ar.prompt_version = $3
        where d.source_id in ('sec-filings', 'fmp-transcripts')
         and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
+        and not (
+          d.source_id = 'sec-filings'
+          and coalesce(d.metadata->>'filingCategory', 'uncategorized') = any($6::text[])
+        )
         and coalesce(ar.status, '') not in ('completed', 'running')
         and coalesce(ar.attempt_count, 0) < 2
        group by d.id, dt.content, ar.status, ar.attempt_count
@@ -200,14 +206,22 @@ export async function selectDocumentsForAnalysis(
           dt.content,
           string_agg(dc.content, E'\n\n' order by dc.chunk_index)
         ) is not null
-       order by d.published_at desc, d.created_at desc
+       order by
+        case
+          when d.source_id = 'fmp-transcripts' then 0
+          when coalesce(d.metadata->>'filingCategory', '') in ('core', 'exhibit') then 1
+          else 2
+        end,
+        d.published_at desc,
+        d.created_at desc
        limit $5`,
       [
         options.analysisType,
         options.model,
         options.promptVersion,
         lookbackDays,
-        limit
+        limit,
+        excludedSecFilingCategories
       ]
     );
 

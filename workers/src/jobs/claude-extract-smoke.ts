@@ -15,6 +15,9 @@ const promptVersion = process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromp
 const documentLimit = Number(process.env.CLAUDE_EXTRACTION_DOCUMENT_LIMIT ?? 20);
 const lookbackDays = optionalNumber(process.env.CLAUDE_EXTRACTION_LOOKBACK_DAYS);
 const maxEvidenceChars = Number(process.env.CLAUDE_MAX_EVIDENCE_CHARS ?? 800);
+const excludedSecFilingCategories = parseCsv(
+  process.env.CLAUDE_EXCLUDED_SEC_CATEGORIES ?? "capital_markets"
+);
 
 if (!process.env.ANTHROPIC_API_KEY) {
   throw new Error("ANTHROPIC_API_KEY is required for Claude extraction.");
@@ -25,7 +28,8 @@ const documents = await selectDocumentsForAnalysis({
   model,
   promptVersion,
   limit: documentLimit,
-  lookbackDays
+  lookbackDays,
+  excludedSecFilingCategories
 });
 
 let completedDocuments = 0;
@@ -34,6 +38,10 @@ let insertedSignals = 0;
 let themesTouched = 0;
 
 for (const document of documents) {
+  console.log(
+    `[claude-extract-smoke] analyzing document=${document.id} source=${document.sourceId} published=${document.publishedAt}`
+  );
+
   const runId = await startDocumentAnalysisRun(document.id, {
     analysisType: marketSignalAnalysisType,
     model,
@@ -100,4 +108,11 @@ function optionalNumber(value: string | undefined) {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseCsv(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
