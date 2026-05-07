@@ -60,6 +60,7 @@ type SelectThemeGroupsOptions = {
 
 type SignalTrendInput = {
   signalId: string;
+  documentId: string;
   themeId: string;
   themeLabel: string;
   trendLevel: "market" | "sector" | "unmapped";
@@ -74,6 +75,7 @@ type DailyTrendBucket = {
   baseIntensity: number;
   intensity: number;
   evidenceCount: number;
+  documentIds: Set<string>;
   sourceMix: Partial<Record<SourceClass, number>>;
   sourceClasses: Set<SourceClass>;
   entities: Set<string>;
@@ -941,6 +943,7 @@ export async function recomputeThemeTrends(
               zScore: score.zScore,
               percentileRank: score.percentileRank,
               evidenceCount: score.sourceMix.evidenceCount,
+              documentBreadth: score.sourceMix.documentBreadth,
               sourceMix: score.sourceMix.sources,
               sourceDiversity: score.sourceMix.sourceDiversity,
               entityBreadth: score.sourceMix.entityBreadth,
@@ -1074,6 +1077,7 @@ export async function getTrendStatus(
         zScore: row.z_score,
         percentileRank: row.percentile_rank,
         evidenceCount: metadata.evidenceCount,
+        documentBreadth: metadata.documentBreadth,
         sourceMix: metadata.sources,
         sourceDiversity: metadata.sourceDiversity,
         entityBreadth: metadata.entityBreadth,
@@ -1192,6 +1196,7 @@ async function loadSignalsForTrendComputation(
     `with trend_signal_rows as (
       select
         s.id,
+        s.document_id,
         coalesce(s.canonical_theme_id, s.theme_id) as trend_theme_id,
         case when s.canonical_theme_id is null then 'unmapped' else 'market' end as trend_level,
         d.published_at,
@@ -1204,6 +1209,7 @@ async function loadSignalsForTrendComputation(
       union all
       select
         s.id,
+        s.document_id,
         s.canonical_subtheme_id as trend_theme_id,
         'sector' as trend_level,
         d.published_at,
@@ -1217,6 +1223,7 @@ async function loadSignalsForTrendComputation(
     )
     select
       tsr.id as "signalId",
+      tsr.document_id as "documentId",
       tsr.trend_theme_id as "themeId",
       t.label as "themeLabel",
       tsr.trend_level as "trendLevel",
@@ -1314,6 +1321,7 @@ function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, end
               baseIntensity: 0,
               intensity: 0,
               evidenceCount: 0,
+              documentIds: new Set<string>(),
               sourceMix: {},
               sourceClasses: new Set<SourceClass>(),
               entities: new Set<string>()
@@ -1332,6 +1340,7 @@ function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, end
 
     bucket.baseIntensity += signal.scoreContribution;
     bucket.evidenceCount += 1;
+    bucket.documentIds.add(signal.documentId);
     bucket.sourceClasses.add(signal.sourceClass);
     bucket.sourceMix[signal.sourceClass] = (bucket.sourceMix[signal.sourceClass] ?? 0) + 1;
 
@@ -1390,6 +1399,7 @@ function scoreTrendWindow(
     zScore >= 1.8 &&
     percentileRank >= 90 &&
     currentSummary.evidenceCount >= 2 &&
+    (currentSummary.documentBreadth >= 2 || currentSummary.entityBreadth >= 2) &&
     currentSummary.sourceDiversity >= 1;
 
   return {
@@ -1403,6 +1413,7 @@ function scoreTrendWindow(
       sources: currentSummary.sourceMix,
       trendLevel,
       evidenceCount: currentSummary.evidenceCount,
+      documentBreadth: currentSummary.documentBreadth,
       sourceDiversity: currentSummary.sourceDiversity,
       entityBreadth: currentSummary.entityBreadth,
       baseIntensity: roundMetric(currentSummary.baseIntensity),
@@ -1417,6 +1428,7 @@ function summarizeBuckets(buckets: DailyTrendBucket[]) {
   const sourceMix: Partial<Record<SourceClass, number>> = {};
   const sourceClasses = new Set<SourceClass>();
   const entities = new Set<string>();
+  const documentIds = new Set<string>();
   let baseIntensity = 0;
   let intensity = 0;
   let evidenceCount = 0;
@@ -1425,6 +1437,10 @@ function summarizeBuckets(buckets: DailyTrendBucket[]) {
     baseIntensity += bucket.baseIntensity;
     intensity += bucket.intensity;
     evidenceCount += bucket.evidenceCount;
+
+    for (const documentId of bucket.documentIds) {
+      documentIds.add(documentId);
+    }
 
     for (const sourceClass of bucket.sourceClasses) {
       sourceClasses.add(sourceClass);
@@ -1444,6 +1460,7 @@ function summarizeBuckets(buckets: DailyTrendBucket[]) {
     baseIntensity,
     intensity,
     evidenceCount,
+    documentBreadth: documentIds.size,
     sourceMix,
     sourceDiversity: sourceClasses.size,
     entityBreadth: entities.size
@@ -1514,6 +1531,7 @@ function parseTrendMetadata(metadata: Record<string, unknown>) {
     sources,
     trendLevel,
     evidenceCount: numberFromMetadata(metadata.evidenceCount),
+    documentBreadth: numberFromMetadata(metadata.documentBreadth),
     sourceDiversity: numberFromMetadata(metadata.sourceDiversity),
     entityBreadth: numberFromMetadata(metadata.entityBreadth),
     lowHistory: metadata.lowHistory === true,
@@ -1536,6 +1554,7 @@ function bucketForDate(buckets: Map<string, DailyTrendBucket>, date: string): Da
       baseIntensity: 0,
       intensity: 0,
       evidenceCount: 0,
+      documentIds: new Set<string>(),
       sourceMix: {},
       sourceClasses: new Set<SourceClass>(),
       entities: new Set<string>()

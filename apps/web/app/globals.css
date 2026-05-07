@@ -121,6 +121,10 @@ h3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .panel,
 .storyboard-card,
 .evidence-card {
@@ -264,6 +268,7 @@ h3 {
   .hero,
   .grid.two,
   .grid.three,
+  .grid.four,
   .storyboard-card {
     grid-template-columns: 1fr;
   }

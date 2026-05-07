@@ -140,6 +140,7 @@ export type TrendSummary = {
   zScore: number;
   percentileRank: number;
   evidenceCount: number;
+  documentBreadth: number;
   sourceMix: Partial<Record<SourceClass, number>>;
   sourceDiversity: number;
   entityBreadth: number;

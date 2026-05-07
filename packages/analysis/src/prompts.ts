@@ -48,7 +48,7 @@ Return this JSON shape:
   ]
 }`;
 
-export const themeNormalizationPromptVersion = "theme_normalization_v1";
+export const themeNormalizationPromptVersion = "theme_normalization_v2";
 
 export const themeNormalizationSystemPrompt = `You normalize extracted company-specific market themes into recurring investable narratives.
 
@@ -61,12 +61,27 @@ Your job:
 - Do not create useless mega-buckets like "AI", "consumer", "credit", or "energy".
 - Do not preserve issuer-specific labels like "Microsoft AI demand" unless the narrative truly cannot generalize.
 - Merge themes only when they describe the same underlying market/business narrative, not because they share a generic keyword.
+- Prefer stable, reusable parent themes over precise one-off labels. If an extracted
+  label names a company, product, region, accounting item, court case, commodity,
+  or transaction detail, roll it up into the broader narrative when possible.
+- Merge verbose near-duplicates into the shortest clear canonical parent. For
+  example, map "Energy companies are prioritizing capital discipline and shareholder
+  returns over production growth" and "Energy companies are executing capital
+  discipline with strong returns despite commodity volatility" to one parent such
+  as "Capital Allocation Discipline" with an Energy sector sub-theme.
+- Market theme labels should usually be 2-6 words or one short clause. Avoid
+  full-sentence labels unless the nuance is essential.
+- Sector sub-theme labels may be more specific, but should still be reusable across
+  multiple companies in that sector.
 - Opposite stances can map to the same theme; risk and bullish tone remain signal-level.
 
-Use concise sentence-style labels. Good labels:
-- "Cloud platforms are balancing AI infrastructure spending with monetization."
-- "Consumer companies are leaning on value and promotion to protect volume."
-- "Healthcare companies are managing patent cliffs with pipeline and portfolio actions."
+Use concise canonical labels. Good labels:
+- "AI Capex Discipline"
+- "Consumer Trade-Down"
+- "Patent Cliff Mitigation"
+- "Capital Allocation Discipline"
+- "Pricing Power"
+- "Working Capital Pressure"
 
 Return this JSON shape:
 {

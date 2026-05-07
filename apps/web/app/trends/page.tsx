@@ -6,13 +6,18 @@ export const dynamic = "force-dynamic";
 const MARKET_THEME_LIMIT = 8;
 const SECTOR_CHILD_LIMIT = 4;
 const CONTEXT_THEME_LIMIT = 6;
+const EMERGING_THEME_LIMIT = 8;
 
 export default async function TrendsPage() {
   const status = await getTrendStatus();
-  const allMarketSevenDayTrends = rankDigestTrends(
+  const rankedMarketSevenDayTrends = rankDigestTrends(
     status.trends.filter((trend) => trend.trendWindow === "7d" && trend.themeLevel === "market")
   );
-  const marketSevenDayTrends = allMarketSevenDayTrends.slice(0, MARKET_THEME_LIMIT);
+  const confirmedMarketSevenDayTrends = rankedMarketSevenDayTrends.filter(isConfirmedMarketTrend);
+  const emergingMarketSevenDayTrends = rankedMarketSevenDayTrends
+    .filter((trend) => !isConfirmedMarketTrend(trend))
+    .slice(0, EMERGING_THEME_LIMIT);
+  const marketSevenDayTrends = confirmedMarketSevenDayTrends.slice(0, MARKET_THEME_LIMIT);
   const sectorSevenDayTrends = status.trends.filter(
     (trend) => trend.trendWindow === "7d" && trend.themeLevel === "sector"
   );
@@ -20,7 +25,12 @@ export default async function TrendsPage() {
     (trend) => trend.trendWindow === "7d" && trend.themeLevel === "unmapped"
   );
   const thirtyDayTrends = rankDigestTrends(
-    status.trends.filter((trend) => trend.trendWindow === "30d" && trend.themeLevel === "market")
+    status.trends.filter(
+      (trend) =>
+        trend.trendWindow === "30d" &&
+        trend.themeLevel === "market" &&
+        isConfirmedMarketTrend(trend)
+    )
   ).slice(0, CONTEXT_THEME_LIMIT);
   const visibleSectorCount = sectorSevenDayTrends.filter((trend) =>
     marketSevenDayTrends.some((marketTrend) => marketTrend.themeId === trend.parentThemeId)
@@ -61,9 +71,10 @@ export default async function TrendsPage() {
         </div>
       </section>
 
-      <section className="grid three">
+      <section className="grid four">
         <Metric label="Trend rows" value={status.totalTrendRows} />
-        <Metric label="Market themes" value={marketSevenDayTrends.length} />
+        <Metric label="Confirmed themes" value={marketSevenDayTrends.length} />
+        <Metric label="Emerging themes" value={emergingMarketSevenDayTrends.length} />
         <Metric label="Nested sub-themes" value={visibleSectorCount} />
       </section>
 
@@ -77,6 +88,7 @@ export default async function TrendsPage() {
         trends={thirtyDayTrends}
         compact
       />
+      <EmergingSection trends={emergingMarketSevenDayTrends} />
       <DebugSummary unmappedCount={unmappedSevenDayTrends.length} />
     </div>
   );
@@ -93,14 +105,18 @@ function DigestSection({
     <section className="section">
       <p className="eyebrow">Top Overall Market Themes</p>
       <p className="lede">
-        Showing the highest-signal normalized narratives. Sector sub-themes and
-        evidence are collapsed to keep the page readable.
+        Showing normalized narratives with breadth across at least two entities
+        or two independent documents. Sector sub-themes and evidence are collapsed
+        to keep the page readable.
       </p>
       <div className="grid">
         {marketTrends.length === 0 ? (
           <div className="panel">
-            <h2>No market themes yet</h2>
-            <p>Run npm run themes:normalize, then recompute trends.</p>
+            <h2>No confirmed market themes yet</h2>
+            <p>
+              Run more extraction/normalization, then recompute trends. Single-company
+              items now appear in the emerging lane below.
+            </p>
           </div>
         ) : (
           marketTrends.map((trend, index) => (
@@ -167,6 +183,7 @@ function MarketThemeCard({
           <span className="pill">7d</span>
           <span className="pill">z {trend.zScore.toFixed(2)}</span>
           <span className="pill">{trend.evidenceCount} evidence</span>
+          <span className="pill">{independentDocumentCount(trend)} docs</span>
           <span className="pill">{trend.entityBreadth} entities</span>
           {trend.lowHistory ? <span className="pill">low history</span> : null}
         </div>
@@ -234,7 +251,8 @@ function TrendCard({ trend, compact = false }: { trend: TrendSummary; compact?: 
         <p>
           Intensity {trend.intensity.toFixed(2)} vs baseline{" "}
           {trend.baselineMean.toFixed(2)}. Evidence count {trend.evidenceCount},
-          source breadth {trend.sourceDiversity}, entity breadth {trend.entityBreadth}.
+          document breadth {independentDocumentCount(trend)}, source breadth{" "}
+          {trend.sourceDiversity}, entity breadth {trend.entityBreadth}.
         </p>
         {!compact ? (
           <>
@@ -293,8 +311,40 @@ function DebugSummary({ unmappedCount }: { unmappedCount: number }) {
   );
 }
 
+function EmergingSection({ trends }: { trends: TrendSummary[] }) {
+  return (
+    <section className="section">
+      <details className="detail-block">
+        <summary>Show emerging or company-specific themes ({trends.length})</summary>
+        <p className="lede">
+          These are real extracted signals, but they do not yet have enough breadth
+          to count as confirmed market themes.
+        </p>
+        <div className="grid">
+          {trends.length === 0 ? (
+            <div className="panel">
+              <h2>No emerging themes hidden</h2>
+              <p>All visible market themes currently meet the breadth gate.</p>
+            </div>
+          ) : (
+            trends.map((trend) => <TrendCard compact key={trend.id} trend={trend} />)
+          )}
+        </div>
+      </details>
+    </section>
+  );
+}
+
 function rankDigestTrends(trends: TrendSummary[]) {
   return [...trends].sort((left, right) => digestScore(right) - digestScore(left));
+}
+
+function isConfirmedMarketTrend(trend: TrendSummary) {
+  return trend.entityBreadth >= 2 || independentDocumentCount(trend) >= 2;
+}
+
+function independentDocumentCount(trend: TrendSummary) {
+  return trend.documentBreadth > 0 ? trend.documentBreadth : trend.evidenceCount;
 }
 
 function digestScore(trend: TrendSummary) {

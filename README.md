@@ -273,7 +273,7 @@ CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
 CLAUDE_EXTRACTION_LOOKBACK_DAYS=
 CLAUDE_MAX_EVIDENCE_CHARS=800
 CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
-THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v1
+THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v2
 THEME_NORMALIZATION_BATCH_SIZE=25
 TREND_LOOKBACK_DAYS=120
 TREND_LOW_HISTORY_DAYS=14
@@ -366,6 +366,8 @@ npm run trends:recompute --workspace @market-themes/workers
 
 Open `/theme-mappings` to review market themes, sector sub-themes, mapped
 extracted themes, confidence, rationale, affected entities, and snippets.
+The normalization prompt favors short reusable parent labels and merges verbose
+near-duplicates into broader canonical themes.
 
 Trend recompute uses existing signals and writes idempotent rows into
 `theme_trends`:
@@ -375,9 +377,10 @@ npm run trends:recompute --workspace @market-themes/workers
 ```
 
 Open `/trends` to review the ranked market theme digest. The page defaults to a
-short list of top 7-day overall market themes, nests sector sub-themes under
-their parent market theme, collapses supporting evidence, and hides unmapped
-debug rows from the main reading flow.
+short list of top 7-day overall market themes with breadth across at least two
+entities or two independent documents, nests sector sub-themes under their
+parent market theme, collapses supporting evidence, and moves company-specific
+or one-off themes into an emerging lane.
 
 ## Database Setup
 
