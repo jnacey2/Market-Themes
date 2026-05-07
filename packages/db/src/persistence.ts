@@ -930,6 +930,8 @@ export async function recomputeThemeTrends(
               id: trendId(theme.themeId, trendWindow, date),
               themeId: theme.themeId,
               themeLabel: theme.themeLabel,
+              parentThemeId: null,
+              sector: null,
               themeLevel: theme.trendLevel,
               trendWindow,
               date,
@@ -1020,6 +1022,8 @@ export async function getTrendStatus(
       id: string;
       theme_id: string;
       theme_label: string;
+      parent_theme_id: string | null;
+      sector: string | null;
       trend_window: TrendWindow;
       date: string;
       intensity: number;
@@ -1033,6 +1037,8 @@ export async function getTrendStatus(
         tt.id,
         tt.theme_id,
         t.label as theme_label,
+        t.parent_theme_id,
+        t.sector,
         tt.trend_window,
         tt.date::text,
         tt.intensity::float as intensity,
@@ -1045,7 +1051,7 @@ export async function getTrendStatus(
        join themes t on t.id = tt.theme_id
        where tt.date = $1
        order by tt.z_score desc, tt.intensity desc
-       limit 40`,
+       limit 160`,
       [latestTrendDate]
     );
 
@@ -1057,6 +1063,8 @@ export async function getTrendStatus(
         id: row.id,
         themeId: row.theme_id,
         themeLabel: row.theme_label,
+        parentThemeId: row.parent_theme_id,
+        sector: row.sector,
         themeLevel: metadata.trendLevel,
         trendWindow: row.trend_window,
         date: row.date,

@@ -129,6 +129,8 @@ export type TrendSummary = {
   id: string;
   themeId: string;
   themeLabel: string;
+  parentThemeId: string | null;
+  sector: string | null;
   themeLevel: "market" | "sector" | "unmapped";
   trendWindow: TrendWindow;
   date: string;

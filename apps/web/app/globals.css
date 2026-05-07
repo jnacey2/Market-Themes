@@ -232,6 +232,22 @@ h3 {
   padding: 18px;
 }
 
+.detail-block {
+  margin-top: 16px;
+}
+
+.detail-block summary {
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.detail-block[open] summary {
+  margin-bottom: 16px;
+}
+
 .brief {
   border-left: 3px solid var(--accent);
 }

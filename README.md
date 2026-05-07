@@ -374,10 +374,10 @@ Trend recompute uses existing signals and writes idempotent rows into
 npm run trends:recompute --workspace @market-themes/workers
 ```
 
-Open `/trends` to review ranked 7-day and 30-day trend audit cards. The page
-separates overall market themes, sector sub-themes, and unmapped extracted
-themes. It shows intensity, baseline, z-score, percentile, evidence count,
-source/entity breadth, low-history flags, candidate flags, and recent snippets.
+Open `/trends` to review the ranked market theme digest. The page defaults to a
+short list of top 7-day overall market themes, nests sector sub-themes under
+their parent market theme, collapses supporting evidence, and hides unmapped
+debug rows from the main reading flow.
 
 ## Database Setup
 
@@ -463,8 +463,8 @@ interpretations, and failed analysis runs.
 Open `/theme-mappings` to review how extracted themes roll up into overall
 market themes and sector sub-themes.
 
-Open `/trends` to review computed trend rows before replacing the mock
-dashboard with live rankings.
+Open `/trends` to review the digest-style market theme rankings before
+replacing the mock dashboard with live rankings.
 
 ## Development Roadmap
 
