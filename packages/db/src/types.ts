@@ -108,6 +108,11 @@ export type AnalysisStatus = {
   themeCount: number;
   completedRuns: number;
   failedRuns: number;
+  eligibleDocumentCount: number;
+  completedDocumentCount: number;
+  unreadDocumentCount: number;
+  runningDocumentCount: number;
+  failedDocumentCount: number;
   recentSignals: AnalysisSignalSummary[];
   recentRuns: AnalysisRunSummary[];
 };

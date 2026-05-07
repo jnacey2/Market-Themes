@@ -48,6 +48,20 @@ export default async function AnalysisPage() {
       </section>
 
       <section className="section">
+        <p className="eyebrow">Document Coverage</p>
+        <div className="grid four">
+          <Metric label="Eligible docs" value={status.eligibleDocumentCount} />
+          <Metric label="Read by Claude" value={status.completedDocumentCount} />
+          <Metric label="Unread docs left" value={status.unreadDocumentCount} />
+          <Metric label="Currently running" value={status.runningDocumentCount} />
+        </div>
+        <p className="lede">
+          Counts include SEC and FMP documents eligible for market signal extraction,
+          excluding capital markets filings by default.
+        </p>
+      </section>
+
+      <section className="section">
         <p className="eyebrow">Recent Signals</p>
         <div className="grid">
           {status.recentSignals.length === 0 ? (

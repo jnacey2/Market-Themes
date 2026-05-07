@@ -119,14 +119,24 @@ export function createDatabaseClient(databaseUrl = process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL is required.");
   }
 
-  return new Client({
+  const client = new Client({
     connectionString: databaseUrl,
     connectionTimeoutMillis: 10_000,
     keepAlive: true,
+    query_timeout: 20_000,
+    statement_timeout: 20_000,
     ssl: databaseUrl.includes("render.com")
       ? { rejectUnauthorized: false }
       : undefined
   });
+
+  client.on("error", (error) => {
+    console.warn(
+      `[db] postgres client error: ${error instanceof Error ? error.message : String(error)}`
+    );
+  });
+
+  return client;
 }
 
 export async function persistDocuments(
@@ -584,12 +594,33 @@ export async function getAnalysisStatus(
       theme_count: string;
       completed_runs: string;
       failed_runs: string;
+      eligible_document_count: string;
+      completed_document_count: string;
+      unread_document_count: string;
+      running_document_count: string;
+      failed_document_count: string;
     }>(
       `select
         (select count(*)::text from signals) as signal_count,
         (select count(*)::text from themes) as theme_count,
         (select count(*)::text from document_analysis_runs where status = 'completed') as completed_runs,
-        (select count(*)::text from document_analysis_runs where status = 'failed') as failed_runs`
+        (select count(*)::text from document_analysis_runs where status = 'failed') as failed_runs,
+        count(*)::text as eligible_document_count,
+        count(*) filter (where ar.status = 'completed')::text as completed_document_count,
+        count(*) filter (where ar.status is null)::text as unread_document_count,
+        count(*) filter (where ar.status = 'running')::text as running_document_count,
+        count(*) filter (where ar.status = 'failed')::text as failed_document_count
+       from documents d
+       left join document_analysis_runs ar
+        on ar.document_id = d.id
+        and ar.analysis_type = 'market_signal_extraction'
+        and ar.model = 'claude-sonnet-4-5-20250929'
+        and ar.prompt_version = 'market_signal_extraction_v1'
+       where d.source_id in ('sec-filings', 'fmp-transcripts')
+        and not (
+          d.source_id = 'sec-filings'
+          and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
+        )`
     );
 
     const recentSignals = await client.query<AnalysisSignalSummary>(
@@ -652,6 +683,11 @@ export async function getAnalysisStatus(
       themeCount: Number(row?.theme_count ?? 0),
       completedRuns: Number(row?.completed_runs ?? 0),
       failedRuns: Number(row?.failed_runs ?? 0),
+      eligibleDocumentCount: Number(row?.eligible_document_count ?? 0),
+      completedDocumentCount: Number(row?.completed_document_count ?? 0),
+      unreadDocumentCount: Number(row?.unread_document_count ?? 0),
+      runningDocumentCount: Number(row?.running_document_count ?? 0),
+      failedDocumentCount: Number(row?.failed_document_count ?? 0),
       recentSignals: recentSignals.rows,
       recentRuns: recentRuns.rows.map((run) => ({
         ...run,
@@ -2315,6 +2351,11 @@ function emptyAnalysisStatus(databaseConfigured: boolean): AnalysisStatus {
     themeCount: 0,
     completedRuns: 0,
     failedRuns: 0,
+    eligibleDocumentCount: 0,
+    completedDocumentCount: 0,
+    unreadDocumentCount: 0,
+    runningDocumentCount: 0,
+    failedDocumentCount: 0,
     recentSignals: [],
     recentRuns: []
   };

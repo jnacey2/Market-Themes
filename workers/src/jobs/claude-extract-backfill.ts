@@ -16,6 +16,8 @@ const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
 const promptVersion = process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion;
 const batchSize = Number(process.env.CLAUDE_EXTRACTION_BATCH_SIZE ?? 25);
 const maxBatches = Number(process.env.CLAUDE_EXTRACTION_MAX_BATCHES ?? 1);
+const concurrency = Number(process.env.CLAUDE_EXTRACTION_CONCURRENCY ?? 2);
+const documentTimeoutMs = Number(process.env.CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS ?? 600_000);
 const lookbackDays = optionalNumber(process.env.CLAUDE_EXTRACTION_LOOKBACK_DAYS);
 const maxEvidenceChars = Number(process.env.CLAUDE_MAX_EVIDENCE_CHARS ?? 800);
 const staleAfterMinutes = Number(process.env.CLAUDE_STALE_RUN_MINUTES ?? 90);
@@ -65,44 +67,19 @@ for (let batchIndex = 1; batchIndex <= maxBatches; batchIndex += 1) {
     break;
   }
 
-  for (const document of documents) {
-    console.log(
-      `[claude-extract-backfill] analyzing document=${document.id} source=${document.sourceId} published=${document.publishedAt}`
-    );
+  const results = await runWithConcurrency(
+    documents,
+    Math.max(1, concurrency),
+    (document) => analyzeDocument(document, batchIndex)
+  );
 
-    const runId = await startDocumentAnalysisRun(document.id, {
-      analysisType: marketSignalAnalysisType,
-      model,
-      promptVersion,
-      metadata: {
-        sourceId: document.sourceId,
-        sourceClass: document.sourceClass,
-        textHash: document.textHash,
-        backfillBatch: batchIndex
-      }
-    });
-
-    try {
-      const signals = await extractWithRetry(document, {
-        model,
-        promptVersion,
-        maxEvidenceChars
-      });
-      const result = await completeDocumentAnalysisRun(runId, signals);
+  for (const result of results) {
+    if (result.status === "completed") {
       totalCompleted += 1;
       totalSignals += result.insertedSignals;
       totalThemesTouched += result.themesTouched;
-      console.log(
-        `[claude-extract-backfill] completed document=${document.id} signals=${result.insertedSignals} themes=${result.themesTouched}`
-      );
-    } catch (error) {
+    } else {
       totalFailed += 1;
-      await failDocumentAnalysisRun(runId, error);
-      console.error(
-        `[claude-extract-backfill] failed document=${document.id} error=${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
     }
   }
 }
@@ -110,6 +87,96 @@ for (let batchIndex = 1; batchIndex <= maxBatches; batchIndex += 1) {
 console.log(
   `[claude-extract-backfill] selected=${totalSelected} completed=${totalCompleted} failed=${totalFailed} signals=${totalSignals} themes=${totalThemesTouched} model=${model} promptVersion=${promptVersion} batchSize=${batchSize} maxBatches=${maxBatches}`
 );
+
+async function analyzeDocument(document: AnalysisDocument, batchIndex: number) {
+  console.log(
+    `[claude-extract-backfill] analyzing document=${document.id} source=${document.sourceId} published=${document.publishedAt}`
+  );
+
+  const runId = await startDocumentAnalysisRun(document.id, {
+    analysisType: marketSignalAnalysisType,
+    model,
+    promptVersion,
+    metadata: {
+      sourceId: document.sourceId,
+      sourceClass: document.sourceClass,
+      textHash: document.textHash,
+      backfillBatch: batchIndex
+    }
+  });
+
+  try {
+    const signals = await withTimeout(
+      extractWithRetry(document, {
+        model,
+        promptVersion,
+        maxEvidenceChars
+      }),
+      documentTimeoutMs,
+      `Claude extraction timed out after ${documentTimeoutMs}ms for ${document.id}`
+    );
+    const result = await completeDocumentAnalysisRun(runId, signals);
+    console.log(
+      `[claude-extract-backfill] completed document=${document.id} signals=${result.insertedSignals} themes=${result.themesTouched}`
+    );
+    return {
+      status: "completed" as const,
+      insertedSignals: result.insertedSignals,
+      themesTouched: result.themesTouched
+    };
+  } catch (error) {
+    await failDocumentAnalysisRun(runId, error);
+    console.error(
+      `[claude-extract-backfill] failed document=${document.id} error=${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return {
+      status: "failed" as const
+    };
+  }
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<R>
+) {
+  const results: R[] = [];
+  let nextIndex = 0;
+
+  async function runNext() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => runNext())
+  );
+
+  return results;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timeout: NodeJS.Timeout | undefined;
+  const guardedPromise = promise.catch((error) => {
+    throw error;
+  });
+
+  return Promise.race([
+    guardedPromise,
+    new Promise<T>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    })
+  ]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
 
 async function extractWithRetry(
   document: AnalysisDocument,

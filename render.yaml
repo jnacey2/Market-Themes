@@ -29,6 +29,10 @@ services:
         value: "25"
       - key: CLAUDE_EXTRACTION_MAX_BATCHES
         value: "1"
+      - key: CLAUDE_EXTRACTION_CONCURRENCY
+        value: "2"
+      - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
+        value: "600000"
       - key: CLAUDE_STALE_RUN_MINUTES
         value: "90"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
@@ -95,6 +99,10 @@ services:
         value: "25"
       - key: CLAUDE_EXTRACTION_MAX_BATCHES
         value: "1"
+      - key: CLAUDE_EXTRACTION_CONCURRENCY
+        value: "2"
+      - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
+        value: "600000"
       - key: CLAUDE_STALE_RUN_MINUTES
         value: "90"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
@@ -171,6 +179,10 @@ services:
         value: "25"
       - key: CLAUDE_EXTRACTION_MAX_BATCHES
         value: "1"
+      - key: CLAUDE_EXTRACTION_CONCURRENCY
+        value: "2"
+      - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
+        value: "600000"
       - key: CLAUDE_STALE_RUN_MINUTES
         value: "90"
       - key: CLAUDE_MAX_EVIDENCE_CHARS
