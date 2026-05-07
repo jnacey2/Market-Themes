@@ -45,7 +45,9 @@ mix, and follow-up research questions for a market theme.
 - Postgres schema for sources, documents, chunks, entities, themes, signals,
   trends, storyboards, briefs, and alerts.
 - Analysis helpers for baseline-aware z-score scoring.
-- Claude prompt scaffolding for extraction and storyboard generation.
+- Claude signal extraction for bounded SEC/FMP smoke runs.
+- Analysis inspection page for recent signals, evidence snippets, interpretations,
+  and failed document runs.
 - Connector interfaces for source ingestion.
 - Worker and cron job entrypoints.
 - `render.yaml` blueprint for Render deployment.
@@ -94,7 +96,11 @@ Core tables:
 
 - `sources`: publisher/company/feed/API configuration and access method.
 - `documents`: normalized articles, filings, PRs, transcripts, and manual docs.
+- `document_texts`: source-aware full text for analysis where retention terms
+  allow it. SEC and FMP text is retained for this private research app.
 - `document_chunks`: searchable chunks with pgvector embeddings.
+- `document_analysis_runs`: idempotent Claude extraction status per document,
+  model, and prompt version.
 - `entities`: companies, tickers, sectors, geographies, and macro topics.
 - `themes`: stable canonical theme IDs.
 - `signals`: per-document extracted theme evidence, tones, confidence, and
@@ -214,7 +220,19 @@ Important product rule: distinguish sourced evidence from model interpretation.
 The UI should make it clear when a statement is a citation-backed source claim
 versus Claude's synthesis.
 
+The first live Claude integration extracts market signals from SEC/FMP documents:
+
+- Uses full-document analysis where practical.
+- Splits oversized documents into sections and merges/dedupes the outputs.
+- Defaults to Sonnet via `ANTHROPIC_MODEL`.
+- Tracks idempotency by document, model, and `CLAUDE_PROMPT_VERSION`.
+- Stores exact evidence snippets capped by `CLAUDE_MAX_EVIDENCE_CHARS`.
+- Stores parsed structured fields only, not raw Claude responses by default.
+- Leaves extracted themes as `emerging` until later trend/storyboard promotion.
+
 Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
+Open `/analysis` in the web app to inspect recent Claude signals and failed
+runs before using them in production storyboards.
 
 ## Local Development
 
@@ -244,6 +262,11 @@ Copy `.env.example` to `.env.local` for local development when needed.
 ```text
 DATABASE_URL=postgres://user:password@host:5432/market_themes
 ANTHROPIC_API_KEY=sk-ant-api03-example
+ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+CLAUDE_PROMPT_VERSION=market_signal_extraction_v1
+CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
+CLAUDE_EXTRACTION_LOOKBACK_DAYS=
+CLAUDE_MAX_EVIDENCE_CHARS=800
 APP_BASE_URL=http://localhost:3000
 SESSION_SECRET=replace-with-a-long-random-secret
 SOURCE_CONFIG_JSON={}
@@ -291,6 +314,7 @@ npm run sec:backfill
 npm run fmp:smoke
 npm run fmp:backfill
 npm run fmp:poll
+npm run claude:extract:smoke
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -307,6 +331,16 @@ confirm which SEC source families are landing.
 FMP smoke ingestion also uses `AAPL`, `MSFT`, `JPM`, `WMT`, and `XOM`.
 FMP backfills use `FMP_BACKFILL_BATCH_INDEX`, `FMP_BACKFILL_BATCH_SIZE`, and
 `FMP_BACKFILL_QUARTERS`. FMP polling is intended to run daily overnight.
+
+Claude smoke extraction uses the newest SEC/FMP documents that have not already
+completed the current prompt version. Start with:
+
+```bash
+npm run db:apply
+npm run claude:extract:smoke
+```
+
+Then inspect `/analysis` before scheduling any automated Claude cron.
 
 ## Database Setup
 
@@ -374,6 +408,7 @@ npm run sec:backfill
 npm run fmp:smoke
 npm run fmp:backfill
 npm run fmp:poll
+npm run claude:extract:smoke
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -384,19 +419,22 @@ Render without a separate build step.
 Open `/ingestion` in the web app to see separate operational cards for SEC
 filings and FMP transcripts.
 
+Open `/analysis` to review Claude-extracted signals, evidence snippets,
+interpretations, and failed analysis runs.
+
 ## Development Roadmap
 
 Near-term:
 
 1. Expand the checked-in SEC ticker seed to the full S&P 500 plus Nasdaq-100.
 2. Run FMP transcript smoke and backfill jobs.
-3. Replace mock storyboard reads with Postgres queries.
-4. Add migrations or a migration runner.
-5. Add manual document paste/upload.
-6. Add company IR press release ingestion.
-7. Wire Claude extraction into the worker.
-8. Store embeddings, signals, and evidence cards.
-9. Recompute trend baselines and z-scores from real data.
+3. Review Claude signal quality from `/analysis`.
+4. Recompute trend baselines and z-scores from real signals.
+5. Replace mock storyboard reads with Postgres queries.
+6. Add migrations or a migration runner.
+7. Add manual document paste/upload.
+8. Add company IR press release ingestion.
+9. Store embeddings for copilot retrieval.
 10. Generate storyboards and daily briefs from stored evidence.
 
 Then:
@@ -437,10 +475,9 @@ clustering behavior.
 
 ## Known Limitations
 
-- The current UI uses mock data.
-- Connectors are placeholders.
-- The database schema is present, but the app is not yet reading from Postgres.
-- Claude prompts are scaffolded but not wired to the worker.
+- The main dashboard still uses mock storyboard data.
+- Claude signals are inspectable, but they do not yet power trend ranking or
+  storyboards.
 - The copilot is a UI preview, not a live retrieval system yet.
 - Lint currently delegates to TypeScript checks; add ESLint before production
   hardening.

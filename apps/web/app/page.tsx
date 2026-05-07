@@ -17,6 +17,7 @@ export default function HomePage() {
           <a href="#brief">Daily Brief</a>
           <a href="#copilot">Copilot</a>
           <Link href="/ingestion">Ingestion</Link>
+          <Link href="/analysis">Analysis</Link>
         </div>
       </nav>
 

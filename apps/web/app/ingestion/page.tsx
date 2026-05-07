@@ -14,6 +14,7 @@ export default async function IngestionPage() {
         </Link>
         <div className="nav-links">
           <Link href="/">Dashboard</Link>
+          <Link href="/analysis">Analysis</Link>
         </div>
       </nav>
 

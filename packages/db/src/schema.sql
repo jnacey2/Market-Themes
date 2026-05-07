@@ -40,6 +40,16 @@ create table if not exists document_chunks (
   unique (document_id, chunk_index)
 );
 
+create table if not exists document_texts (
+  document_id text primary key references documents(id) on delete cascade,
+  content text not null,
+  content_hash text not null,
+  retention_policy text not null default 'full_text',
+  text_source text not null default 'ingestion',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists entities (
   id text primary key,
   kind text not null,
@@ -60,13 +70,82 @@ create table if not exists signals (
   id text primary key,
   document_id text not null references documents(id) on delete cascade,
   theme_id text not null references themes(id),
+  raw_theme_label text not null default '',
+  canonical_theme_label text not null default '',
   stance text not null,
   risk_tone numeric not null,
   bullish_tone numeric not null,
   confidence numeric not null,
   evidence_snippet text not null,
+  interpretation text not null default '',
+  affected_entities text[] not null default '{}',
+  section_label text,
+  speaker text,
+  prompt_version text not null default 'legacy',
+  model text not null default 'legacy',
+  metadata jsonb not null default '{}',
   score_contribution numeric not null,
   extracted_at timestamptz not null default now()
+);
+
+alter table signals
+  add column if not exists raw_theme_label text not null default '';
+
+alter table signals
+  add column if not exists canonical_theme_label text not null default '';
+
+alter table signals
+  add column if not exists interpretation text not null default '';
+
+alter table signals
+  add column if not exists affected_entities text[] not null default '{}';
+
+alter table signals
+  add column if not exists section_label text;
+
+alter table signals
+  add column if not exists speaker text;
+
+alter table signals
+  add column if not exists prompt_version text not null default 'legacy';
+
+alter table signals
+  add column if not exists model text not null default 'legacy';
+
+alter table signals
+  add column if not exists metadata jsonb not null default '{}';
+
+create unique index if not exists signals_document_prompt_theme_evidence_idx
+  on signals (document_id, prompt_version, theme_id, evidence_snippet);
+
+create table if not exists document_analysis_runs (
+  id text primary key,
+  document_id text not null references documents(id) on delete cascade,
+  analysis_type text not null,
+  model text not null,
+  prompt_version text not null,
+  status text not null,
+  attempt_count integer not null default 0,
+  error_message text,
+  started_at timestamptz,
+  completed_at timestamptz,
+  metadata jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (document_id, analysis_type, model, prompt_version)
+);
+
+create table if not exists document_analysis_sections (
+  id text primary key,
+  run_id text not null references document_analysis_runs(id) on delete cascade,
+  document_id text not null references documents(id) on delete cascade,
+  section_index integer not null,
+  section_label text,
+  status text not null,
+  error_message text,
+  metadata jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  unique (run_id, section_index)
 );
 
 create table if not exists theme_trends (

@@ -32,6 +32,86 @@ export type PersistDocumentsResult = {
   insertedChunks: number;
 };
 
+export type AnalysisDocument = Document & {
+  text: string;
+  textHash: string;
+};
+
+export type ExtractedSignalInput = {
+  id: string;
+  documentId: string;
+  themeId: string;
+  rawThemeLabel: string;
+  canonicalThemeLabel: string;
+  themeDescription: string;
+  stance: ToneDirection;
+  riskTone: number;
+  bullishTone: number;
+  confidence: number;
+  evidenceSnippet: string;
+  interpretation: string;
+  affectedEntities: string[];
+  sectionLabel?: string | null;
+  speaker?: string | null;
+  promptVersion: string;
+  model: string;
+  metadata?: Record<string, unknown>;
+  scoreContribution: number;
+};
+
+export type AnalysisRunStatus = "pending" | "running" | "completed" | "failed";
+
+export type AnalysisRunSummary = {
+  id: string;
+  documentId: string;
+  documentTitle: string;
+  sourceClass: SourceClass;
+  model: string;
+  promptVersion: string;
+  status: AnalysisRunStatus;
+  attemptCount: number;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+};
+
+export type AnalysisSignalSummary = {
+  id: string;
+  themeId: string;
+  themeLabel: string;
+  rawThemeLabel: string;
+  canonicalThemeLabel: string;
+  stance: string;
+  riskTone: number;
+  bullishTone: number;
+  confidence: number;
+  evidenceSnippet: string;
+  interpretation: string;
+  affectedEntities: string[];
+  sectionLabel: string | null;
+  speaker: string | null;
+  promptVersion: string;
+  model: string;
+  extractedAt: string;
+  documentId: string;
+  documentTitle: string;
+  publisher: string;
+  url: string;
+  publishedAt: string;
+  sourceClass: SourceClass;
+};
+
+export type AnalysisStatus = {
+  databaseConfigured: boolean;
+  signalCount: number;
+  themeCount: number;
+  completedRuns: number;
+  failedRuns: number;
+  recentSignals: AnalysisSignalSummary[];
+  recentRuns: AnalysisRunSummary[];
+};
+
 export type IngestionStatus = {
   databaseConfigured: boolean;
   totalDocuments: number;
