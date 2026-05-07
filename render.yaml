@@ -217,3 +217,7 @@ services:
         fromDatabase:
           name: themes-postgres
           property: connectionString
+      - key: TREND_LOOKBACK_DAYS
+        value: "120"
+      - key: TREND_LOW_HISTORY_DAYS
+        value: "14"

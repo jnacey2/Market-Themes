@@ -10,7 +10,12 @@ import type {
   IngestionStatus,
   PersistableDocument,
   PersistDocumentsResult,
-  SourceClass
+  RecomputeThemeTrendsResult,
+  SourceClass,
+  TrendEvidenceSummary,
+  TrendStatus,
+  TrendSummary,
+  TrendWindow
 } from "./types";
 
 const { Client } = pg;
@@ -34,6 +39,47 @@ type AnalysisRunOptions = {
   model: string;
   promptVersion: string;
   metadata?: Record<string, unknown>;
+};
+
+type RecomputeThemeTrendsOptions = {
+  asOfDate?: string;
+  lookbackDays?: number;
+  lowHistoryDays?: number;
+  windows?: TrendWindow[];
+  onProgress?: (message: string) => void;
+};
+
+type SignalTrendInput = {
+  signalId: string;
+  themeId: string;
+  themeLabel: string;
+  signalDate: string;
+  sourceClass: SourceClass;
+  affectedEntities: string[];
+  scoreContribution: number;
+};
+
+type DailyTrendBucket = {
+  date: string;
+  baseIntensity: number;
+  intensity: number;
+  evidenceCount: number;
+  sourceMix: Partial<Record<SourceClass, number>>;
+  sourceClasses: Set<SourceClass>;
+  entities: Set<string>;
+};
+
+type TrendRowInput = {
+  id: string;
+  themeId: string;
+  trendWindow: TrendWindow;
+  date: string;
+  intensity: number;
+  baselineMean: number;
+  baselineStddev: number;
+  zScore: number;
+  percentileRank: number;
+  sourceMix: Record<string, unknown>;
 };
 
 export function createDatabaseClient(databaseUrl = process.env.DATABASE_URL) {
@@ -541,6 +587,214 @@ export async function getAnalysisStatus(
   }
 }
 
+export async function recomputeThemeTrends(
+  options: RecomputeThemeTrendsOptions = {},
+  databaseUrl = process.env.DATABASE_URL
+): Promise<RecomputeThemeTrendsResult> {
+  const client = createDatabaseClient(databaseUrl);
+  options.onProgress?.("connecting");
+  await client.connect();
+
+  try {
+    const windows = options.windows ?? ["7d", "30d"];
+    const lookbackDays = options.lookbackDays ?? 120;
+    const lowHistoryDays = options.lowHistoryDays ?? 14;
+    const asOfDate = normalizeDate(options.asOfDate ?? new Date());
+    const startDate = addDays(asOfDate, -(lookbackDays - 1));
+    options.onProgress?.(`loading signals from ${startDate} to ${asOfDate}`);
+    const signals = await loadSignalsForTrendComputation(client, startDate, asOfDate);
+    options.onProgress?.(`loaded ${signals.length} signals`);
+    const themes = groupSignalsByTheme(signals, startDate, asOfDate);
+    options.onProgress?.(`grouped ${themes.size} themes`);
+    let lowHistoryRows = 0;
+    const latestTrends: TrendSummary[] = [];
+    const trendRows: TrendRowInput[] = [];
+
+    for (const theme of themes.values()) {
+      for (const date of enumerateDates(startDate, asOfDate)) {
+        for (const trendWindow of windows) {
+          const windowDays = trendWindowDays(trendWindow);
+          const score = scoreTrendWindow(theme.buckets, date, windowDays, lowHistoryDays);
+
+          if (score.lowHistory) {
+            lowHistoryRows += 1;
+          }
+
+          trendRows.push({
+            id: trendId(theme.themeId, trendWindow, date),
+            themeId: theme.themeId,
+            trendWindow,
+            date,
+            intensity: score.intensity,
+            baselineMean: score.baselineMean,
+            baselineStddev: score.baselineStddev,
+            zScore: score.zScore,
+            percentileRank: score.percentileRank,
+            sourceMix: score.sourceMix
+          });
+
+          if (date === asOfDate) {
+            latestTrends.push({
+              id: trendId(theme.themeId, trendWindow, date),
+              themeId: theme.themeId,
+              themeLabel: theme.themeLabel,
+              trendWindow,
+              date,
+              intensity: score.intensity,
+              baselineMean: score.baselineMean,
+              baselineStddev: score.baselineStddev,
+              zScore: score.zScore,
+              percentileRank: score.percentileRank,
+              evidenceCount: score.sourceMix.evidenceCount,
+              sourceMix: score.sourceMix.sources,
+              sourceDiversity: score.sourceMix.sourceDiversity,
+              entityBreadth: score.sourceMix.entityBreadth,
+              lowHistory: score.lowHistory,
+              candidate: score.sourceMix.candidate,
+              recentEvidence: []
+            });
+          }
+        }
+      }
+    }
+
+    options.onProgress?.(`upserting ${trendRows.length} trend rows`);
+    await client.query("begin");
+    await upsertTrendRows(client, trendRows);
+    await client.query("commit");
+    options.onProgress?.("trend rows committed");
+
+    return {
+      themesProcessed: themes.size,
+      trendRowsWritten: trendRows.length,
+      lowHistoryRows,
+      topTrends: latestTrends
+        .sort((left, right) => right.zScore - left.zScore)
+        .slice(0, 5)
+        .map((trend) => ({
+          themeId: trend.themeId,
+          themeLabel: trend.themeLabel,
+          trendWindow: trend.trendWindow,
+          zScore: trend.zScore
+        }))
+    };
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function getTrendStatus(
+  databaseUrl = process.env.DATABASE_URL
+): Promise<TrendStatus> {
+  if (!databaseUrl) {
+    return emptyTrendStatus(false);
+  }
+
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const totals = await client.query<{
+      total_trend_rows: string;
+      latest_trend_date: string | null;
+    }>(
+      `select
+        count(*)::text as total_trend_rows,
+        max(date)::text as latest_trend_date
+       from theme_trends`
+    );
+    const latestTrendDate = totals.rows[0]?.latest_trend_date ?? null;
+
+    if (!latestTrendDate) {
+      return {
+        databaseConfigured: true,
+        totalTrendRows: Number(totals.rows[0]?.total_trend_rows ?? 0),
+        latestTrendDate: null,
+        windows: ["7d", "30d"],
+        trends: []
+      };
+    }
+
+    const rows = await client.query<{
+      id: string;
+      theme_id: string;
+      theme_label: string;
+      trend_window: TrendWindow;
+      date: string;
+      intensity: number;
+      baseline_mean: number;
+      baseline_stddev: number;
+      z_score: number;
+      percentile_rank: number;
+      source_mix: Record<string, unknown>;
+    }>(
+      `select
+        tt.id,
+        tt.theme_id,
+        t.label as theme_label,
+        tt.trend_window,
+        tt.date::text,
+        tt.intensity::float as intensity,
+        tt.baseline_mean::float as baseline_mean,
+        tt.baseline_stddev::float as baseline_stddev,
+        tt.z_score::float as z_score,
+        tt.percentile_rank::float as percentile_rank,
+        tt.source_mix
+       from theme_trends tt
+       join themes t on t.id = tt.theme_id
+       where tt.date = $1
+       order by tt.z_score desc, tt.intensity desc
+       limit 40`,
+      [latestTrendDate]
+    );
+
+    const trends: TrendSummary[] = [];
+
+    for (const row of rows.rows) {
+      const metadata = parseTrendMetadata(row.source_mix);
+      trends.push({
+        id: row.id,
+        themeId: row.theme_id,
+        themeLabel: row.theme_label,
+        trendWindow: row.trend_window,
+        date: row.date,
+        intensity: row.intensity,
+        baselineMean: row.baseline_mean,
+        baselineStddev: row.baseline_stddev,
+        zScore: row.z_score,
+        percentileRank: row.percentile_rank,
+        evidenceCount: metadata.evidenceCount,
+        sourceMix: metadata.sources,
+        sourceDiversity: metadata.sourceDiversity,
+        entityBreadth: metadata.entityBreadth,
+        lowHistory: metadata.lowHistory,
+        candidate: metadata.candidate,
+        recentEvidence: await loadTrendEvidence(
+          client,
+          row.theme_id,
+          row.date,
+          trendWindowDays(row.trend_window)
+        )
+      });
+    }
+
+    return {
+      databaseConfigured: true,
+      totalTrendRows: Number(totals.rows[0]?.total_trend_rows ?? 0),
+      latestTrendDate,
+      windows: ["7d", "30d"],
+      trends
+    };
+  } catch {
+    return emptyTrendStatus(true);
+  } finally {
+    await client.end();
+  }
+}
+
 export async function getIngestionStatus(
   databaseUrl = process.env.DATABASE_URL
 ): Promise<IngestionStatus> {
@@ -620,6 +874,394 @@ export async function getIngestionStatus(
 
 export function hashContent(content: string) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+async function loadSignalsForTrendComputation(
+  client: DbClient,
+  startDate: string,
+  endDate: string
+) {
+  const result = await client.query<SignalTrendInput>(
+    `select
+      s.id as "signalId",
+      s.theme_id as "themeId",
+      t.label as "themeLabel",
+      d.published_at::date::text as "signalDate",
+      d.source_class as "sourceClass",
+      s.affected_entities as "affectedEntities",
+      s.score_contribution::float as "scoreContribution"
+     from signals s
+     join documents d on d.id = s.document_id
+     join themes t on t.id = s.theme_id
+     where d.published_at::date between $1::date and $2::date`,
+    [startDate, endDate]
+  );
+
+  return result.rows;
+}
+
+async function upsertTrendRows(client: DbClient, rows: TrendRowInput[]) {
+  const batchSize = 1_000;
+
+  for (let index = 0; index < rows.length; index += batchSize) {
+    const batch = rows.slice(index, index + batchSize);
+    await client.query(
+      `insert into theme_trends (
+        id,
+        theme_id,
+        trend_window,
+        date,
+        intensity,
+        baseline_mean,
+        baseline_stddev,
+        z_score,
+        percentile_rank,
+        source_mix
+      )
+      select * from unnest(
+        $1::text[],
+        $2::text[],
+        $3::text[],
+        $4::date[],
+        $5::numeric[],
+        $6::numeric[],
+        $7::numeric[],
+        $8::numeric[],
+        $9::numeric[],
+        $10::jsonb[]
+      )
+      on conflict (theme_id, trend_window, date) do update set
+        intensity = excluded.intensity,
+        baseline_mean = excluded.baseline_mean,
+        baseline_stddev = excluded.baseline_stddev,
+        z_score = excluded.z_score,
+        percentile_rank = excluded.percentile_rank,
+        source_mix = excluded.source_mix,
+        created_at = now()`,
+      [
+        batch.map((row) => row.id),
+        batch.map((row) => row.themeId),
+        batch.map((row) => row.trendWindow),
+        batch.map((row) => row.date),
+        batch.map((row) => row.intensity),
+        batch.map((row) => row.baselineMean),
+        batch.map((row) => row.baselineStddev),
+        batch.map((row) => row.zScore),
+        batch.map((row) => row.percentileRank),
+        batch.map((row) => JSON.stringify(row.sourceMix))
+      ]
+    );
+  }
+}
+
+function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, endDate: string) {
+  const dates = enumerateDates(startDate, endDate);
+  const themes = new Map<
+    string,
+    {
+      themeId: string;
+      themeLabel: string;
+      buckets: Map<string, DailyTrendBucket>;
+    }
+  >();
+
+  for (const signal of signals) {
+    let theme = themes.get(signal.themeId);
+
+    if (!theme) {
+      theme = {
+        themeId: signal.themeId,
+        themeLabel: signal.themeLabel,
+        buckets: new Map(
+          dates.map((date) => [
+            date,
+            {
+              date,
+              baseIntensity: 0,
+              intensity: 0,
+              evidenceCount: 0,
+              sourceMix: {},
+              sourceClasses: new Set<SourceClass>(),
+              entities: new Set<string>()
+            }
+          ])
+        )
+      };
+      themes.set(signal.themeId, theme);
+    }
+
+    const bucket = theme.buckets.get(signal.signalDate);
+
+    if (!bucket) {
+      continue;
+    }
+
+    bucket.baseIntensity += signal.scoreContribution;
+    bucket.evidenceCount += 1;
+    bucket.sourceClasses.add(signal.sourceClass);
+    bucket.sourceMix[signal.sourceClass] = (bucket.sourceMix[signal.sourceClass] ?? 0) + 1;
+
+    for (const entity of signal.affectedEntities ?? []) {
+      const normalized = entity.trim();
+
+      if (normalized) {
+        bucket.entities.add(normalized);
+      }
+    }
+  }
+
+  for (const theme of themes.values()) {
+    for (const bucket of theme.buckets.values()) {
+      bucket.intensity = boostedIntensity(
+        bucket.baseIntensity,
+        bucket.sourceClasses.size,
+        bucket.entities.size
+      );
+    }
+  }
+
+  return themes;
+}
+
+function scoreTrendWindow(
+  buckets: Map<string, DailyTrendBucket>,
+  date: string,
+  windowDays: number,
+  lowHistoryDays: number
+) {
+  const currentDates = enumerateDates(addDays(date, -(windowDays - 1)), date);
+  const currentBuckets = currentDates.map((currentDate) => bucketForDate(buckets, currentDate));
+  const currentSummary = summarizeBuckets(currentBuckets);
+  const baselineEnd = addDays(currentDates[0], -1);
+  const baselineBuckets = Array.from(buckets.values()).filter(
+    (bucket) => bucket.date <= baselineEnd
+  );
+  const baselineValues = rollingWindowTotals(baselineBuckets, windowDays);
+  const baselineMean = average(baselineValues);
+  const rawStddev = standardDeviation(baselineValues, baselineMean);
+  const baselineStddev = Math.max(rawStddev, 1);
+  const zScore = (currentSummary.intensity - baselineMean) / baselineStddev;
+  const lowHistory = baselineValues.length < lowHistoryDays;
+  const percentileRank =
+    baselineValues.length === 0
+      ? 0
+      : Math.round(
+          (baselineValues.filter((value) => value <= currentSummary.intensity).length /
+            baselineValues.length) *
+            100
+        );
+  const candidate =
+    !lowHistory &&
+    zScore >= 1.8 &&
+    percentileRank >= 90 &&
+    currentSummary.evidenceCount >= 2 &&
+    currentSummary.sourceDiversity >= 1;
+
+  return {
+    intensity: roundMetric(currentSummary.intensity),
+    baselineMean: roundMetric(baselineMean),
+    baselineStddev: roundMetric(baselineStddev),
+    zScore: roundMetric(zScore),
+    percentileRank,
+    lowHistory,
+    sourceMix: {
+      sources: currentSummary.sourceMix,
+      evidenceCount: currentSummary.evidenceCount,
+      sourceDiversity: currentSummary.sourceDiversity,
+      entityBreadth: currentSummary.entityBreadth,
+      baseIntensity: roundMetric(currentSummary.baseIntensity),
+      lowHistory,
+      baselineDays: baselineValues.length,
+      candidate
+    }
+  };
+}
+
+function summarizeBuckets(buckets: DailyTrendBucket[]) {
+  const sourceMix: Partial<Record<SourceClass, number>> = {};
+  const sourceClasses = new Set<SourceClass>();
+  const entities = new Set<string>();
+  let baseIntensity = 0;
+  let intensity = 0;
+  let evidenceCount = 0;
+
+  for (const bucket of buckets) {
+    baseIntensity += bucket.baseIntensity;
+    intensity += bucket.intensity;
+    evidenceCount += bucket.evidenceCount;
+
+    for (const sourceClass of bucket.sourceClasses) {
+      sourceClasses.add(sourceClass);
+    }
+
+    for (const entity of bucket.entities) {
+      entities.add(entity);
+    }
+
+    for (const [sourceClass, count] of Object.entries(bucket.sourceMix)) {
+      const typedSourceClass = sourceClass as SourceClass;
+      sourceMix[typedSourceClass] = (sourceMix[typedSourceClass] ?? 0) + count;
+    }
+  }
+
+  return {
+    baseIntensity,
+    intensity,
+    evidenceCount,
+    sourceMix,
+    sourceDiversity: sourceClasses.size,
+    entityBreadth: entities.size
+  };
+}
+
+function rollingWindowTotals(buckets: DailyTrendBucket[], windowDays: number) {
+  if (buckets.length < windowDays) {
+    return buckets.length > 0 ? [summarizeBuckets(buckets).intensity] : [];
+  }
+
+  const totals: number[] = [];
+
+  for (let index = windowDays - 1; index < buckets.length; index += 1) {
+    totals.push(summarizeBuckets(buckets.slice(index - windowDays + 1, index + 1)).intensity);
+  }
+
+  return totals;
+}
+
+function boostedIntensity(baseIntensity: number, sourceDiversity: number, entityBreadth: number) {
+  if (baseIntensity === 0) {
+    return 0;
+  }
+
+  const sourceBoost = Math.min(Math.max(sourceDiversity - 1, 0) * 0.05, 0.15);
+  const entityBoost = Math.min(Math.max(entityBreadth - 1, 0) * 0.02, 0.15);
+  return baseIntensity * (1 + sourceBoost + entityBoost);
+}
+
+async function loadTrendEvidence(
+  client: DbClient,
+  themeId: string,
+  date: string,
+  windowDays: number
+): Promise<TrendEvidenceSummary[]> {
+  const result = await client.query<TrendEvidenceSummary>(
+    `select
+      s.id,
+      d.id as "documentId",
+      d.title,
+      d.publisher,
+      d.source_class as "sourceClass",
+      d.published_at::text as "publishedAt",
+      s.evidence_snippet as snippet,
+      s.score_contribution::float as "scoreContribution"
+     from signals s
+     join documents d on d.id = s.document_id
+     where s.theme_id = $1
+      and d.published_at::date between ($2::date - ($3::integer - 1)) and $2::date
+     order by s.score_contribution desc, d.published_at desc
+     limit 3`,
+    [themeId, date, windowDays]
+  );
+
+  return result.rows;
+}
+
+function parseTrendMetadata(metadata: Record<string, unknown>) {
+  const sources =
+    isRecord(metadata.sources) ? (metadata.sources as Partial<Record<SourceClass, number>>) : {};
+
+  return {
+    sources,
+    evidenceCount: numberFromMetadata(metadata.evidenceCount),
+    sourceDiversity: numberFromMetadata(metadata.sourceDiversity),
+    entityBreadth: numberFromMetadata(metadata.entityBreadth),
+    lowHistory: metadata.lowHistory === true,
+    candidate: metadata.candidate === true
+  };
+}
+
+function trendWindowDays(window: TrendWindow) {
+  return window === "30d" ? 30 : 7;
+}
+
+function trendId(themeId: string, trendWindow: TrendWindow, date: string) {
+  return `trend:${hashContent(`${themeId}:${trendWindow}:${date}`).slice(0, 24)}`;
+}
+
+function bucketForDate(buckets: Map<string, DailyTrendBucket>, date: string): DailyTrendBucket {
+  return (
+    buckets.get(date) ?? {
+      date,
+      baseIntensity: 0,
+      intensity: 0,
+      evidenceCount: 0,
+      sourceMix: {},
+      sourceClasses: new Set<SourceClass>(),
+      entities: new Set<string>()
+    }
+  );
+}
+
+function enumerateDates(startDate: string, endDate: string) {
+  const dates: string[] = [];
+  let cursor = parseDate(startDate);
+  const end = parseDate(endDate);
+
+  while (cursor <= end) {
+    dates.push(normalizeDate(cursor));
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() + 1));
+  }
+
+  return dates;
+}
+
+function addDays(date: string, days: number) {
+  const parsed = parseDate(date);
+  return normalizeDate(
+    new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate() + days))
+  );
+}
+
+function normalizeDate(value: string | Date) {
+  const date = typeof value === "string" ? parseDate(value) : value;
+  return date.toISOString().slice(0, 10);
+}
+
+function parseDate(value: string) {
+  return new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+}
+
+function average(values: number[]) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[], mean: number) {
+  if (values.length < 2) {
+    return 0;
+  }
+
+  const variance =
+    values.reduce((total, value) => total + (value - mean) ** 2, 0) /
+    (values.length - 1);
+
+  return Math.sqrt(variance);
+}
+
+function roundMetric(value: number) {
+  return Number(value.toFixed(3));
+}
+
+function numberFromMetadata(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function upsertDocumentText(
@@ -787,5 +1429,15 @@ function emptyAnalysisStatus(databaseConfigured: boolean): AnalysisStatus {
     failedRuns: 0,
     recentSignals: [],
     recentRuns: []
+  };
+}
+
+function emptyTrendStatus(databaseConfigured: boolean): TrendStatus {
+  return {
+    databaseConfigured,
+    totalTrendRows: 0,
+    latestTrendDate: null,
+    windows: ["7d", "30d"],
+    trends: []
   };
 }

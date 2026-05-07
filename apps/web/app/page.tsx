@@ -18,6 +18,7 @@ export default function HomePage() {
           <a href="#copilot">Copilot</a>
           <Link href="/ingestion">Ingestion</Link>
           <Link href="/analysis">Analysis</Link>
+          <Link href="/trends">Trends</Link>
         </div>
       </nav>
 

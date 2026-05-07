@@ -112,6 +112,59 @@ export type AnalysisStatus = {
   recentRuns: AnalysisRunSummary[];
 };
 
+export type TrendWindow = "7d" | "30d";
+
+export type TrendEvidenceSummary = {
+  id: string;
+  documentId: string;
+  title: string;
+  publisher: string;
+  sourceClass: SourceClass;
+  publishedAt: string;
+  snippet: string;
+  scoreContribution: number;
+};
+
+export type TrendSummary = {
+  id: string;
+  themeId: string;
+  themeLabel: string;
+  trendWindow: TrendWindow;
+  date: string;
+  intensity: number;
+  baselineMean: number;
+  baselineStddev: number;
+  zScore: number;
+  percentileRank: number;
+  evidenceCount: number;
+  sourceMix: Partial<Record<SourceClass, number>>;
+  sourceDiversity: number;
+  entityBreadth: number;
+  lowHistory: boolean;
+  candidate: boolean;
+  recentEvidence: TrendEvidenceSummary[];
+};
+
+export type TrendStatus = {
+  databaseConfigured: boolean;
+  totalTrendRows: number;
+  latestTrendDate: string | null;
+  windows: TrendWindow[];
+  trends: TrendSummary[];
+};
+
+export type RecomputeThemeTrendsResult = {
+  themesProcessed: number;
+  trendRowsWritten: number;
+  lowHistoryRows: number;
+  topTrends: Array<{
+    themeId: string;
+    themeLabel: string;
+    trendWindow: TrendWindow;
+    zScore: number;
+  }>;
+};
+
 export type IngestionStatus = {
   databaseConfigured: boolean;
   totalDocuments: number;

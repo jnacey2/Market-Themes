@@ -234,6 +234,11 @@ Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
 runs before using them in production storyboards.
 
+Trend aggregation turns stored Claude signals into deterministic `theme_trends`
+rows. It computes 7-day and 30-day rolling windows from source `published_at`
+dates, includes zero-intensity days, compares each theme to its own history, and
+flags low-history rows until at least 14 baseline days exist.
+
 ## Local Development
 
 Requirements:
@@ -268,6 +273,9 @@ CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
 CLAUDE_EXTRACTION_LOOKBACK_DAYS=
 CLAUDE_MAX_EVIDENCE_CHARS=800
 CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
+TREND_LOOKBACK_DAYS=120
+TREND_LOW_HISTORY_DAYS=14
+TREND_AS_OF_DATE=
 APP_BASE_URL=http://localhost:3000
 SESSION_SECRET=replace-with-a-long-random-secret
 SOURCE_CONFIG_JSON={}
@@ -344,6 +352,17 @@ npm run claude:extract:smoke
 ```
 
 Then inspect `/analysis` before scheduling any automated Claude cron.
+
+Trend recompute uses existing signals and writes idempotent rows into
+`theme_trends`:
+
+```bash
+npm run trends:recompute --workspace @market-themes/workers
+```
+
+Open `/trends` to review ranked 7-day and 30-day trend audit cards. The page
+shows intensity, baseline, z-score, percentile, evidence count, source/entity
+breadth, low-history flags, candidate flags, and recent snippets.
 
 ## Database Setup
 
@@ -425,6 +444,9 @@ filings and FMP transcripts.
 Open `/analysis` to review Claude-extracted signals, evidence snippets,
 interpretations, and failed analysis runs.
 
+Open `/trends` to review computed trend rows before replacing the mock
+dashboard with live rankings.
+
 ## Development Roadmap
 
 Near-term:
@@ -432,7 +454,7 @@ Near-term:
 1. Expand the checked-in SEC ticker seed to the full S&P 500 plus Nasdaq-100.
 2. Run FMP transcript smoke and backfill jobs.
 3. Review Claude signal quality from `/analysis`.
-4. Recompute trend baselines and z-scores from real signals.
+4. Review computed trend rows from `/trends`.
 5. Replace mock storyboard reads with Postgres queries.
 6. Add migrations or a migration runner.
 7. Add manual document paste/upload.
