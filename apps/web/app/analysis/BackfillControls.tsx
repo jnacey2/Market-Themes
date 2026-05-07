@@ -10,6 +10,8 @@ export function BackfillControls({ status }: { status: BackfillControlStatus }) 
   const [message, setMessage] = useState<string | null>(null);
   const activeJob = status.activeJob;
   const canStop = activeJob?.status === "queued" || activeJob?.status === "running";
+  const queuedForMs =
+    activeJob?.status === "queued" ? Date.now() - new Date(activeJob.createdAt).getTime() : 0;
 
   async function runAction(endpoint: "/api/backfill/start" | "/api/backfill/stop") {
     setMessage(null);
@@ -51,6 +53,13 @@ export function BackfillControls({ status }: { status: BackfillControlStatus }) 
       ) : null}
 
       {activeJob?.lastMessage ? <p>{activeJob.lastMessage}</p> : null}
+      {queuedForMs > 90_000 ? (
+        <p className="error-text">
+          This job has been queued for {formatDuration(queuedForMs)}. Check that
+          the Render worker service is deployed and running; it should claim jobs
+          within about 45 seconds.
+        </p>
+      ) : null}
       {activeJob?.lastError ? <p className="error-text">{activeJob.lastError}</p> : null}
       {message ? <p>{message}</p> : null}
 
@@ -83,4 +92,9 @@ function MiniMetric({ label, value }: { label: string; value: number }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function formatDuration(milliseconds: number) {
+  const minutes = Math.max(1, Math.round(milliseconds / 60_000));
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
