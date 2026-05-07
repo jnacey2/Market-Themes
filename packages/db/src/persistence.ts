@@ -310,7 +310,44 @@ export async function selectDocumentsForAnalysis(
       metadata: Record<string, unknown>;
       content: string | null;
     }>(
-      `select
+      `with candidate_documents as (
+        select
+          d.id,
+          d.source_id,
+          d.source_class,
+          d.title,
+          d.publisher,
+          d.url,
+          d.published_at,
+          d.tickers,
+          d.summary,
+          d.metadata,
+          d.created_at
+        from documents d
+        left join document_analysis_runs ar
+          on ar.document_id = d.id
+          and ar.analysis_type = $1
+          and ar.model = $2
+          and ar.prompt_version = $3
+        where d.source_id in ('sec-filings', 'fmp-transcripts')
+          and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
+          and not (
+            d.source_id = 'sec-filings'
+            and coalesce(d.metadata->>'filingCategory', 'uncategorized') = any($6::text[])
+          )
+          and coalesce(ar.status, '') not in ('completed', 'running')
+          and coalesce(ar.attempt_count, 0) < 2
+        order by
+          case
+            when d.source_id = 'fmp-transcripts' then 0
+            when coalesce(d.metadata->>'filingCategory', '') in ('core', 'exhibit') then 1
+            else 2
+          end,
+          d.published_at desc,
+          d.created_at desc
+        limit $5
+      )
+      select
         d.id,
         d.source_id,
         d.source_class,
@@ -325,23 +362,22 @@ export async function selectDocumentsForAnalysis(
           dt.content,
           string_agg(dc.content, E'\n\n' order by dc.chunk_index)
         ) as content
-       from documents d
+       from candidate_documents d
        left join document_texts dt on dt.document_id = d.id
        left join document_chunks dc on dc.document_id = d.id
-       left join document_analysis_runs ar
-        on ar.document_id = d.id
-        and ar.analysis_type = $1
-        and ar.model = $2
-        and ar.prompt_version = $3
-       where d.source_id in ('sec-filings', 'fmp-transcripts')
-        and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
-        and not (
-          d.source_id = 'sec-filings'
-          and coalesce(d.metadata->>'filingCategory', 'uncategorized') = any($6::text[])
-        )
-        and coalesce(ar.status, '') not in ('completed', 'running')
-        and coalesce(ar.attempt_count, 0) < 2
-       group by d.id, dt.content, ar.status, ar.attempt_count
+       group by
+        d.id,
+        d.source_id,
+        d.source_class,
+        d.title,
+        d.publisher,
+        d.url,
+        d.published_at,
+        d.tickers,
+        d.summary,
+        d.metadata,
+        d.created_at,
+        dt.content
        having coalesce(
           dt.content,
           string_agg(dc.content, E'\n\n' order by dc.chunk_index)
@@ -354,7 +390,7 @@ export async function selectDocumentsForAnalysis(
         end,
         d.published_at desc,
         d.created_at desc
-       limit $5`,
+      `,
       [
         options.analysisType,
         options.model,

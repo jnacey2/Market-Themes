@@ -80,6 +80,13 @@ export async function runClaudeExtractionBackfill(options = defaultBackfillOptio
     throw new Error("ANTHROPIC_API_KEY is required for Claude extraction.");
   }
 
+  console.log("[claude-extract-backfill] recovering stale analysis runs");
+  if (options.jobId) {
+    await updateBackfillJobProgress(options.jobId, {
+      lastMessage: "Recovering stale analysis runs before selecting documents."
+    });
+  }
+
   const recovered = await recoverStaleDocumentAnalysisRuns({
     analysisType: marketSignalAnalysisType,
     model: options.model,
@@ -113,6 +120,13 @@ export async function runClaudeExtractionBackfill(options = defaultBackfillOptio
     if (await shouldStop(options)) {
       stopRequested = true;
       break;
+    }
+
+    console.log(`[claude-extract-backfill] selecting documents for batch=${batchIndex}`);
+    if (options.jobId) {
+      await updateBackfillJobProgress(options.jobId, {
+        lastMessage: `Selecting documents for batch ${batchIndex}.`
+      });
     }
 
     const documents = await selectDocumentsForAnalysis({
