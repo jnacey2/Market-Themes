@@ -101,6 +101,7 @@ type RecomputeThemeTrendsOptions = {
   asOfDate?: string;
   lookbackDays?: number;
   lowHistoryDays?: number;
+  storageDays?: number;
   windows?: TrendWindow[];
   onProgress?: (message: string) => void;
 };
@@ -1335,6 +1336,8 @@ export async function recomputeThemeTrends(
     const lowHistoryDays = options.lowHistoryDays ?? 14;
     const asOfDate = normalizeDate(options.asOfDate ?? new Date());
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
+    const storageDays = options.storageDays ?? 45;
+    const storageStartDate = addDays(asOfDate, -(storageDays - 1));
     options.onProgress?.(`loading signals from ${startDate} to ${asOfDate}`);
     const signals = await loadSignalsForTrendComputation(client, startDate, asOfDate);
     options.onProgress?.(`loaded ${signals.length} signals`);
@@ -1360,18 +1363,20 @@ export async function recomputeThemeTrends(
             lowHistoryRows += 1;
           }
 
-          trendRows.push({
-            id: trendId(theme.themeId, trendWindow, date),
-            themeId: theme.themeId,
-            trendWindow,
-            date,
-            intensity: score.intensity,
-            baselineMean: score.baselineMean,
-            baselineStddev: score.baselineStddev,
-            zScore: score.zScore,
-            percentileRank: score.percentileRank,
-            sourceMix: score.sourceMix
-          });
+          if (date >= storageStartDate) {
+            trendRows.push({
+              id: trendId(theme.themeId, trendWindow, date),
+              themeId: theme.themeId,
+              trendWindow,
+              date,
+              intensity: score.intensity,
+              baselineMean: score.baselineMean,
+              baselineStddev: score.baselineStddev,
+              zScore: score.zScore,
+              percentileRank: score.percentileRank,
+              sourceMix: score.sourceMix
+            });
+          }
 
           if (date === asOfDate) {
             latestTrends.push({
@@ -1404,14 +1409,16 @@ export async function recomputeThemeTrends(
       }
     }
 
-    options.onProgress?.(`upserting ${trendRows.length} trend rows`);
+    options.onProgress?.(
+      `upserting ${trendRows.length} trend rows for stored range ${storageStartDate} to ${asOfDate}`
+    );
     await client.query("begin");
     await client.query(
       `delete from theme_trends
        where date between $1::date and $2::date`,
-      [startDate, asOfDate]
+      [storageStartDate, asOfDate]
     );
-    await upsertTrendRows(client, trendRows);
+    await insertTrendRows(client, trendRows, options.onProgress);
     await client.query("commit");
     options.onProgress?.("trend rows committed");
 
@@ -1866,8 +1873,12 @@ async function loadSignalsForTrendComputation(
   return result.rows;
 }
 
-async function upsertTrendRows(client: DbClient, rows: TrendRowInput[]) {
-  const batchSize = 1_000;
+async function insertTrendRows(
+  client: DbClient,
+  rows: TrendRowInput[],
+  onProgress?: (message: string) => void
+) {
+  const batchSize = Number(process.env.TREND_INSERT_BATCH_SIZE ?? 250);
 
   for (let index = 0; index < rows.length; index += batchSize) {
     const batch = rows.slice(index, index + batchSize);
@@ -1895,15 +1906,7 @@ async function upsertTrendRows(client: DbClient, rows: TrendRowInput[]) {
         $8::numeric[],
         $9::numeric[],
         $10::jsonb[]
-      )
-      on conflict (theme_id, trend_window, date) do update set
-        intensity = excluded.intensity,
-        baseline_mean = excluded.baseline_mean,
-        baseline_stddev = excluded.baseline_stddev,
-        z_score = excluded.z_score,
-        percentile_rank = excluded.percentile_rank,
-        source_mix = excluded.source_mix,
-        created_at = now()`,
+      )`,
       [
         batch.map((row) => row.id),
         batch.map((row) => row.themeId),
@@ -1917,6 +1920,8 @@ async function upsertTrendRows(client: DbClient, rows: TrendRowInput[]) {
         batch.map((row) => JSON.stringify(row.sourceMix))
       ]
     );
+
+    onProgress?.(`inserted ${Math.min(index + batch.length, rows.length)}/${rows.length} trend rows`);
   }
 }
 

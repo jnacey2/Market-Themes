@@ -267,3 +267,7 @@ services:
         value: "120"
       - key: TREND_LOW_HISTORY_DAYS
         value: "14"
+      - key: TREND_STORAGE_DAYS
+        value: "45"
+      - key: TREND_INSERT_BATCH_SIZE
+        value: "250"

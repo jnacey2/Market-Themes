@@ -3,11 +3,13 @@ import { recomputeThemeTrends } from "@market-themes/db";
 const asOfDate = process.env.TREND_AS_OF_DATE || undefined;
 const lookbackDays = Number(process.env.TREND_LOOKBACK_DAYS ?? 120);
 const lowHistoryDays = Number(process.env.TREND_LOW_HISTORY_DAYS ?? 14);
+const storageDays = Number(process.env.TREND_STORAGE_DAYS ?? 45);
 
 const result = await recomputeThemeTrends({
   asOfDate,
   lookbackDays,
   lowHistoryDays,
+  storageDays,
   windows: ["7d", "30d"],
   onProgress: (message) => {
     console.log(`[recompute-theme-trends] ${message}`);
