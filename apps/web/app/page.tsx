@@ -139,7 +139,7 @@ export default async function HomePage() {
 
 function ThemeCard({ theme }: { theme: TrendSummary }) {
   return (
-    <Link className="storyboard-card" href="/trends">
+    <article className="storyboard-card">
       <div>
         <div className="pill-row">
           <span className="pill">{theme.trendWindow}</span>
@@ -150,16 +150,57 @@ function ThemeCard({ theme }: { theme: TrendSummary }) {
           <span className="pill">{theme.entityBreadth} entities</span>
         </div>
         <h2>{theme.themeLabel}</h2>
+        <p>{themeDescription(theme)}</p>
         <p>{themeSummary(theme)}</p>
-        {theme.recentEvidence[0] ? (
-          <div className="evidence-card">
-            <p>{theme.recentEvidence[0].snippet}</p>
-            <p>
-              <strong>{theme.recentEvidence[0].title}</strong> ·{" "}
-              {theme.recentEvidence[0].publisher}
-            </p>
+        {theme.affectedEntities.length > 0 ? (
+          <div className="pill-row">
+            {theme.affectedEntities.slice(0, 6).map((entity) => (
+              <span className="pill" key={entity}>
+                {entity}
+              </span>
+            ))}
           </div>
         ) : null}
+        <details className="detail-block">
+          <summary>Drill down: companies and citations</summary>
+          <div className="grid">
+            <div className="panel">
+              <span className="label">Affected companies and entities</span>
+              {theme.affectedEntities.length === 0 ? (
+                <p>No affected entities were extracted for this theme yet.</p>
+              ) : (
+                <div className="pill-row">
+                  {theme.affectedEntities.map((entity) => (
+                    <span className="pill" key={entity}>
+                      {entity}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {theme.recentEvidence.length === 0 ? (
+              <div className="evidence-card">
+                <p>No citation snippets available for this theme yet.</p>
+              </div>
+            ) : (
+              theme.recentEvidence.map((evidence) => (
+                <div className="evidence-card" key={evidence.id}>
+                  <span className="label">
+                    {evidence.publisher} · {evidence.sourceClass.replace("_", " ")}
+                  </span>
+                  <h3>{evidence.title}</h3>
+                  <p>{evidence.snippet}</p>
+                </div>
+              ))
+            )}
+            <Link className="pill" href="/trends">
+              Open full trend view
+            </Link>
+            <Link className="pill" href={`/themes/${encodeURIComponent(theme.themeId)}`}>
+              Open theme detail
+            </Link>
+          </div>
+        </details>
       </div>
       <div className="score-stack">
         <div className="score">
@@ -170,8 +211,11 @@ function ThemeCard({ theme }: { theme: TrendSummary }) {
           <span className="label">Intensity</span>
           <strong>{theme.intensity.toFixed(1)}</strong>
         </div>
+        <Link className="pill" href={`/themes/${encodeURIComponent(theme.themeId)}`}>
+          Details
+        </Link>
       </div>
-    </Link>
+    </article>
   );
 }
 
@@ -208,6 +252,14 @@ function themeSummary(theme: TrendSummary) {
   )}, with ${theme.evidenceCount} evidence items across ${independentDocumentCount(
     theme
   )} documents and ${theme.entityBreadth} entities.`;
+}
+
+function themeDescription(theme: TrendSummary) {
+  if (theme.themeDescription.trim()) {
+    return theme.themeDescription;
+  }
+
+  return "A normalized market narrative assembled from extracted filing and transcript evidence.";
 }
 
 function independentDocumentCount(theme: TrendSummary) {

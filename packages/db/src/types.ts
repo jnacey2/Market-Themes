@@ -121,6 +121,7 @@ export type TrendEvidenceSummary = {
   publisher: string;
   sourceClass: SourceClass;
   publishedAt: string;
+  url: string;
   snippet: string;
   scoreContribution: number;
 };
@@ -129,6 +130,7 @@ export type TrendSummary = {
   id: string;
   themeId: string;
   themeLabel: string;
+  themeDescription: string;
   parentThemeId: string | null;
   sector: string | null;
   themeLevel: "market" | "sector" | "unmapped";
@@ -146,6 +148,7 @@ export type TrendSummary = {
   entityBreadth: number;
   lowHistory: boolean;
   candidate: boolean;
+  affectedEntities: string[];
   recentEvidence: TrendEvidenceSummary[];
 };
 
@@ -164,6 +167,32 @@ export type LiveDashboardStatus = {
   confirmedSevenDayThemes: TrendSummary[];
   emergingSevenDayThemes: TrendSummary[];
   confirmedThirtyDayThemes: TrendSummary[];
+};
+
+export type RelatedThemeSummary = {
+  id: string;
+  label: string;
+  description: string;
+  sector: string | null;
+};
+
+export type ThemeDetailStatus = {
+  databaseConfigured: boolean;
+  theme: {
+    id: string;
+    label: string;
+    description: string;
+    themeLevel: string;
+    sector: string | null;
+  } | null;
+  latestTrendDate: string | null;
+  sevenDayTrend: TrendSummary | null;
+  thirtyDayTrend: TrendSummary | null;
+  trendHistory: ThemeTrendPoint[];
+  affectedEntities: string[];
+  citations: TrendEvidenceSummary[];
+  relatedSubthemes: RelatedThemeSummary[];
+  followUpQuestions: string[];
 };
 
 export type RecomputeThemeTrendsResult = {
