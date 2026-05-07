@@ -157,6 +157,15 @@ export type TrendStatus = {
   trends: TrendSummary[];
 };
 
+export type LiveDashboardStatus = {
+  databaseConfigured: boolean;
+  totalTrendRows: number;
+  latestTrendDate: string | null;
+  confirmedSevenDayThemes: TrendSummary[];
+  emergingSevenDayThemes: TrendSummary[];
+  confirmedThirtyDayThemes: TrendSummary[];
+};
+
 export type RecomputeThemeTrendsResult = {
   themesProcessed: number;
   trendRowsWritten: number;

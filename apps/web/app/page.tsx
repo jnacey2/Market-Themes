@@ -1,19 +1,30 @@
 import Link from "next/link";
-import { dailyBrief, storyboards } from "@market-themes/db";
+import {
+  getLiveDashboardStatus,
+  type TrendSummary
+} from "@market-themes/db";
 
-const topStoryboard = storyboards[0];
+export const dynamic = "force-dynamic";
 
-export default function HomePage() {
+export default async function HomePage() {
+  const dashboard = await getLiveDashboardStatus();
+  const topTheme = dashboard.confirmedSevenDayThemes[0] ?? dashboard.confirmedThirtyDayThemes[0];
   const averageZScore =
-    storyboards.reduce((total, storyboard) => total + storyboard.zScore, 0) /
-    storyboards.length;
+    dashboard.confirmedSevenDayThemes.length > 0
+      ? dashboard.confirmedSevenDayThemes.reduce((total, theme) => total + theme.zScore, 0) /
+        dashboard.confirmedSevenDayThemes.length
+      : 0;
+  const brief = buildDashboardBrief(
+    dashboard.confirmedSevenDayThemes,
+    dashboard.confirmedThirtyDayThemes
+  );
 
   return (
     <div className="shell">
       <nav className="nav">
         <div className="brand">Market Themes</div>
         <div className="nav-links">
-          <a href="#storyboards">Storyboards</a>
+          <a href="#themes">Themes</a>
           <a href="#brief">Daily Brief</a>
           <a href="#copilot">Copilot</a>
           <Link href="/ingestion">Ingestion</Link>
@@ -35,20 +46,26 @@ export default function HomePage() {
         </div>
         <div className="panel">
           <p className="eyebrow">Today&apos;s highest priority</p>
-          <h2>{topStoryboard.theme}</h2>
-          <p>{topStoryboard.whyUnusual}</p>
+          <h2>{topTheme?.themeLabel ?? "No confirmed live themes yet"}</h2>
+          <p>
+            {topTheme
+              ? themeSummary(topTheme)
+              : dashboard.databaseConfigured
+                ? "Run extraction, theme normalization, and trend recompute to populate the live dashboard."
+                : "Set DATABASE_URL to connect the dashboard to live trend data."}
+          </p>
           <div className="metric-row">
             <div className="metric">
               <span>Z-score</span>
-              <strong>{topStoryboard.zScore.toFixed(1)}</strong>
+              <strong>{topTheme?.zScore.toFixed(1) ?? "0.0"}</strong>
             </div>
             <div className="metric">
-              <span>Percentile</span>
-              <strong>{topStoryboard.percentileRank}</strong>
+              <span>Evidence</span>
+              <strong>{topTheme?.evidenceCount ?? 0}</strong>
             </div>
             <div className="metric">
-              <span>Confidence</span>
-              <strong>{topStoryboard.confidence}</strong>
+              <span>Entities</span>
+              <strong>{topTheme?.entityBreadth ?? 0}</strong>
             </div>
           </div>
         </div>
@@ -63,60 +80,45 @@ export default function HomePage() {
         <div className="panel">
           <span className="label">Signal</span>
           <h2>{averageZScore.toFixed(1)} avg z-score</h2>
-          <p>Ranks themes by normalized surprise, not raw popularity.</p>
+          <p>
+            {dashboard.confirmedSevenDayThemes.length} confirmed 7-day themes
+            survive the breadth gate.
+          </p>
         </div>
         <div className="panel">
-          <span className="label">Workflow</span>
-          <h2>Days, weeks, months</h2>
-          <p>Designed for research prioritization across multiple horizons.</p>
+          <span className="label">Latest trend date</span>
+          <h2>{dashboard.latestTrendDate ?? "None yet"}</h2>
+          <p>{dashboard.totalTrendRows} live trend rows currently stored.</p>
         </div>
       </section>
 
-      <section className="section" id="storyboards">
-        <p className="eyebrow">Storyboards</p>
+      <section className="section" id="themes">
+        <p className="eyebrow">Confirmed Market Themes</p>
         <div className="grid">
-          {storyboards.map((storyboard) => (
-            <Link
-              className="storyboard-card"
-              href={`/storyboards/${storyboard.id}`}
-              key={storyboard.id}
-            >
-              <div>
-                <div className="pill-row">
-                  <span className="pill">{storyboard.status}</span>
-                  <span className="pill">z {storyboard.zScore.toFixed(1)}</span>
-                  <span className="pill">{storyboard.percentileRank}th pctile</span>
-                </div>
-                <h2>{storyboard.theme}</h2>
-                <p>{storyboard.narrative}</p>
-                <div className="pill-row">
-                  {storyboard.affectedEntities.slice(0, 5).map((entity) => (
-                    <span className="pill" key={entity}>
-                      {entity}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="score-stack">
-                <div className="score">
-                  <span className="label">Risk tone</span>
-                  <strong>{storyboard.riskTone}</strong>
-                </div>
-                <div className="score">
-                  <span className="label">Bullish tone</span>
-                  <strong>{storyboard.bullishTone}</strong>
-                </div>
-              </div>
-            </Link>
-          ))}
+          {dashboard.confirmedSevenDayThemes.length === 0 ? (
+            <div className="panel">
+              <h2>No confirmed 7-day themes yet</h2>
+              <p>
+                The live dashboard now requires breadth across multiple entities
+                or documents. Check emerging themes on the trend inspection page.
+              </p>
+              <Link className="pill" href="/trends">
+                Open trends
+              </Link>
+            </div>
+          ) : (
+            dashboard.confirmedSevenDayThemes.map((theme) => (
+              <ThemeCard key={theme.id} theme={theme} />
+            ))
+          )}
         </div>
       </section>
 
       <section className="section grid two">
         <div className="panel brief" id="brief">
           <p className="eyebrow">Daily Brief</p>
-          <h2>{dailyBrief.headline}</h2>
-          <p>{dailyBrief.summary}</p>
+          <h2>{brief.headline}</h2>
+          <p>{brief.summary}</p>
         </div>
         <div className="panel" id="copilot">
           <p className="eyebrow">Research Copilot</p>
@@ -133,4 +135,81 @@ export default function HomePage() {
       </section>
     </div>
   );
+}
+
+function ThemeCard({ theme }: { theme: TrendSummary }) {
+  return (
+    <Link className="storyboard-card" href="/trends">
+      <div>
+        <div className="pill-row">
+          <span className="pill">{theme.trendWindow}</span>
+          <span className="pill">z {theme.zScore.toFixed(1)}</span>
+          <span className="pill">{theme.percentileRank}th pctile</span>
+          <span className="pill">{theme.evidenceCount} evidence</span>
+          <span className="pill">{independentDocumentCount(theme)} docs</span>
+          <span className="pill">{theme.entityBreadth} entities</span>
+        </div>
+        <h2>{theme.themeLabel}</h2>
+        <p>{themeSummary(theme)}</p>
+        {theme.recentEvidence[0] ? (
+          <div className="evidence-card">
+            <p>{theme.recentEvidence[0].snippet}</p>
+            <p>
+              <strong>{theme.recentEvidence[0].title}</strong> ·{" "}
+              {theme.recentEvidence[0].publisher}
+            </p>
+          </div>
+        ) : null}
+      </div>
+      <div className="score-stack">
+        <div className="score">
+          <span className="label">Z-score</span>
+          <strong>{theme.zScore.toFixed(1)}</strong>
+        </div>
+        <div className="score">
+          <span className="label">Intensity</span>
+          <strong>{theme.intensity.toFixed(1)}</strong>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function buildDashboardBrief(sevenDayThemes: TrendSummary[], thirtyDayThemes: TrendSummary[]) {
+  const lead = sevenDayThemes[0] ?? thirtyDayThemes[0];
+  const context = thirtyDayThemes.find((theme) => theme.themeId !== lead?.themeId);
+
+  if (!lead) {
+    return {
+      headline: "No confirmed live market themes yet.",
+      summary:
+        "Run ingestion, Claude extraction, theme normalization, and trend recompute to populate the live daily brief."
+    };
+  }
+
+  return {
+    headline: `${lead.themeLabel} is the top confirmed live theme.`,
+    summary: [
+      `${lead.themeLabel} leads the 7-day digest with ${lead.evidenceCount} evidence items across ${independentDocumentCount(
+        lead
+      )} documents and ${lead.entityBreadth} entities.`,
+      context
+        ? `${context.themeLabel} is the main 30-day context theme, with a z-score of ${context.zScore.toFixed(
+            1
+          )}.`
+        : "No separate 30-day context theme currently clears the breadth gate."
+    ].join(" ")
+  };
+}
+
+function themeSummary(theme: TrendSummary) {
+  return `Intensity ${theme.intensity.toFixed(1)} vs baseline ${theme.baselineMean.toFixed(
+    1
+  )}, with ${theme.evidenceCount} evidence items across ${independentDocumentCount(
+    theme
+  )} documents and ${theme.entityBreadth} entities.`;
+}
+
+function independentDocumentCount(theme: TrendSummary) {
+  return theme.documentBreadth > 0 ? theme.documentBreadth : theme.evidenceCount;
 }

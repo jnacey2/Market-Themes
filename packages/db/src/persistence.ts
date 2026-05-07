@@ -8,6 +8,7 @@ import type {
   AnalysisStatus,
   ExtractedSignalInput,
   IngestionStatus,
+  LiveDashboardStatus,
   PersistableDocument,
   PersistDocumentsResult,
   RecomputeThemeTrendsResult,
@@ -1106,6 +1107,31 @@ export async function getTrendStatus(
   }
 }
 
+export async function getLiveDashboardStatus(
+  databaseUrl = process.env.DATABASE_URL
+): Promise<LiveDashboardStatus> {
+  const status = await getTrendStatus(databaseUrl);
+  const sevenDayMarketThemes = rankDashboardTrends(
+    status.trends.filter((trend) => trend.trendWindow === "7d" && trend.themeLevel === "market")
+  );
+  const thirtyDayMarketThemes = rankDashboardTrends(
+    status.trends.filter((trend) => trend.trendWindow === "30d" && trend.themeLevel === "market")
+  );
+
+  return {
+    databaseConfigured: status.databaseConfigured,
+    totalTrendRows: status.totalTrendRows,
+    latestTrendDate: status.latestTrendDate,
+    confirmedSevenDayThemes: sevenDayMarketThemes.filter(isConfirmedDashboardTrend).slice(0, 8),
+    emergingSevenDayThemes: sevenDayMarketThemes
+      .filter((trend) => !isConfirmedDashboardTrend(trend))
+      .slice(0, 8),
+    confirmedThirtyDayThemes: thirtyDayMarketThemes
+      .filter(isConfirmedDashboardTrend)
+      .slice(0, 6)
+  };
+}
+
 export async function getIngestionStatus(
   databaseUrl = process.env.DATABASE_URL
 ): Promise<IngestionStatus> {
@@ -1537,6 +1563,28 @@ function parseTrendMetadata(metadata: Record<string, unknown>) {
     lowHistory: metadata.lowHistory === true,
     candidate: metadata.candidate === true
   };
+}
+
+function rankDashboardTrends(trends: TrendSummary[]) {
+  return [...trends].sort((left, right) => dashboardTrendScore(right) - dashboardTrendScore(left));
+}
+
+function dashboardTrendScore(trend: TrendSummary) {
+  return (
+    trend.zScore * 4 +
+    Math.log1p(trend.evidenceCount) +
+    Math.log1p(trend.entityBreadth) +
+    Math.log1p(trend.sourceDiversity) -
+    (trend.lowHistory ? 1 : 0)
+  );
+}
+
+function isConfirmedDashboardTrend(trend: TrendSummary) {
+  return trend.entityBreadth >= 2 || independentDocumentCount(trend) >= 2;
+}
+
+function independentDocumentCount(trend: TrendSummary) {
+  return trend.documentBreadth > 0 ? trend.documentBreadth : trend.evidenceCount;
 }
 
 function trendWindowDays(window: TrendWindow) {
