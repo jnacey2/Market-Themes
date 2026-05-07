@@ -451,6 +451,8 @@ export async function createBackfillJob(
   const jobType = options.jobType ?? "claude_extraction";
 
   try {
+    await ensureBackfillJobsSchema(client);
+
     const active = await client.query<BackfillJobRow>(
       `select ${backfillJobSelectColumns}
        from backfill_jobs
@@ -515,6 +517,8 @@ export async function requestBackfillStop(
   await client.connect();
 
   try {
+    await ensureBackfillJobsSchema(client);
+
     const params = [options.jobId ?? null, options.jobType ?? "claude_extraction"];
     const result = await client.query<BackfillJobRow>(
       `update backfill_jobs
@@ -556,6 +560,8 @@ export async function getBackfillControlStatus(
   await client.connect();
 
   try {
+    await ensureBackfillJobsSchema(client);
+
     const active = await client.query<BackfillJobRow>(
       `select ${backfillJobSelectColumns}
        from backfill_jobs
@@ -590,6 +596,8 @@ export async function claimNextBackfillJob(
   await client.connect();
 
   try {
+    await ensureBackfillJobsSchema(client);
+
     const result = await client.query<ClaimableBackfillJobRow>(
       `with next_job as (
         select id
@@ -639,6 +647,8 @@ export async function updateBackfillJobProgress(
   await client.connect();
 
   try {
+    await ensureBackfillJobsSchema(client);
+
     const updates: string[] = ["updated_at = now()"];
     const values: unknown[] = [];
 
@@ -710,6 +720,8 @@ export async function getBackfillJobForWorker(
   await client.connect();
 
   try {
+    await ensureBackfillJobsSchema(client);
+
     const result = await client.query<ClaimableBackfillJobRow>(
       `select ${claimableBackfillJobSelectColumns}
        from backfill_jobs
@@ -2619,6 +2631,45 @@ const claimableBackfillJobSelectColumns = `
   model,
   prompt_version
 `;
+
+async function ensureBackfillJobsSchema(client: DbClient) {
+  await client.query(
+    `create table if not exists backfill_jobs (
+      id text primary key,
+      job_type text not null,
+      status text not null,
+      batch_size integer not null,
+      max_batches integer not null,
+      concurrency integer not null,
+      document_timeout_ms integer not null,
+      stale_after_minutes integer not null default 90,
+      lookback_days integer,
+      excluded_sec_filing_categories text[] not null default '{}',
+      model text not null,
+      prompt_version text not null,
+      selected_documents integer not null default 0,
+      completed_documents integer not null default 0,
+      failed_documents integer not null default 0,
+      inserted_signals integer not null default 0,
+      themes_touched integer not null default 0,
+      current_document_ids text[] not null default '{}',
+      worker_id text,
+      last_message text,
+      last_error text,
+      stop_requested_at timestamptz,
+      started_at timestamptz,
+      completed_at timestamptz,
+      metadata jsonb not null default '{}',
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )`
+  );
+  await client.query(
+    `create unique index if not exists backfill_jobs_active_job_idx
+      on backfill_jobs (job_type)
+      where status in ('queued', 'running', 'stop_requested')`
+  );
+}
 
 function rowToBackfillJob(row: BackfillJobRow): BackfillJobSummary {
   return {
