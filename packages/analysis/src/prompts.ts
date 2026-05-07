@@ -48,6 +48,43 @@ Return this JSON shape:
   ]
 }`;
 
+export const themeNormalizationPromptVersion = "theme_normalization_v1";
+
+export const themeNormalizationSystemPrompt = `You normalize extracted company-specific market themes into recurring investable narratives.
+
+Return only valid JSON. Do not include markdown, commentary, or code fences.
+
+Your job:
+- Map extracted theme groups into overall market themes and optional sector-specific sub-themes.
+- Overall market themes should be recurring investable narratives that can apply across companies or sectors.
+- Sector sub-themes should explain how the overall market theme manifests in a specific industry sector.
+- Do not create useless mega-buckets like "AI", "consumer", "credit", or "energy".
+- Do not preserve issuer-specific labels like "Microsoft AI demand" unless the narrative truly cannot generalize.
+- Merge themes only when they describe the same underlying market/business narrative, not because they share a generic keyword.
+- Opposite stances can map to the same theme; risk and bullish tone remain signal-level.
+
+Use concise sentence-style labels. Good labels:
+- "Cloud platforms are balancing AI infrastructure spending with monetization."
+- "Consumer companies are leaning on value and promotion to protect volume."
+- "Healthcare companies are managing patent cliffs with pipeline and portfolio actions."
+
+Return this JSON shape:
+{
+  "mappings": [
+    {
+      "marketThemeLabel": "string",
+      "marketThemeDescription": "string",
+      "sectorSubthemeLabel": "string or null",
+      "sectorSubthemeDescription": "string or null",
+      "sector": "Technology | Communication Services | Consumer Discretionary | Consumer Staples | Health Care | Financials | Industrials | Energy | Materials | Utilities | Real Estate | Macro | Cross-sector | Other",
+      "mappedThemeIds": ["theme:..."],
+      "confidence": 0,
+      "confidenceLabel": "high | medium | low",
+      "rationale": "string"
+    }
+  ]
+}`;
+
 export const storyboardSystemPrompt = `You generate market narrative storyboards.
 
 A storyboard must explain:

@@ -29,6 +29,10 @@ services:
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
         value: capital_markets
+      - key: THEME_NORMALIZATION_PROMPT_VERSION
+        value: theme_normalization_v1
+      - key: THEME_NORMALIZATION_BATCH_SIZE
+        value: "25"
       - key: APP_BASE_URL
         sync: false
       - key: SESSION_SECRET
@@ -85,6 +89,10 @@ services:
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
         value: capital_markets
+      - key: THEME_NORMALIZATION_PROMPT_VERSION
+        value: theme_normalization_v1
+      - key: THEME_NORMALIZATION_BATCH_SIZE
+        value: "25"
       - key: SOURCE_CONFIG_JSON
         value: "{}"
       - key: SCRAPING_ENABLED
@@ -151,6 +159,10 @@ services:
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
         value: capital_markets
+      - key: THEME_NORMALIZATION_PROMPT_VERSION
+        value: theme_normalization_v1
+      - key: THEME_NORMALIZATION_BATCH_SIZE
+        value: "25"
       - key: SOURCE_CONFIG_JSON
         value: "{}"
       - key: SCRAPING_ENABLED

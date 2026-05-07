@@ -62,14 +62,32 @@ create table if not exists themes (
   id text primary key,
   label text not null,
   description text not null default '',
+  parent_theme_id text references themes(id),
+  theme_level text not null default 'extracted',
+  sector text,
+  metadata jsonb not null default '{}',
   status text not null default 'emerging',
   created_at timestamptz not null default now()
 );
+
+alter table themes
+  add column if not exists parent_theme_id text references themes(id);
+
+alter table themes
+  add column if not exists theme_level text not null default 'extracted';
+
+alter table themes
+  add column if not exists sector text;
+
+alter table themes
+  add column if not exists metadata jsonb not null default '{}';
 
 create table if not exists signals (
   id text primary key,
   document_id text not null references documents(id) on delete cascade,
   theme_id text not null references themes(id),
+  canonical_theme_id text references themes(id),
+  canonical_subtheme_id text references themes(id),
   raw_theme_label text not null default '',
   canonical_theme_label text not null default '',
   stance text not null,
@@ -87,6 +105,12 @@ create table if not exists signals (
   score_contribution numeric not null,
   extracted_at timestamptz not null default now()
 );
+
+alter table signals
+  add column if not exists canonical_theme_id text references themes(id);
+
+alter table signals
+  add column if not exists canonical_subtheme_id text references themes(id);
 
 alter table signals
   add column if not exists raw_theme_label text not null default '';
@@ -117,6 +141,24 @@ alter table signals
 
 create unique index if not exists signals_document_prompt_theme_evidence_idx
   on signals (document_id, prompt_version, theme_id, evidence_snippet);
+
+create table if not exists theme_mappings (
+  id text primary key,
+  extracted_theme_id text not null references themes(id),
+  market_theme_id text not null references themes(id),
+  sector_subtheme_id text references themes(id),
+  sector text,
+  confidence numeric not null,
+  confidence_label text not null,
+  rationale text not null default '',
+  status text not null default 'auto_applied',
+  model text not null,
+  prompt_version text not null,
+  metadata jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (extracted_theme_id, prompt_version)
+);
 
 create table if not exists document_analysis_runs (
   id text primary key,

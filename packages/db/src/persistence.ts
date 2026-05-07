@@ -12,6 +12,10 @@ import type {
   PersistDocumentsResult,
   RecomputeThemeTrendsResult,
   SourceClass,
+  ThemeGroupForNormalization,
+  ThemeMappingStatus,
+  ThemeMappingSummary,
+  ThemeNormalizationMapping,
   TrendEvidenceSummary,
   TrendStatus,
   TrendSummary,
@@ -49,10 +53,16 @@ type RecomputeThemeTrendsOptions = {
   onProgress?: (message: string) => void;
 };
 
+type SelectThemeGroupsOptions = {
+  promptVersion: string;
+  limit?: number;
+};
+
 type SignalTrendInput = {
   signalId: string;
   themeId: string;
   themeLabel: string;
+  trendLevel: "market" | "sector" | "unmapped";
   signalDate: string;
   sourceClass: SourceClass;
   affectedEntities: string[];
@@ -587,6 +597,282 @@ export async function getAnalysisStatus(
   }
 }
 
+export async function selectThemeGroupsForNormalization(
+  options: SelectThemeGroupsOptions,
+  databaseUrl = process.env.DATABASE_URL
+): Promise<ThemeGroupForNormalization[]> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const result = await client.query<{
+      theme_id: string;
+      label: string;
+      description: string;
+      source_class: SourceClass;
+      affected_entities: string[];
+      evidence_snippet: string;
+    }>(
+      `with selected_themes as (
+        select t.id
+        from themes t
+        join signals s on s.theme_id = t.id
+        left join theme_mappings tm
+          on tm.extracted_theme_id = t.id
+          and tm.prompt_version = $1
+        where tm.id is null
+        group by t.id
+        order by count(s.id) desc, max(s.extracted_at) desc
+        limit $2
+      )
+      select
+        t.id as theme_id,
+        t.label,
+        t.description,
+        d.source_class,
+        s.affected_entities,
+        s.evidence_snippet
+      from selected_themes st
+      join themes t on t.id = st.id
+      join signals s on s.theme_id = t.id
+      join documents d on d.id = s.document_id
+      order by t.id, s.score_contribution desc, s.extracted_at desc`,
+      [options.promptVersion, options.limit ?? 250]
+    );
+    const groups = new Map<string, ThemeGroupForNormalization>();
+
+    for (const row of result.rows) {
+      let group = groups.get(row.theme_id);
+
+      if (!group) {
+        group = {
+          themeId: row.theme_id,
+          label: row.label,
+          description: row.description,
+          signalCount: 0,
+          sourceClasses: [],
+          affectedEntities: [],
+          representativeSnippets: []
+        };
+        groups.set(row.theme_id, group);
+      }
+
+      group.signalCount += 1;
+
+      if (!group.sourceClasses.includes(row.source_class)) {
+        group.sourceClasses.push(row.source_class);
+      }
+
+      for (const entity of row.affected_entities ?? []) {
+        if (entity && !group.affectedEntities.includes(entity)) {
+          group.affectedEntities.push(entity);
+        }
+      }
+
+      if (group.representativeSnippets.length < 3) {
+        group.representativeSnippets.push(row.evidence_snippet);
+      }
+    }
+
+    return Array.from(groups.values()).map((group) => ({
+      ...group,
+      affectedEntities: group.affectedEntities.slice(0, 12)
+    }));
+  } finally {
+    await client.end();
+  }
+}
+
+export async function persistThemeNormalizationMappings(
+  mappings: ThemeNormalizationMapping[],
+  databaseUrl = process.env.DATABASE_URL
+) {
+  if (mappings.length === 0) {
+    return {
+      mappingsStored: 0,
+      mappingsApplied: 0
+    };
+  }
+
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    await client.query("begin");
+
+    let mappingsStored = 0;
+    let mappingsApplied = 0;
+
+    for (const mapping of mappings) {
+      await upsertNormalizedTheme(client, {
+        id: mapping.marketThemeId,
+        label: mapping.marketThemeLabel,
+        description: mapping.marketThemeDescription,
+        level: "market",
+        sector: null,
+        parentThemeId: null,
+        metadata: {
+          source: "theme_normalization",
+          promptVersion: mapping.promptVersion
+        }
+      });
+
+      if (mapping.sectorSubthemeId && mapping.sectorSubthemeLabel) {
+        await upsertNormalizedTheme(client, {
+          id: mapping.sectorSubthemeId,
+          label: mapping.sectorSubthemeLabel,
+          description: mapping.sectorSubthemeDescription ?? "",
+          level: "sector",
+          sector: mapping.sector,
+          parentThemeId: mapping.marketThemeId,
+          metadata: {
+            source: "theme_normalization",
+            promptVersion: mapping.promptVersion
+          }
+        });
+      }
+
+      for (const extractedThemeId of mapping.mappedThemeIds) {
+        const insertResult = await client.query(
+          `insert into theme_mappings (
+            id,
+            extracted_theme_id,
+            market_theme_id,
+            sector_subtheme_id,
+            sector,
+            confidence,
+            confidence_label,
+            rationale,
+            status,
+            model,
+            prompt_version,
+            metadata,
+            updated_at
+          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+          on conflict (extracted_theme_id, prompt_version) do update set
+            market_theme_id = excluded.market_theme_id,
+            sector_subtheme_id = excluded.sector_subtheme_id,
+            sector = excluded.sector,
+            confidence = excluded.confidence,
+            confidence_label = excluded.confidence_label,
+            rationale = excluded.rationale,
+            status = excluded.status,
+            model = excluded.model,
+            metadata = excluded.metadata,
+            updated_at = now()`,
+          [
+            `${mapping.id}:${hashContent(extractedThemeId).slice(0, 8)}`,
+            extractedThemeId,
+            mapping.marketThemeId,
+            mapping.sectorSubthemeId,
+            mapping.sector,
+            mapping.confidence,
+            mapping.confidenceLabel,
+            mapping.rationale,
+            mapping.status,
+            mapping.model,
+            mapping.promptVersion,
+            JSON.stringify({
+              marketThemeLabel: mapping.marketThemeLabel,
+              sectorSubthemeLabel: mapping.sectorSubthemeLabel
+            })
+          ]
+        );
+        mappingsStored += insertResult.rowCount ?? 0;
+
+        if (mapping.status === "auto_applied") {
+          const updateResult = await client.query(
+            `update signals
+             set canonical_theme_id = $2,
+              canonical_subtheme_id = $3
+             where theme_id = $1`,
+            [extractedThemeId, mapping.marketThemeId, mapping.sectorSubthemeId]
+          );
+          mappingsApplied += updateResult.rowCount ?? 0;
+        }
+      }
+    }
+
+    await client.query("commit");
+
+    return {
+      mappingsStored,
+      mappingsApplied
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function getThemeMappingStatus(
+  databaseUrl = process.env.DATABASE_URL
+): Promise<ThemeMappingStatus> {
+  if (!databaseUrl) {
+    return emptyThemeMappingStatus(false);
+  }
+
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const totals = await client.query<{
+      mapping_count: string;
+      mapped_signal_count: string;
+      unmapped_signal_count: string;
+    }>(
+      `select
+        (select count(*)::text from theme_mappings) as mapping_count,
+        (select count(*)::text from signals where canonical_theme_id is not null) as mapped_signal_count,
+        (select count(*)::text from signals where canonical_theme_id is null) as unmapped_signal_count`
+    );
+    const mappings = await client.query<ThemeMappingSummary>(
+      `select
+        tm.id,
+        tm.market_theme_id as "marketThemeId",
+        mt.label as "marketThemeLabel",
+        mt.description as "marketThemeDescription",
+        tm.sector_subtheme_id as "sectorSubthemeId",
+        st.label as "sectorSubthemeLabel",
+        st.description as "sectorSubthemeDescription",
+        tm.sector,
+        tm.extracted_theme_id as "extractedThemeId",
+        et.label as "extractedThemeLabel",
+        tm.confidence::float as confidence,
+        tm.confidence_label as "confidenceLabel",
+        tm.rationale,
+        tm.status,
+        count(s.id)::int as "signalCount",
+        coalesce(array_agg(distinct entity.entity) filter (where entity.entity is not null), '{}') as "affectedEntities",
+        coalesce((array_agg(s.evidence_snippet order by s.score_contribution desc))[1:3], '{}') as "representativeSnippets"
+       from theme_mappings tm
+       join themes mt on mt.id = tm.market_theme_id
+       left join themes st on st.id = tm.sector_subtheme_id
+       join themes et on et.id = tm.extracted_theme_id
+       left join signals s on s.theme_id = tm.extracted_theme_id
+       left join lateral unnest(s.affected_entities) as entity(entity) on true
+       group by tm.id, mt.label, mt.description, st.label, st.description, et.label
+       order by mt.label, st.label nulls first, tm.confidence desc
+       limit 250`
+    );
+    const row = totals.rows[0];
+
+    return {
+      databaseConfigured: true,
+      mappingCount: Number(row?.mapping_count ?? 0),
+      mappedSignalCount: Number(row?.mapped_signal_count ?? 0),
+      unmappedSignalCount: Number(row?.unmapped_signal_count ?? 0),
+      mappings: mappings.rows
+    };
+  } catch {
+    return emptyThemeMappingStatus(true);
+  } finally {
+    await client.end();
+  }
+}
+
 export async function recomputeThemeTrends(
   options: RecomputeThemeTrendsOptions = {},
   databaseUrl = process.env.DATABASE_URL
@@ -614,7 +900,13 @@ export async function recomputeThemeTrends(
       for (const date of enumerateDates(startDate, asOfDate)) {
         for (const trendWindow of windows) {
           const windowDays = trendWindowDays(trendWindow);
-          const score = scoreTrendWindow(theme.buckets, date, windowDays, lowHistoryDays);
+          const score = scoreTrendWindow(
+            theme.buckets,
+            date,
+            windowDays,
+            lowHistoryDays,
+            theme.trendLevel
+          );
 
           if (score.lowHistory) {
             lowHistoryRows += 1;
@@ -638,6 +930,7 @@ export async function recomputeThemeTrends(
               id: trendId(theme.themeId, trendWindow, date),
               themeId: theme.themeId,
               themeLabel: theme.themeLabel,
+              themeLevel: theme.trendLevel,
               trendWindow,
               date,
               intensity: score.intensity,
@@ -660,6 +953,11 @@ export async function recomputeThemeTrends(
 
     options.onProgress?.(`upserting ${trendRows.length} trend rows`);
     await client.query("begin");
+    await client.query(
+      `delete from theme_trends
+       where date between $1::date and $2::date`,
+      [startDate, asOfDate]
+    );
     await upsertTrendRows(client, trendRows);
     await client.query("commit");
     options.onProgress?.("trend rows committed");
@@ -759,6 +1057,7 @@ export async function getTrendStatus(
         id: row.id,
         themeId: row.theme_id,
         themeLabel: row.theme_label,
+        themeLevel: metadata.trendLevel,
         trendWindow: row.trend_window,
         date: row.date,
         intensity: row.intensity,
@@ -882,18 +1181,43 @@ async function loadSignalsForTrendComputation(
   endDate: string
 ) {
   const result = await client.query<SignalTrendInput>(
-    `select
-      s.id as "signalId",
-      s.theme_id as "themeId",
+    `with trend_signal_rows as (
+      select
+        s.id,
+        coalesce(s.canonical_theme_id, s.theme_id) as trend_theme_id,
+        case when s.canonical_theme_id is null then 'unmapped' else 'market' end as trend_level,
+        d.published_at,
+        d.source_class,
+        s.affected_entities,
+        s.score_contribution
+      from signals s
+      join documents d on d.id = s.document_id
+      where d.published_at::date between $1::date and $2::date
+      union all
+      select
+        s.id,
+        s.canonical_subtheme_id as trend_theme_id,
+        'sector' as trend_level,
+        d.published_at,
+        d.source_class,
+        s.affected_entities,
+        s.score_contribution
+      from signals s
+      join documents d on d.id = s.document_id
+      where s.canonical_subtheme_id is not null
+        and d.published_at::date between $1::date and $2::date
+    )
+    select
+      tsr.id as "signalId",
+      tsr.trend_theme_id as "themeId",
       t.label as "themeLabel",
-      d.published_at::date::text as "signalDate",
-      d.source_class as "sourceClass",
-      s.affected_entities as "affectedEntities",
-      s.score_contribution::float as "scoreContribution"
-     from signals s
-     join documents d on d.id = s.document_id
-     join themes t on t.id = s.theme_id
-     where d.published_at::date between $1::date and $2::date`,
+      tsr.trend_level as "trendLevel",
+      tsr.published_at::date::text as "signalDate",
+      tsr.source_class as "sourceClass",
+      tsr.affected_entities as "affectedEntities",
+      tsr.score_contribution::float as "scoreContribution"
+     from trend_signal_rows tsr
+     join themes t on t.id = tsr.trend_theme_id`,
     [startDate, endDate]
   );
 
@@ -961,6 +1285,7 @@ function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, end
     {
       themeId: string;
       themeLabel: string;
+      trendLevel: "market" | "sector" | "unmapped";
       buckets: Map<string, DailyTrendBucket>;
     }
   >();
@@ -972,6 +1297,7 @@ function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, end
       theme = {
         themeId: signal.themeId,
         themeLabel: signal.themeLabel,
+        trendLevel: signal.trendLevel,
         buckets: new Map(
           dates.map((date) => [
             date,
@@ -1027,7 +1353,8 @@ function scoreTrendWindow(
   buckets: Map<string, DailyTrendBucket>,
   date: string,
   windowDays: number,
-  lowHistoryDays: number
+  lowHistoryDays: number,
+  trendLevel: "market" | "sector" | "unmapped"
 ) {
   const currentDates = enumerateDates(addDays(date, -(windowDays - 1)), date);
   const currentBuckets = currentDates.map((currentDate) => bucketForDate(buckets, currentDate));
@@ -1066,6 +1393,7 @@ function scoreTrendWindow(
     lowHistory,
     sourceMix: {
       sources: currentSummary.sourceMix,
+      trendLevel,
       evidenceCount: currentSummary.evidenceCount,
       sourceDiversity: currentSummary.sourceDiversity,
       entityBreadth: currentSummary.entityBreadth,
@@ -1169,9 +1497,14 @@ async function loadTrendEvidence(
 function parseTrendMetadata(metadata: Record<string, unknown>) {
   const sources =
     isRecord(metadata.sources) ? (metadata.sources as Partial<Record<SourceClass, number>>) : {};
+  const trendLevel: "market" | "sector" | "unmapped" =
+    metadata.trendLevel === "sector" || metadata.trendLevel === "unmapped"
+      ? metadata.trendLevel
+      : "market";
 
   return {
     sources,
+    trendLevel,
     evidenceCount: numberFromMetadata(metadata.evidenceCount),
     sourceDiversity: numberFromMetadata(metadata.sourceDiversity),
     entityBreadth: numberFromMetadata(metadata.entityBreadth),
@@ -1262,6 +1595,48 @@ function numberFromMetadata(value: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function upsertNormalizedTheme(
+  client: DbClient,
+  theme: {
+    id: string;
+    label: string;
+    description: string;
+    level: "market" | "sector";
+    sector: string | null;
+    parentThemeId: string | null;
+    metadata: Record<string, unknown>;
+  }
+) {
+  await client.query(
+    `insert into themes (
+      id,
+      label,
+      description,
+      parent_theme_id,
+      theme_level,
+      sector,
+      metadata,
+      status
+    ) values ($1, $2, $3, $4, $5, $6, $7, 'emerging')
+    on conflict (id) do update set
+      label = excluded.label,
+      description = excluded.description,
+      parent_theme_id = excluded.parent_theme_id,
+      theme_level = excluded.theme_level,
+      sector = excluded.sector,
+      metadata = excluded.metadata`,
+    [
+      theme.id,
+      theme.label,
+      theme.description,
+      theme.parentThemeId,
+      theme.level,
+      theme.sector,
+      JSON.stringify(theme.metadata)
+    ]
+  );
 }
 
 async function upsertDocumentText(
@@ -1439,5 +1814,15 @@ function emptyTrendStatus(databaseConfigured: boolean): TrendStatus {
     latestTrendDate: null,
     windows: ["7d", "30d"],
     trends: []
+  };
+}
+
+function emptyThemeMappingStatus(databaseConfigured: boolean): ThemeMappingStatus {
+  return {
+    databaseConfigured,
+    mappingCount: 0,
+    mappedSignalCount: 0,
+    unmappedSignalCount: 0,
+    mappings: []
   };
 }

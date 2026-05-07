@@ -19,6 +19,7 @@ export default function HomePage() {
           <Link href="/ingestion">Ingestion</Link>
           <Link href="/analysis">Analysis</Link>
           <Link href="/trends">Trends</Link>
+          <Link href="/theme-mappings">Theme Mappings</Link>
         </div>
       </nav>
 

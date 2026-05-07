@@ -15,6 +15,7 @@ export default async function AnalysisPage() {
         <div className="nav-links">
           <Link href="/">Dashboard</Link>
           <Link href="/trends">Trends</Link>
+          <Link href="/theme-mappings">Theme Mappings</Link>
           <Link href="/ingestion">Ingestion</Link>
         </div>
       </nav>

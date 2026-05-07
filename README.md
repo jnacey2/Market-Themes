@@ -273,6 +273,8 @@ CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
 CLAUDE_EXTRACTION_LOOKBACK_DAYS=
 CLAUDE_MAX_EVIDENCE_CHARS=800
 CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
+THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v1
+THEME_NORMALIZATION_BATCH_SIZE=25
 TREND_LOOKBACK_DAYS=120
 TREND_LOW_HISTORY_DAYS=14
 TREND_AS_OF_DATE=
@@ -324,6 +326,7 @@ npm run fmp:smoke
 npm run fmp:backfill
 npm run fmp:poll
 npm run claude:extract:smoke
+npm run themes:normalize
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -353,6 +356,17 @@ npm run claude:extract:smoke
 
 Then inspect `/analysis` before scheduling any automated Claude cron.
 
+Theme normalization maps company-specific extracted themes into overall market
+themes and optional sector sub-themes:
+
+```bash
+npm run themes:normalize
+npm run trends:recompute --workspace @market-themes/workers
+```
+
+Open `/theme-mappings` to review market themes, sector sub-themes, mapped
+extracted themes, confidence, rationale, affected entities, and snippets.
+
 Trend recompute uses existing signals and writes idempotent rows into
 `theme_trends`:
 
@@ -361,8 +375,9 @@ npm run trends:recompute --workspace @market-themes/workers
 ```
 
 Open `/trends` to review ranked 7-day and 30-day trend audit cards. The page
-shows intensity, baseline, z-score, percentile, evidence count, source/entity
-breadth, low-history flags, candidate flags, and recent snippets.
+separates overall market themes, sector sub-themes, and unmapped extracted
+themes. It shows intensity, baseline, z-score, percentile, evidence count,
+source/entity breadth, low-history flags, candidate flags, and recent snippets.
 
 ## Database Setup
 
@@ -431,6 +446,7 @@ npm run fmp:smoke
 npm run fmp:backfill
 npm run fmp:poll
 npm run claude:extract:smoke
+npm run themes:normalize
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -444,6 +460,9 @@ filings and FMP transcripts.
 Open `/analysis` to review Claude-extracted signals, evidence snippets,
 interpretations, and failed analysis runs.
 
+Open `/theme-mappings` to review how extracted themes roll up into overall
+market themes and sector sub-themes.
+
 Open `/trends` to review computed trend rows before replacing the mock
 dashboard with live rankings.
 
@@ -454,13 +473,14 @@ Near-term:
 1. Expand the checked-in SEC ticker seed to the full S&P 500 plus Nasdaq-100.
 2. Run FMP transcript smoke and backfill jobs.
 3. Review Claude signal quality from `/analysis`.
-4. Review computed trend rows from `/trends`.
-5. Replace mock storyboard reads with Postgres queries.
-6. Add migrations or a migration runner.
-7. Add manual document paste/upload.
-8. Add company IR press release ingestion.
-9. Store embeddings for copilot retrieval.
-10. Generate storyboards and daily briefs from stored evidence.
+4. Review normalized theme mappings from `/theme-mappings`.
+5. Review computed trend rows from `/trends`.
+6. Replace mock storyboard reads with Postgres queries.
+7. Add migrations or a migration runner.
+8. Add manual document paste/upload.
+9. Add company IR press release ingestion.
+10. Store embeddings for copilot retrieval.
+11. Generate storyboards and daily briefs from stored evidence.
 
 Then:
 

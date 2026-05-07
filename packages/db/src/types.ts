@@ -129,6 +129,7 @@ export type TrendSummary = {
   id: string;
   themeId: string;
   themeLabel: string;
+  themeLevel: "market" | "sector" | "unmapped";
   trendWindow: TrendWindow;
   date: string;
   intensity: number;
@@ -163,6 +164,62 @@ export type RecomputeThemeTrendsResult = {
     trendWindow: TrendWindow;
     zScore: number;
   }>;
+};
+
+export type ThemeGroupForNormalization = {
+  themeId: string;
+  label: string;
+  description: string;
+  signalCount: number;
+  sourceClasses: SourceClass[];
+  affectedEntities: string[];
+  representativeSnippets: string[];
+};
+
+export type ThemeNormalizationMapping = {
+  id: string;
+  marketThemeId: string;
+  marketThemeLabel: string;
+  marketThemeDescription: string;
+  sectorSubthemeId: string | null;
+  sectorSubthemeLabel: string | null;
+  sectorSubthemeDescription: string | null;
+  sector: string;
+  mappedThemeIds: string[];
+  confidence: number;
+  confidenceLabel: "high" | "medium" | "low";
+  rationale: string;
+  status: "auto_applied" | "needs_review";
+  model: string;
+  promptVersion: string;
+};
+
+export type ThemeMappingSummary = {
+  id: string;
+  marketThemeId: string;
+  marketThemeLabel: string;
+  marketThemeDescription: string;
+  sectorSubthemeId: string | null;
+  sectorSubthemeLabel: string | null;
+  sectorSubthemeDescription: string | null;
+  sector: string;
+  extractedThemeId: string;
+  extractedThemeLabel: string;
+  confidence: number;
+  confidenceLabel: string;
+  rationale: string;
+  status: string;
+  signalCount: number;
+  affectedEntities: string[];
+  representativeSnippets: string[];
+};
+
+export type ThemeMappingStatus = {
+  databaseConfigured: boolean;
+  mappingCount: number;
+  mappedSignalCount: number;
+  unmappedSignalCount: number;
+  mappings: ThemeMappingSummary[];
 };
 
 export type IngestionStatus = {

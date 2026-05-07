@@ -5,8 +5,18 @@ export const dynamic = "force-dynamic";
 
 export default async function TrendsPage() {
   const status = await getTrendStatus();
-  const sevenDayTrends = status.trends.filter((trend) => trend.trendWindow === "7d");
-  const thirtyDayTrends = status.trends.filter((trend) => trend.trendWindow === "30d");
+  const marketSevenDayTrends = status.trends.filter(
+    (trend) => trend.trendWindow === "7d" && trend.themeLevel === "market"
+  );
+  const sectorSevenDayTrends = status.trends.filter(
+    (trend) => trend.trendWindow === "7d" && trend.themeLevel === "sector"
+  );
+  const unmappedSevenDayTrends = status.trends.filter(
+    (trend) => trend.trendWindow === "7d" && trend.themeLevel === "unmapped"
+  );
+  const thirtyDayTrends = status.trends.filter(
+    (trend) => trend.trendWindow === "30d" && trend.themeLevel !== "unmapped"
+  );
 
   return (
     <div className="shell">
@@ -16,6 +26,7 @@ export default async function TrendsPage() {
         </Link>
         <div className="nav-links">
           <Link href="/">Dashboard</Link>
+          <Link href="/theme-mappings">Theme Mappings</Link>
           <Link href="/analysis">Analysis</Link>
           <Link href="/ingestion">Ingestion</Link>
         </div>
@@ -43,19 +54,29 @@ export default async function TrendsPage() {
 
       <section className="grid three">
         <Metric label="Trend rows" value={status.totalTrendRows} />
-        <Metric label="7-day themes" value={sevenDayTrends.length} />
-        <Metric label="30-day themes" value={thirtyDayTrends.length} />
+        <Metric label="Market themes" value={marketSevenDayTrends.length} />
+        <Metric label="Sector sub-themes" value={sectorSevenDayTrends.length} />
       </section>
 
       <TrendSection
-        title="7-day ranked trends"
-        description="Default view for emerging narrative changes."
-        trends={sevenDayTrends}
+        title="Overall market themes"
+        description="7-day normalized narratives intended to aggregate across companies and sectors."
+        trends={marketSevenDayTrends}
+      />
+      <TrendSection
+        title="Sector sub-themes"
+        description="7-day industry-specific expressions of broader market narratives."
+        trends={sectorSevenDayTrends}
       />
       <TrendSection
         title="30-day context"
-        description="Slower moving view for steadier changes."
+        description="Slower moving market and sector rollups for steadier changes."
         trends={thirtyDayTrends}
+      />
+      <TrendSection
+        title="Unmapped extracted themes"
+        description="Fallback trend rows that still need normalization review."
+        trends={unmappedSevenDayTrends}
       />
     </div>
   );
@@ -94,6 +115,7 @@ function TrendCard({ trend }: { trend: TrendSummary }) {
       <div>
         <div className="pill-row">
           <span className="pill">{trend.trendWindow}</span>
+          <span className="pill">{trend.themeLevel}</span>
           <span className="pill">z {trend.zScore.toFixed(2)}</span>
           <span className="pill">{trend.percentileRank}th pctile</span>
           {trend.lowHistory ? <span className="pill">low history</span> : null}
