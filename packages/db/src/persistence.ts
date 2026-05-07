@@ -563,19 +563,24 @@ export async function requestBackfillStop(
         status = case
           when status = 'queued' then 'cancelled'
           when status = 'running' then 'stop_requested'
+          when status = 'stop_requested' then 'cancelled'
           else status
         end,
         stop_requested_at = now(),
-        completed_at = case when status = 'queued' then now() else completed_at end,
+        completed_at = case
+          when status in ('queued', 'stop_requested') then now()
+          else completed_at
+        end,
         last_message = case
           when status = 'queued' then 'Cancelled before the worker started.'
           when status = 'running' then 'Stop requested. The worker will finish in-flight documents first.'
+          when status = 'stop_requested' then 'Cancelled stuck stop request.'
           else last_message
         end,
         updated_at = now()
        where ($1::text is null or id = $1)
         and job_type = $2
-        and status in ('queued', 'running')
+        and status in ('queued', 'running', 'stop_requested')
        returning ${backfillJobSelectColumns}`,
       params
     );

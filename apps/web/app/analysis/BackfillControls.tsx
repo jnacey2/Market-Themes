@@ -9,7 +9,10 @@ export function BackfillControls({ status }: { status: BackfillControlStatus }) 
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const activeJob = status.activeJob;
-  const canStop = activeJob?.status === "queued" || activeJob?.status === "running";
+  const canStop =
+    activeJob?.status === "queued" ||
+    activeJob?.status === "running" ||
+    activeJob?.status === "stop_requested";
   const queuedForMs =
     activeJob?.status === "queued" ? Date.now() - new Date(activeJob.createdAt).getTime() : 0;
 
@@ -27,7 +30,7 @@ export function BackfillControls({ status }: { status: BackfillControlStatus }) 
       return;
     }
 
-    setMessage(endpoint.endsWith("/start") ? "Backfill queued." : "Stop requested.");
+    setMessage(endpoint.endsWith("/start") ? "Backfill queued." : stopActionMessage(activeJob?.status));
     startTransition(() => router.refresh());
   }
 
@@ -80,7 +83,7 @@ export function BackfillControls({ status }: { status: BackfillControlStatus }) 
           onClick={() => void runAction("/api/backfill/stop")}
           type="button"
         >
-          Stop
+          {activeJob?.status === "stop_requested" ? "Cancel Stuck Job" : "Stop"}
         </button>
       </div>
     </div>
@@ -99,4 +102,8 @@ function MiniMetric({ label, value }: { label: string; value: number }) {
 function formatDuration(milliseconds: number) {
   const minutes = Math.max(1, Math.round(milliseconds / 60_000));
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+function stopActionMessage(status: string | undefined) {
+  return status === "stop_requested" ? "Stuck job cancelled." : "Stop requested.";
 }
