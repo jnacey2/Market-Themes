@@ -121,6 +121,8 @@ export function createDatabaseClient(databaseUrl = process.env.DATABASE_URL) {
 
   return new Client({
     connectionString: databaseUrl,
+    connectionTimeoutMillis: 10_000,
+    keepAlive: true,
     ssl: databaseUrl.includes("render.com")
       ? { rejectUnauthorized: false }
       : undefined
@@ -1184,26 +1186,69 @@ export async function getTrendStatus(
 export async function getLiveDashboardStatus(
   databaseUrl = process.env.DATABASE_URL
 ): Promise<LiveDashboardStatus> {
-  const status = await getTrendStatus(databaseUrl);
-  const sevenDayMarketThemes = rankDashboardTrends(
-    status.trends.filter((trend) => trend.trendWindow === "7d" && trend.themeLevel === "market")
-  );
-  const thirtyDayMarketThemes = rankDashboardTrends(
-    status.trends.filter((trend) => trend.trendWindow === "30d" && trend.themeLevel === "market")
-  );
+  if (!databaseUrl) {
+    return emptyLiveDashboardStatus(false);
+  }
 
-  return {
-    databaseConfigured: status.databaseConfigured,
-    totalTrendRows: status.totalTrendRows,
-    latestTrendDate: status.latestTrendDate,
-    confirmedSevenDayThemes: sevenDayMarketThemes.filter(isConfirmedDashboardTrend).slice(0, 8),
-    emergingSevenDayThemes: sevenDayMarketThemes
-      .filter((trend) => !isConfirmedDashboardTrend(trend))
-      .slice(0, 8),
-    confirmedThirtyDayThemes: thirtyDayMarketThemes
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const totals = await client.query<{
+      total_trend_rows: string;
+      latest_trend_date: string | null;
+    }>(
+      `select
+        count(*)::text as total_trend_rows,
+        max(date)::text as latest_trend_date
+       from theme_trends`
+    );
+    const latestTrendDate = totals.rows[0]?.latest_trend_date ?? null;
+    const totalTrendRows = Number(totals.rows[0]?.total_trend_rows ?? 0);
+
+    if (!latestTrendDate) {
+      return {
+        ...emptyLiveDashboardStatus(true),
+        totalTrendRows
+      };
+    }
+
+    const sevenDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "7d", 80);
+    const thirtyDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "30d", 60);
+    const sevenDayMarketThemes = rankDashboardTrends(
+      sevenDayRows.map(trendSummaryWithoutDetails)
+    );
+    const thirtyDayMarketThemes = rankDashboardTrends(
+      thirtyDayRows.map(trendSummaryWithoutDetails)
+    );
+    const confirmedSevenDayThemes = sevenDayMarketThemes
       .filter(isConfirmedDashboardTrend)
-      .slice(0, 6)
-  };
+      .slice(0, 8);
+    const emergingSevenDayThemes = sevenDayMarketThemes
+      .filter((trend) => !isConfirmedDashboardTrend(trend))
+      .slice(0, 8);
+    const confirmedThirtyDayThemes = thirtyDayMarketThemes
+      .filter(isConfirmedDashboardTrend)
+      .slice(0, 6);
+
+    const themesToHydrate =
+      confirmedSevenDayThemes.length > 0 ? confirmedSevenDayThemes : confirmedThirtyDayThemes;
+
+    return {
+      databaseConfigured: true,
+      totalTrendRows,
+      latestTrendDate,
+      confirmedSevenDayThemes: await hydrateTrendSummaries(client, confirmedSevenDayThemes),
+      emergingSevenDayThemes,
+      confirmedThirtyDayThemes: themesToHydrate === confirmedThirtyDayThemes
+        ? await hydrateTrendSummaries(client, confirmedThirtyDayThemes)
+        : confirmedThirtyDayThemes
+    };
+  } catch {
+    return emptyLiveDashboardStatus(true);
+  } finally {
+    await client.end();
+  }
 }
 
 export async function getThemeDetailStatus(
@@ -1762,6 +1807,95 @@ async function loadTrendAffectedEntities(
   return result.rows.map((row) => row.entity);
 }
 
+async function loadLatestMarketTrendRows(
+  client: DbClient,
+  latestTrendDate: string,
+  trendWindow: TrendWindow,
+  limit: number
+) {
+  const result = await client.query<ThemeTrendDbRow>(
+    `select
+      tt.id,
+      tt.theme_id,
+      t.label as theme_label,
+      t.description as theme_description,
+      t.parent_theme_id,
+      t.sector,
+      tt.trend_window,
+      tt.date::text,
+      tt.intensity::float as intensity,
+      tt.baseline_mean::float as baseline_mean,
+      tt.baseline_stddev::float as baseline_stddev,
+      tt.z_score::float as z_score,
+      tt.percentile_rank::float as percentile_rank,
+      tt.source_mix
+     from theme_trends tt
+     join themes t on t.id = tt.theme_id
+     where tt.date = $1::date
+      and tt.trend_window = $2
+      and coalesce(tt.source_mix->>'trendLevel', 'market') = 'market'
+     order by
+      tt.z_score desc,
+      coalesce((tt.source_mix->>'evidenceCount')::numeric, 0) desc,
+      coalesce((tt.source_mix->>'entityBreadth')::numeric, 0) desc,
+      tt.intensity desc
+     limit $3`,
+    [latestTrendDate, trendWindow, limit]
+  );
+
+  return result.rows;
+}
+
+function trendSummaryWithoutDetails(row: ThemeTrendDbRow): TrendSummary {
+  const metadata = parseTrendMetadata(row.source_mix);
+
+  return {
+    id: row.id,
+    themeId: row.theme_id,
+    themeLabel: row.theme_label,
+    themeDescription: row.theme_description ?? "",
+    parentThemeId: row.parent_theme_id,
+    sector: row.sector,
+    themeLevel: metadata.trendLevel,
+    trendWindow: row.trend_window,
+    date: row.date,
+    intensity: row.intensity,
+    baselineMean: row.baseline_mean,
+    baselineStddev: row.baseline_stddev,
+    zScore: row.z_score,
+    percentileRank: row.percentile_rank,
+    evidenceCount: metadata.evidenceCount,
+    documentBreadth: metadata.documentBreadth,
+    sourceMix: metadata.sources,
+    sourceDiversity: metadata.sourceDiversity,
+    entityBreadth: metadata.entityBreadth,
+    lowHistory: metadata.lowHistory,
+    candidate: metadata.candidate,
+    affectedEntities: [],
+    recentEvidence: []
+  };
+}
+
+async function hydrateTrendSummaries(client: DbClient, trends: TrendSummary[]) {
+  const hydrated: TrendSummary[] = [];
+
+  for (const trend of trends) {
+    const windowDays = trendWindowDays(trend.trendWindow);
+    hydrated.push({
+      ...trend,
+      affectedEntities: await loadTrendAffectedEntities(
+        client,
+        trend.themeId,
+        trend.date,
+        windowDays
+      ),
+      recentEvidence: await loadTrendEvidence(client, trend.themeId, trend.date, windowDays)
+    });
+  }
+
+  return hydrated;
+}
+
 async function themeTrendSummaryFromRow(
   client: DbClient,
   row: ThemeTrendDbRow
@@ -2193,6 +2327,17 @@ function emptyTrendStatus(databaseConfigured: boolean): TrendStatus {
     latestTrendDate: null,
     windows: ["7d", "30d"],
     trends: []
+  };
+}
+
+function emptyLiveDashboardStatus(databaseConfigured: boolean): LiveDashboardStatus {
+  return {
+    databaseConfigured,
+    totalTrendRows: 0,
+    latestTrendDate: null,
+    confirmedSevenDayThemes: [],
+    emergingSevenDayThemes: [],
+    confirmedThirtyDayThemes: []
   };
 }
 
