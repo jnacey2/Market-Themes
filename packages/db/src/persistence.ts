@@ -43,6 +43,7 @@ type SelectAnalysisDocumentsOptions = {
   limit?: number;
   lookbackDays?: number;
   excludedSecFilingCategories?: string[];
+  maxAttempts?: number;
 };
 
 type CreateBackfillJobOptions = {
@@ -297,6 +298,7 @@ export async function selectDocumentsForAnalysis(
     const limit = options.limit ?? 20;
     const lookbackDays = options.lookbackDays ?? null;
     const excludedSecFilingCategories = options.excludedSecFilingCategories ?? [];
+    const maxAttempts = options.maxAttempts ?? 5;
     const result = await client.query<{
       id: string;
       source_id: string;
@@ -341,7 +343,7 @@ export async function selectDocumentsForAnalysis(
             and coalesce(d.metadata->>'filingCategory', 'uncategorized') = any($6::text[])
           )
           and coalesce(ar.status, '') not in ('completed', 'running')
-          and coalesce(ar.attempt_count, 0) < 2
+          and coalesce(ar.attempt_count, 0) < $7
         order by
           case
             when d.source_id = 'fmp-transcripts' then 0
@@ -381,7 +383,8 @@ export async function selectDocumentsForAnalysis(
         options.promptVersion,
         lookbackDays,
         limit,
-        excludedSecFilingCategories
+        excludedSecFilingCategories,
+        maxAttempts
       ]
     );
 
@@ -580,7 +583,10 @@ export async function requestBackfillStop(
           completed_at = now(),
           updated_at = now()
          where status = 'running'
-          and metadata->>'backfillJobId' = $1`,
+          and (
+            metadata->>'backfillJobId' = $1
+            or metadata ? 'backfillJobId'
+          )`,
         [options.jobId]
       );
     }
@@ -974,6 +980,9 @@ export async function getAnalysisStatus(
   await client.connect();
 
   try {
+    const analysisModel = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+    const analysisPromptVersion = process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1";
+    const maxAnalysisAttempts = Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5);
     const totals = await client.query<{
       signal_count: string;
       theme_count: string;
@@ -992,15 +1001,18 @@ export async function getAnalysisStatus(
         (select count(*)::text from document_analysis_runs where status = 'failed') as failed_runs,
         count(*)::text as eligible_document_count,
         count(*) filter (where ar.status = 'completed')::text as completed_document_count,
-        count(*) filter (where ar.status is null)::text as unread_document_count,
+        count(*) filter (
+          where coalesce(ar.status, '') not in ('completed', 'running')
+            and coalesce(ar.attempt_count, 0) < $3
+        )::text as unread_document_count,
         count(*) filter (where ar.status = 'running')::text as running_document_count,
         count(*) filter (where ar.status = 'failed')::text as failed_document_count
        from documents d
        left join document_analysis_runs ar
         on ar.document_id = d.id
         and ar.analysis_type = 'market_signal_extraction'
-        and ar.model = 'claude-sonnet-4-5-20250929'
-        and ar.prompt_version = 'market_signal_extraction_v1'
+        and ar.model = $1
+        and ar.prompt_version = $2
        where d.source_id in ('sec-filings', 'fmp-transcripts')
         and exists (
           select 1
@@ -1010,7 +1022,8 @@ export async function getAnalysisStatus(
         and not (
           d.source_id = 'sec-filings'
           and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
-        )`
+        )`,
+      [analysisModel, analysisPromptVersion, maxAnalysisAttempts]
     );
 
     const recentSignals = await client.query<AnalysisSignalSummary>(
