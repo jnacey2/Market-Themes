@@ -108,6 +108,9 @@ export type AnalysisStatus = {
   themeCount: number;
   completedRuns: number;
   failedRuns: number;
+  ingestedDocumentCount: number;
+  readableDocumentCount: number;
+  missingTextDocumentCount: number;
   eligibleDocumentCount: number;
   completedDocumentCount: number;
   unreadDocumentCount: number;
@@ -116,6 +119,11 @@ export type AnalysisStatus = {
   backfillControl: BackfillControlStatus;
   recentSignals: AnalysisSignalSummary[];
   recentRuns: AnalysisRunSummary[];
+};
+
+export type RepairDocumentTextsResult = {
+  repairedDocuments: number;
+  remainingMissingTextDocuments: number;
 };
 
 export type BackfillJobStatus =

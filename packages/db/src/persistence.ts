@@ -15,6 +15,7 @@ import type {
   LiveDashboardStatus,
   PersistableDocument,
   PersistDocumentsResult,
+  RepairDocumentTextsResult,
   RecomputeThemeTrendsResult,
   SourceClass,
   ThemeGroupForNormalization,
@@ -969,6 +970,80 @@ export async function failDocumentAnalysisRun(
   }
 }
 
+export async function repairMissingDocumentTextsFromChunks(
+  options: { limit?: number } = {},
+  databaseUrl = process.env.DATABASE_URL
+): Promise<RepairDocumentTextsResult> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+
+  try {
+    const limit = options.limit ?? 25;
+    const result = await client.query<{ document_id: string; content: string }>(
+      `with candidates as (
+        select d.id
+        from documents d
+        left join document_texts dt on dt.document_id = d.id
+        where d.source_id in ('sec-filings', 'fmp-transcripts')
+          and dt.document_id is null
+          and not (
+            d.source_id = 'sec-filings'
+            and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
+          )
+          and exists (
+            select 1
+            from document_chunks dc
+            where dc.document_id = d.id
+          )
+        order by
+          case
+            when d.source_id = 'fmp-transcripts' then 0
+            when coalesce(d.metadata->>'filingCategory', '') in ('core', 'exhibit') then 1
+            else 2
+          end,
+          d.published_at desc,
+          d.created_at desc
+        limit $1
+      )
+      select
+        c.id as document_id,
+        string_agg(dc.content, E'\n\n' order by dc.chunk_index) as content
+      from candidates c
+      join document_chunks dc on dc.document_id = c.id
+      group by c.id`,
+      [limit]
+    );
+
+    for (const row of result.rows) {
+      await upsertDocumentText(client, row.document_id, row.content, "reconstructed_chunks");
+    }
+
+    const remaining = await client.query<{ count: string }>(
+      `select count(*)::text as count
+       from documents d
+       left join document_texts dt on dt.document_id = d.id
+       where d.source_id in ('sec-filings', 'fmp-transcripts')
+        and dt.document_id is null
+        and not (
+          d.source_id = 'sec-filings'
+          and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
+        )
+        and exists (
+          select 1
+          from document_chunks dc
+          where dc.document_id = d.id
+        )`
+    );
+
+    return {
+      repairedDocuments: result.rows.length,
+      remainingMissingTextDocuments: Number(remaining.rows[0]?.count ?? 0)
+    };
+  } finally {
+    await client.end();
+  }
+}
+
 export async function getAnalysisStatus(
   databaseUrl = process.env.DATABASE_URL
 ): Promise<AnalysisStatus> {
@@ -988,41 +1063,53 @@ export async function getAnalysisStatus(
       theme_count: string;
       completed_runs: string;
       failed_runs: string;
+      ingested_document_count: string;
+      readable_document_count: string;
+      missing_text_document_count: string;
       eligible_document_count: string;
       completed_document_count: string;
       unread_document_count: string;
       running_document_count: string;
       failed_document_count: string;
     }>(
-      `select
+      `with in_scope_documents as (
+        select
+          d.id,
+          exists (
+            select 1
+            from document_texts dt
+            where dt.document_id = d.id
+          ) as has_full_text
+        from documents d
+        where d.source_id in ('sec-filings', 'fmp-transcripts')
+          and not (
+            d.source_id = 'sec-filings'
+            and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
+          )
+      )
+      select
         (select count(*)::text from signals) as signal_count,
         (select count(*)::text from themes) as theme_count,
         (select count(*)::text from document_analysis_runs where status = 'completed') as completed_runs,
         (select count(*)::text from document_analysis_runs where status = 'failed') as failed_runs,
-        count(*)::text as eligible_document_count,
-        count(*) filter (where ar.status = 'completed')::text as completed_document_count,
+        count(*)::text as ingested_document_count,
+        count(*) filter (where isd.has_full_text)::text as readable_document_count,
+        count(*) filter (where not isd.has_full_text)::text as missing_text_document_count,
+        count(*) filter (where isd.has_full_text)::text as eligible_document_count,
+        count(*) filter (where isd.has_full_text and ar.status = 'completed')::text as completed_document_count,
         count(*) filter (
-          where coalesce(ar.status, '') not in ('completed', 'running')
+          where isd.has_full_text
+            and coalesce(ar.status, '') not in ('completed', 'running')
             and coalesce(ar.attempt_count, 0) < $3
         )::text as unread_document_count,
-        count(*) filter (where ar.status = 'running')::text as running_document_count,
-        count(*) filter (where ar.status = 'failed')::text as failed_document_count
-       from documents d
+        count(*) filter (where isd.has_full_text and ar.status = 'running')::text as running_document_count,
+        count(*) filter (where isd.has_full_text and ar.status = 'failed')::text as failed_document_count
+       from in_scope_documents isd
        left join document_analysis_runs ar
-        on ar.document_id = d.id
+        on ar.document_id = isd.id
         and ar.analysis_type = 'market_signal_extraction'
         and ar.model = $1
-        and ar.prompt_version = $2
-       where d.source_id in ('sec-filings', 'fmp-transcripts')
-        and exists (
-          select 1
-          from document_texts dt
-          where dt.document_id = d.id
-        )
-        and not (
-          d.source_id = 'sec-filings'
-          and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
-        )`,
+        and ar.prompt_version = $2`,
       [analysisModel, analysisPromptVersion, maxAnalysisAttempts]
     );
 
@@ -1086,6 +1173,9 @@ export async function getAnalysisStatus(
       themeCount: Number(row?.theme_count ?? 0),
       completedRuns: Number(row?.completed_runs ?? 0),
       failedRuns: Number(row?.failed_runs ?? 0),
+      ingestedDocumentCount: Number(row?.ingested_document_count ?? 0),
+      readableDocumentCount: Number(row?.readable_document_count ?? 0),
+      missingTextDocumentCount: Number(row?.missing_text_document_count ?? 0),
       eligibleDocumentCount: Number(row?.eligible_document_count ?? 0),
       completedDocumentCount: Number(row?.completed_document_count ?? 0),
       unreadDocumentCount: Number(row?.unread_document_count ?? 0),
@@ -2901,6 +2991,9 @@ function emptyAnalysisStatus(databaseConfigured: boolean): AnalysisStatus {
     themeCount: 0,
     completedRuns: 0,
     failedRuns: 0,
+    ingestedDocumentCount: 0,
+    readableDocumentCount: 0,
+    missingTextDocumentCount: 0,
     eligibleDocumentCount: 0,
     completedDocumentCount: 0,
     unreadDocumentCount: 0,

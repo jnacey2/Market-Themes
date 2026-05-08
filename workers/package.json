@@ -13,6 +13,7 @@
     "fmp:poll": "node --import tsx src/jobs/fmp-poll.ts",
     "claude:extract:smoke": "node --import tsx src/jobs/claude-extract-smoke.ts",
     "claude:extract:backfill": "node --import tsx src/jobs/claude-extract-backfill.ts",
+    "repair:document-texts": "node --import tsx src/jobs/repair-document-texts.ts",
     "themes:normalize": "node --import tsx src/jobs/normalize-themes.ts",
     "brief:daily": "node --import tsx src/jobs/generate-daily-brief.ts",
     "trends:recompute": "node --import tsx src/jobs/recompute-theme-trends.ts",

@@ -51,14 +51,16 @@ export default async function AnalysisPage() {
       <section className="section">
         <p className="eyebrow">Document Coverage</p>
         <div className="grid four">
-          <Metric label="Eligible docs" value={status.eligibleDocumentCount} />
+          <Metric label="Ingested docs" value={status.ingestedDocumentCount} />
+          <Metric label="Readable docs" value={status.readableDocumentCount} />
+          <Metric label="Missing full text" value={status.missingTextDocumentCount} />
           <Metric label="Read by Claude" value={status.completedDocumentCount} />
           <Metric label="Unread docs left" value={status.unreadDocumentCount} />
           <Metric label="Currently running" value={status.runningDocumentCount} />
         </div>
         <p className="lede">
-          Counts include SEC and FMP documents eligible for market signal extraction,
-          excluding capital markets filings by default.
+          Ingested docs include SEC and FMP documents in scope. Readable docs have
+          stored full text and can be selected by Claude backfill.
         </p>
       </section>
 
