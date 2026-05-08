@@ -569,7 +569,23 @@ export async function requestBackfillStop(
       params
     );
 
-    return result.rows[0] ? rowToBackfillJob(result.rows[0]) : null;
+    const stoppedJob = result.rows[0];
+
+    if (options.jobId && stoppedJob?.status === "cancelled") {
+      await client.query(
+        `update document_analysis_runs
+         set
+          status = 'failed',
+          error_message = 'Cancelled with stuck backfill job.',
+          completed_at = now(),
+          updated_at = now()
+         where status = 'running'
+          and metadata->>'backfillJobId' = $1`,
+        [options.jobId]
+      );
+    }
+
+    return stoppedJob ? rowToBackfillJob(stoppedJob) : null;
   } finally {
     await client.end();
   }
@@ -986,6 +1002,11 @@ export async function getAnalysisStatus(
         and ar.model = 'claude-sonnet-4-5-20250929'
         and ar.prompt_version = 'market_signal_extraction_v1'
        where d.source_id in ('sec-filings', 'fmp-transcripts')
+        and exists (
+          select 1
+          from document_texts dt
+          where dt.document_id = d.id
+        )
         and not (
           d.source_id = 'sec-filings'
           and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
