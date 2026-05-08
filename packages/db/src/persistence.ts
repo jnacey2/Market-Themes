@@ -1212,29 +1212,51 @@ export async function selectThemeGroupsForNormalization(
       evidence_snippet: string;
     }>(
       `with selected_themes as (
-        select t.id
+        select
+          t.id,
+          t.label,
+          t.description,
+          signal_stats.signal_count,
+          signal_stats.latest_extracted_at
         from themes t
-        join signals s on s.theme_id = t.id
         left join theme_mappings tm
           on tm.extracted_theme_id = t.id
           and tm.prompt_version = $1
+        join lateral (
+          select
+            count(*)::int as signal_count,
+            max(s.extracted_at) as latest_extracted_at
+          from signals s
+          where s.theme_id = t.id
+        ) signal_stats on true
         where tm.id is null
-        group by t.id
-        order by count(s.id) desc, max(s.extracted_at) desc
+          and signal_stats.signal_count > 0
+          and coalesce(t.theme_level, 'extracted') = 'extracted'
+        order by signal_stats.signal_count desc, signal_stats.latest_extracted_at desc
         limit $2
       )
       select
-        t.id as theme_id,
-        t.label,
-        t.description,
-        d.source_class,
-        s.affected_entities,
-        s.evidence_snippet
+        st.id as theme_id,
+        st.label,
+        st.description,
+        representative.source_class,
+        representative.affected_entities,
+        representative.evidence_snippet
       from selected_themes st
-      join themes t on t.id = st.id
-      join signals s on s.theme_id = t.id
-      join documents d on d.id = s.document_id
-      order by t.id, s.score_contribution desc, s.extracted_at desc`,
+      join lateral (
+        select
+          d.source_class,
+          s.affected_entities,
+          s.evidence_snippet,
+          s.score_contribution,
+          s.extracted_at
+        from signals s
+        join documents d on d.id = s.document_id
+        where s.theme_id = st.id
+        order by s.score_contribution desc, s.extracted_at desc
+        limit 3
+      ) representative on true
+      order by st.signal_count desc, st.latest_extracted_at desc, representative.score_contribution desc`,
       [options.promptVersion, options.limit ?? 250]
     );
     const groups = new Map<string, ThemeGroupForNormalization>();

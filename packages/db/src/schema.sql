@@ -145,6 +145,12 @@ alter table signals
 create unique index if not exists signals_document_prompt_theme_evidence_idx
   on signals (document_id, prompt_version, theme_id, evidence_snippet);
 
+create index if not exists signals_theme_extracted_idx
+  on signals (theme_id, extracted_at desc);
+
+create index if not exists signals_theme_score_idx
+  on signals (theme_id, score_contribution desc, extracted_at desc);
+
 create table if not exists theme_mappings (
   id text primary key,
   extracted_theme_id text not null references themes(id),
