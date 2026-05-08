@@ -331,6 +331,11 @@ export async function selectDocumentsForAnalysis(
           and ar.prompt_version = $3
         where d.source_id in ('sec-filings', 'fmp-transcripts')
           and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
+          and exists (
+            select 1
+            from document_texts dt
+            where dt.document_id = d.id
+          )
           and not (
             d.source_id = 'sec-filings'
             and coalesce(d.metadata->>'filingCategory', 'uncategorized') = any($6::text[])
@@ -358,30 +363,9 @@ export async function selectDocumentsForAnalysis(
         d.tickers,
         d.summary,
         d.metadata,
-        coalesce(
-          dt.content,
-          string_agg(dc.content, E'\n\n' order by dc.chunk_index)
-        ) as content
-       from candidate_documents d
-       left join document_texts dt on dt.document_id = d.id
-       left join document_chunks dc on dc.document_id = d.id
-       group by
-        d.id,
-        d.source_id,
-        d.source_class,
-        d.title,
-        d.publisher,
-        d.url,
-        d.published_at,
-        d.tickers,
-        d.summary,
-        d.metadata,
-        d.created_at,
         dt.content
-       having coalesce(
-          dt.content,
-          string_agg(dc.content, E'\n\n' order by dc.chunk_index)
-        ) is not null
+       from candidate_documents d
+       join document_texts dt on dt.document_id = d.id
        order by
         case
           when d.source_id = 'fmp-transcripts' then 0

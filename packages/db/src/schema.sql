@@ -30,6 +30,9 @@ create table if not exists documents (
 alter table documents
   add column if not exists metadata jsonb not null default '{}';
 
+create index if not exists documents_analysis_selection_idx
+  on documents (source_id, published_at desc, created_at desc);
+
 create table if not exists document_chunks (
   id text primary key,
   document_id text not null references documents(id) on delete cascade,
