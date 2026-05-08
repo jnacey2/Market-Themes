@@ -284,6 +284,7 @@ CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
 BACKFILL_WORKER_POLL_INTERVAL_MS=45000
 THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v2
 THEME_NORMALIZATION_BATCH_SIZE=25
+THEME_NORMALIZATION_MAX_BATCHES=100
 TREND_LOOKBACK_DAYS=120
 TREND_LOW_HISTORY_DAYS=14
 TREND_STORAGE_DAYS=45
@@ -342,6 +343,7 @@ npm run repair:document-texts
 npm run claude:extract:smoke
 npm run claude:extract:backfill
 npm run themes:normalize
+npm run themes:normalize:backfill
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
