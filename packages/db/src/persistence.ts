@@ -2202,7 +2202,7 @@ function scoreTrendWindow(
     zScore >= 1.8 &&
     percentileRank >= 90 &&
     currentSummary.evidenceCount >= 2 &&
-    (currentSummary.documentBreadth >= 2 || currentSummary.entityBreadth >= 2) &&
+    hasMarketBreadth(currentSummary, trendLevel) &&
     currentSummary.sourceDiversity >= 1;
 
   return {
@@ -2574,11 +2574,37 @@ function dashboardTrendScore(trend: TrendSummary) {
 }
 
 function isConfirmedDashboardTrend(trend: TrendSummary) {
-  return trend.entityBreadth >= 2 || independentDocumentCount(trend) >= 2;
+  return hasConfirmedMarketBreadth(trend);
 }
 
 function independentDocumentCount(trend: TrendSummary) {
   return trend.documentBreadth > 0 ? trend.documentBreadth : trend.evidenceCount;
+}
+
+function hasMarketBreadth(
+  summary: {
+    documentBreadth: number;
+    entityBreadth: number;
+  },
+  trendLevel: "market" | "sector" | "unmapped"
+) {
+  if (trendLevel === "market") {
+    return summary.documentBreadth >= 2 && summary.entityBreadth >= 2;
+  }
+
+  return summary.documentBreadth >= 2 || summary.entityBreadth >= 2;
+}
+
+function hasConfirmedMarketBreadth(trend: TrendSummary) {
+  if (!trend.candidate) {
+    return false;
+  }
+
+  if (trend.themeLevel === "market") {
+    return independentDocumentCount(trend) >= 2 && trend.entityBreadth >= 2;
+  }
+
+  return independentDocumentCount(trend) >= 2 || trend.entityBreadth >= 2;
 }
 
 function trendWindowDays(window: TrendWindow) {

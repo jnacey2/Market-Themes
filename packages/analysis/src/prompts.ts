@@ -13,7 +13,7 @@ Every extracted signal must include:
 - short citation snippet copied from the source text
 - interpretation explaining why the evidence matters`;
 
-export const signalExtractionPromptVersion = "market_signal_extraction_v1";
+export const signalExtractionPromptVersion = "market_signal_extraction_v2";
 
 export const signalExtractionSystemPrompt = `You extract market narrative signals from SEC filings and earnings call transcripts.
 
@@ -27,6 +27,13 @@ Separate evidence from interpretation:
 - Do not make trade recommendations.
 
 Use mid-level investable themes, such as AI capex discipline, consumer trade-down, credit quality normalization, China demand weakness, margin pressure, pricing power, capital allocation discipline, inventory normalization, labor cost pressure, refinancing risk, or demand elasticity.
+
+Theme labeling rules:
+- rawThemeLabel may stay close to the source text, but canonicalThemeLabel must describe the broader market narrative, not the issuer.
+- Do not name a company, ticker, executive, product, one-off transaction, court case, or issuer-specific business line in canonicalThemeLabel unless the evidence is only meaningful for that issuer.
+- If source evidence is about one company, generalize only to the repeatable narrative implied by the evidence. Example: "JPMorgan relationship banking loan growth" should become "Corporate Credit Demand" or "Credit Conditions Loosening", not "JPMorgan Credit Expansion".
+- themeDescription should explain why the signal may matter beyond the reporting company. If it cannot matter beyond the reporting company, skip the signal.
+- affectedEntities is where company names belong; do not use those names as the theme.
 
 Return this JSON shape:
 {
@@ -48,7 +55,7 @@ Return this JSON shape:
   ]
 }`;
 
-export const themeNormalizationPromptVersion = "theme_normalization_v2";
+export const themeNormalizationPromptVersion = "theme_normalization_v3";
 
 export const themeNormalizationSystemPrompt = `You normalize extracted company-specific market themes into recurring investable narratives.
 
@@ -56,14 +63,17 @@ Return only valid JSON. Do not include markdown, commentary, or code fences.
 
 Your job:
 - Map extracted theme groups into overall market themes and optional sector-specific sub-themes.
-- Overall market themes should be recurring investable narratives that can apply across companies or sectors.
+- Overall market themes must be recurring investable narratives that can apply across multiple companies or sectors.
 - Sector sub-themes should explain how the overall market theme manifests in a specific industry sector.
 - Do not create useless mega-buckets like "AI", "consumer", "credit", or "energy".
-- Do not preserve issuer-specific labels like "Microsoft AI demand" unless the narrative truly cannot generalize.
+- Do not preserve issuer-specific labels like "Microsoft AI demand", "JPMorgan credit growth", or "Morgan Stanley advisory rebound". Company names belong in affected entities and evidence, not in market theme labels.
 - Merge themes only when they describe the same underlying market/business narrative, not because they share a generic keyword.
 - Prefer stable, reusable parent themes over precise one-off labels. If an extracted
   label names a company, product, region, accounting item, court case, commodity,
   or transaction detail, roll it up into the broader narrative when possible.
+- Treat one-document or one-issuer clusters as weak evidence for a market theme. Map them to the broadest defensible reusable narrative and set confidence low if the only support is issuer-specific.
+- A market theme label should still make sense if every company name is removed from the evidence.
+- Prefer macro or cross-company wording over sell-side desk, issuer segment, or bank-specific wording. For example, use "Credit Conditions Loosening" instead of "Corporate Credit Expansion" when the source evidence is a bank's lending activity.
 - Merge verbose near-duplicates into the shortest clear canonical parent. For
   example, map "Energy companies are prioritizing capital discipline and shareholder
   returns over production growth" and "Energy companies are executing capital
@@ -82,6 +92,13 @@ Use concise canonical labels. Good labels:
 - "Capital Allocation Discipline"
 - "Pricing Power"
 - "Working Capital Pressure"
+- "Credit Conditions Loosening"
+- "Deal Activity Recovery"
+
+Bad labels:
+- "JPMorgan Credit Expansion"
+- "Morgan Stanley Capital Markets Recovery"
+- "Company X Margin Recovery"
 
 Return this JSON shape:
 {
