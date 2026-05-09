@@ -8,14 +8,19 @@ export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const dashboard = await getLiveDashboardStatus();
-  const topTheme = dashboard.confirmedSevenDayThemes[0] ?? dashboard.confirmedThirtyDayThemes[0];
+  const topSevenDayThemes = topDashboardThemes(
+    dashboard.confirmedSevenDayThemes,
+    dashboard.emergingSevenDayThemes,
+    5
+  );
+  const topTheme = topSevenDayThemes[0] ?? dashboard.confirmedThirtyDayThemes[0];
   const averageZScore =
-    dashboard.confirmedSevenDayThemes.length > 0
-      ? dashboard.confirmedSevenDayThemes.reduce((total, theme) => total + theme.zScore, 0) /
-        dashboard.confirmedSevenDayThemes.length
+    topSevenDayThemes.length > 0
+      ? topSevenDayThemes.reduce((total, theme) => total + theme.zScore, 0) /
+        topSevenDayThemes.length
       : 0;
   const brief = buildDashboardBrief(
-    dashboard.confirmedSevenDayThemes,
+    topSevenDayThemes,
     dashboard.confirmedThirtyDayThemes
   );
 
@@ -81,8 +86,8 @@ export default async function HomePage() {
           <span className="label">Signal</span>
           <h2>{averageZScore.toFixed(1)} avg z-score</h2>
           <p>
-            {dashboard.confirmedSevenDayThemes.length} confirmed 7-day themes
-            survive the breadth gate.
+            Showing the top {topSevenDayThemes.length} ranked 7-day market themes,
+            including {dashboard.confirmedSevenDayThemes.length} confirmed by the breadth gate.
           </p>
         </div>
         <div className="panel">
@@ -93,21 +98,21 @@ export default async function HomePage() {
       </section>
 
       <section className="section" id="themes">
-        <p className="eyebrow">Confirmed Market Themes</p>
+        <p className="eyebrow">Top Market Themes</p>
         <div className="grid">
-          {dashboard.confirmedSevenDayThemes.length === 0 ? (
+          {topSevenDayThemes.length === 0 ? (
             <div className="panel">
-              <h2>No confirmed 7-day themes yet</h2>
+              <h2>No ranked 7-day themes yet</h2>
               <p>
-                The live dashboard now requires breadth across multiple entities
-                or documents. Check emerging themes on the trend inspection page.
+                Run extraction, theme normalization, and trend recompute to populate
+                the live theme list.
               </p>
               <Link className="pill" href="/trends">
                 Open trends
               </Link>
             </div>
           ) : (
-            dashboard.confirmedSevenDayThemes.map((theme) => (
+            topSevenDayThemes.map((theme) => (
               <ThemeCard key={theme.id} theme={theme} />
             ))
           )}
@@ -135,6 +140,22 @@ export default async function HomePage() {
       </section>
     </div>
   );
+}
+
+function topDashboardThemes(
+  confirmedThemes: TrendSummary[],
+  emergingThemes: TrendSummary[],
+  limit: number
+) {
+  const themes = new Map<string, TrendSummary>();
+
+  for (const theme of [...confirmedThemes, ...emergingThemes]) {
+    if (!themes.has(theme.themeId)) {
+      themes.set(theme.themeId, theme);
+    }
+  }
+
+  return Array.from(themes.values()).slice(0, limit);
 }
 
 function ThemeCard({ theme }: { theme: TrendSummary }) {

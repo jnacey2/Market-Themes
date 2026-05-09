@@ -1797,7 +1797,7 @@ export async function getLiveDashboardStatus(
       totalTrendRows,
       latestTrendDate,
       confirmedSevenDayThemes: await hydrateTrendSummaries(client, confirmedSevenDayThemes),
-      emergingSevenDayThemes,
+      emergingSevenDayThemes: await hydrateTrendSummaries(client, emergingSevenDayThemes),
       confirmedThirtyDayThemes: themesToHydrate === confirmedThirtyDayThemes
         ? await hydrateTrendSummaries(client, confirmedThirtyDayThemes)
         : confirmedThirtyDayThemes
