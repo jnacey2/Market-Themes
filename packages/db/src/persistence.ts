@@ -36,6 +36,13 @@ type DbClient = pg.Client;
 
 const DEFAULT_CHUNK_SIZE = 8_000;
 const DEFAULT_CHUNK_OVERLAP = 500;
+const DEFAULT_QUERY_TIMEOUT_MS = 20_000;
+const DEFAULT_TREND_QUERY_TIMEOUT_MS = 120_000;
+
+type DatabaseClientOptions = {
+  queryTimeoutMs?: number;
+  statementTimeoutMs?: number;
+};
 
 type SelectAnalysisDocumentsOptions = {
   analysisType: string;
@@ -166,17 +173,22 @@ type ThemeTrendDbRow = {
   source_mix: Record<string, unknown>;
 };
 
-export function createDatabaseClient(databaseUrl = process.env.DATABASE_URL) {
+export function createDatabaseClient(
+  databaseUrl = process.env.DATABASE_URL,
+  options: DatabaseClientOptions = {}
+) {
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required.");
   }
+  const queryTimeoutMs = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
+  const statementTimeoutMs = options.statementTimeoutMs ?? queryTimeoutMs;
 
   const client = new Client({
     connectionString: databaseUrl,
     connectionTimeoutMillis: 10_000,
     keepAlive: true,
-    query_timeout: 20_000,
-    statement_timeout: 20_000,
+    query_timeout: queryTimeoutMs,
+    statement_timeout: statementTimeoutMs,
     ssl: databaseUrl.includes("render.com")
       ? { rejectUnauthorized: false }
       : undefined
@@ -1497,7 +1509,13 @@ export async function recomputeThemeTrends(
   options: RecomputeThemeTrendsOptions = {},
   databaseUrl = process.env.DATABASE_URL
 ): Promise<RecomputeThemeTrendsResult> {
-  const client = createDatabaseClient(databaseUrl);
+  const trendQueryTimeoutMs = Number(
+    process.env.TREND_DB_QUERY_TIMEOUT_MS ?? DEFAULT_TREND_QUERY_TIMEOUT_MS
+  );
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: trendQueryTimeoutMs,
+    statementTimeoutMs: trendQueryTimeoutMs
+  });
   options.onProgress?.("connecting");
   await client.connect();
 
@@ -1584,11 +1602,7 @@ export async function recomputeThemeTrends(
       `upserting ${trendRows.length} trend rows for stored range ${storageStartDate} to ${asOfDate}`
     );
     await client.query("begin");
-    await client.query(
-      `delete from theme_trends
-       where date between $1::date and $2::date`,
-      [storageStartDate, asOfDate]
-    );
+    await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
     await insertTrendRows(client, trendRows, options.onProgress);
     await client.query("commit");
     options.onProgress?.("trend rows committed");
@@ -2093,6 +2107,27 @@ async function insertTrendRows(
     );
 
     onProgress?.(`inserted ${Math.min(index + batch.length, rows.length)}/${rows.length} trend rows`);
+  }
+}
+
+async function deleteTrendRowsForDateRange(
+  client: DbClient,
+  startDate: string,
+  endDate: string,
+  onProgress?: (message: string) => void
+) {
+  const dates = enumerateDates(startDate, endDate);
+
+  for (const [index, date] of dates.entries()) {
+    await client.query(
+      `delete from theme_trends
+       where date = $1::date`,
+      [date]
+    );
+
+    if ((index + 1) % 10 === 0 || index === dates.length - 1) {
+      onProgress?.(`deleted trend rows for ${index + 1}/${dates.length} stored dates`);
+    }
   }
 }
 
