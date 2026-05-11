@@ -11,7 +11,7 @@ services:
     plan: starter
     buildCommand: npm install && npm run build --workspace @market-themes/web
     startCommand: npm run start --workspace @market-themes/web
-    healthCheckPath: /
+    healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
         fromDatabase:
