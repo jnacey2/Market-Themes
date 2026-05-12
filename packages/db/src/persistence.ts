@@ -344,7 +344,7 @@ export async function selectDocumentsForAnalysis(
           and ar.analysis_type = $1
           and ar.model = $2
           and ar.prompt_version = $3
-        where d.source_id in ('sec-filings', 'fmp-transcripts')
+        where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
           and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
           and exists (
             select 1
@@ -996,7 +996,7 @@ export async function repairMissingDocumentTextsFromChunks(
         select d.id
         from documents d
         left join document_texts dt on dt.document_id = d.id
-        where d.source_id in ('sec-filings', 'fmp-transcripts')
+        where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
           and dt.document_id is null
           and not (
             d.source_id = 'sec-filings'
@@ -1034,7 +1034,7 @@ export async function repairMissingDocumentTextsFromChunks(
       `select count(*)::text as count
        from documents d
        left join document_texts dt on dt.document_id = d.id
-       where d.source_id in ('sec-filings', 'fmp-transcripts')
+       where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
         and dt.document_id is null
         and not (
           d.source_id = 'sec-filings'
@@ -1093,7 +1093,7 @@ export async function getAnalysisStatus(
             where dt.document_id = d.id
           ) as has_full_text
         from documents d
-        where d.source_id in ('sec-filings', 'fmp-transcripts')
+        where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
           and not (
             d.source_id = 'sec-filings'
             and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
