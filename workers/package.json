@@ -11,6 +11,8 @@
     "fmp:smoke": "node --import tsx src/jobs/fmp-smoke.ts",
     "fmp:backfill": "node --import tsx src/jobs/fmp-backfill.ts",
     "fmp:poll": "node --import tsx src/jobs/fmp-poll.ts",
+    "fmp:news:poll": "node --import tsx src/jobs/fmp-news-poll.ts",
+    "fmp:news:backfill": "node --import tsx src/jobs/fmp-news-backfill.ts",
     "claude:extract:smoke": "node --import tsx src/jobs/claude-extract-smoke.ts",
     "claude:extract:backfill": "node --import tsx src/jobs/claude-extract-backfill.ts",
     "repair:document-texts": "node --import tsx src/jobs/repair-document-texts.ts",

@@ -1,5 +1,6 @@
 import type { PersistableDocument, SourceClass } from "@market-themes/db";
 import { createSecFilingsConnector } from "./sec";
+import { createFmpNewsConnector } from "./fmp-news";
 
 export type RawDocument = PersistableDocument;
 
@@ -48,9 +49,5 @@ export const defaultConnectors: SourceConnector[] = [
     "transcript",
     "Earnings call transcript connector for licensed or public sources."
   ),
-  createPlaceholderConnector(
-    "credentialed-news",
-    "newspaper",
-    "Credentialed news connector with controlled scraping fallback."
-  )
+  createFmpNewsConnector()
 ];
