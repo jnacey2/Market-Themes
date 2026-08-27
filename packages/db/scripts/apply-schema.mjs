@@ -26,7 +26,18 @@ const client = new Client({
 
 try {
   await client.connect();
-  await client.query(schema);
+  await client.query("select pg_advisory_lock(hashtext('market_themes_schema_migrations'))");
+
+  const baseSchema = await client.query(
+    "select to_regclass('public.sources') as sources_table"
+  );
+  if (!baseSchema.rows[0]?.sources_table) {
+    console.log("Applying base schema to a new database.");
+    await client.query(schema);
+  } else {
+    console.log("Base schema already exists; skipping schema replay.");
+  }
+
   await client.query(`
     create table if not exists schema_migrations (
       name text primary key,
@@ -46,20 +57,41 @@ try {
     }
 
     const sql = readFileSync(join(migrationsPath, name), "utf8");
-    await client.query("begin");
-
-    try {
-      await client.query(sql);
-      await client.query("insert into schema_migrations (name) values ($1)", [name]);
-      await client.query("commit");
-      console.log(`Applied migration ${name}.`);
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
-    }
+    await applyMigration(client, name, sql);
   }
 
   console.log("Database schema and migrations applied successfully.");
 } finally {
+  await client
+    .query("select pg_advisory_unlock(hashtext('market_themes_schema_migrations'))")
+    .catch(() => undefined);
   await client.end();
+}
+
+async function applyMigration(client, name, sql, maxAttempts = 4) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await client.query("begin");
+
+    try {
+      await client.query("set local lock_timeout = '30s'");
+      await client.query("set local statement_timeout = '10min'");
+      await client.query(sql);
+      await client.query("insert into schema_migrations (name) values ($1)", [name]);
+      await client.query("commit");
+      console.log(`Applied migration ${name}.`);
+      return;
+    } catch (error) {
+      await client.query("rollback");
+      const retryable = error?.code === "40P01" || error?.code === "55P03";
+      if (!retryable || attempt === maxAttempts) {
+        throw error;
+      }
+
+      const delayMs = attempt * 1_000;
+      console.warn(
+        `Migration ${name} hit a transient database lock; retrying in ${delayMs}ms.`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
