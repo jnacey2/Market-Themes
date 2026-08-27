@@ -88,7 +88,7 @@ function extractItems(parsed: Record<string, unknown>): FeedItem[] {
 }
 
 function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument | null {
-  const title = text(item.title);
+  const title = cleanHtml(text(item.title));
   const url = text(item.link) || text(item.guid);
   const publishedAt = normalizeDate(item.pubDate ?? item.published ?? item.updated);
   const body = cleanHtml(
