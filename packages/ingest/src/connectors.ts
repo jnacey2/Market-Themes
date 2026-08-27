@@ -1,6 +1,8 @@
 import type { PersistableDocument, SourceClass } from "@market-themes/db";
 import { createSecFilingsConnector } from "./sec";
 import { createFmpNewsConnector } from "./fmp-news";
+import { createCompanyIrConnectors, createOfficialSourceConnectors } from "./official-sources";
+import { createGdeltConnector } from "./gdelt";
 
 export type RawDocument = PersistableDocument;
 
@@ -39,15 +41,13 @@ export function createPlaceholderConnector(
 
 export const defaultConnectors: SourceConnector[] = [
   createSecFilingsConnector(),
-  createPlaceholderConnector(
-    "company-ir",
-    "press_release",
-    "Company investor-relations press release connector."
-  ),
+  ...createCompanyIrConnectors(),
+  ...createOfficialSourceConnectors(),
   createPlaceholderConnector(
     "earnings-transcripts",
     "transcript",
     "Earnings call transcript connector for licensed or public sources."
   ),
-  createFmpNewsConnector()
+  createFmpNewsConnector(),
+  createGdeltConnector()
 ];

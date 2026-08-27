@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@market-themes/db": "0.1.0"
+    "@market-themes/db": "0.1.0",
+    "fast-xml-parser": "^5.11.1"
   },
   "devDependencies": {
     "@types/node": "latest",

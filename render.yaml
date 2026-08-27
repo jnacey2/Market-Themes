@@ -289,20 +289,56 @@ services:
     runtime: node
     schedule: "15 */4 * * *"
     buildCommand: npm install
-    startCommand: npm run trends:recompute --workspace @market-themes/workers
+    startCommand: npm run pipeline --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: themes-postgres
           property: connectionString
       - key: TREND_LOOKBACK_DAYS
-        value: "120"
+        value: "365"
       - key: TREND_LOW_HISTORY_DAYS
-        value: "14"
+        value: "30"
       - key: TREND_STORAGE_DAYS
-        value: "45"
+        value: "365"
       - key: TREND_INSERT_BATCH_SIZE
         value: "250"
+      - key: PIPELINE_SKIP_INGEST
+        value: "true"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-5-20250929
+      - key: CLAUDE_PROMPT_VERSION
+        value: market_signal_extraction_v2
+      - key: CLAUDE_EXTRACTION_BATCH_SIZE
+        value: "25"
+      - key: CLAUDE_EXTRACTION_MAX_BATCHES
+        value: "4"
+      - key: CLAUDE_EXTRACTION_CONCURRENCY
+        value: "2"
+      - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
+        value: "600000"
+      - key: CLAUDE_STALE_RUN_MINUTES
+        value: "90"
+      - key: CLAUDE_ANALYSIS_MAX_ATTEMPTS
+        value: "5"
+      - key: CLAUDE_MAX_EVIDENCE_CHARS
+        value: "800"
+      - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
+        value: capital_markets
+      - key: THEME_NORMALIZATION_PROMPT_VERSION
+        value: theme_normalization_v3
+      - key: THEME_NORMALIZATION_BATCH_SIZE
+        value: "25"
+      - key: THEME_NORMALIZATION_MAX_BATCHES
+        value: "20"
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v1
+      - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
+        value: "10"
+      - key: NARRATIVE_CLASSIFICATION_MAX_BATCHES
+        value: "4"
 
   - type: cron
     name: poll-fmp-news

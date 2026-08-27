@@ -45,11 +45,17 @@ mix, and follow-up research questions for a market theme.
 - Postgres schema for sources, documents, chunks, entities, themes, signals,
   trends, storyboards, briefs, and alerts.
 - Analysis helpers for baseline-aware z-score scoring.
+- Ten versioned, curated narrative definitions with strict inclusion/exclusion guidance.
+- Corpus-normalized narrative observations and 7-day/30-day historical trend series.
+- Interactive Narrative Currents board, timeline drilldowns, and live storyboards.
 - Claude signal extraction for bounded SEC/FMP smoke runs.
 - Analysis inspection page for recent signals, evidence snippets, interpretations,
   and failed document runs.
 - Connector interfaces for source ingestion.
+- Official Federal Reserve, BLS, BEA, EIA, configurable company-IR RSS, and optional
+  GDELT discovery connectors.
 - Worker and cron job entrypoints.
+- A scheduled end-to-end pipeline with connector checkpoints and operations status.
 - `render.yaml` blueprint for Render deployment.
 
 ## Architecture
@@ -148,6 +154,15 @@ minimum evidence before promotion. A theme should rank highly when it has:
 
 New themes should start as emerging/unconfirmed and graduate into ranked alerts
 only after enough evidence, clustering stability, and baseline history.
+
+Curated narratives use a separate, stable measurement contract. Each active
+definition is evaluated against every eligible document and records both matches
+and non-matches. Daily density is the percentage of eligible unique documents
+matching the proposition, calculated per source class and then averaged so a
+high-volume feed cannot dominate the result. The UI reports publisher breadth
+and publisher-owner breadth separately to avoid treating syndicated copies as
+independent confirmation. Narrative movement compares adjacent windows; it
+measures attention, not agreement, sentiment, or predictive performance.
 
 ## Source Strategy
 
@@ -344,6 +359,9 @@ npm run claude:extract:smoke
 npm run claude:extract:backfill
 npm run themes:normalize
 npm run themes:normalize:backfill
+npm run narratives:classify
+npm run narrative-trends:recompute
+npm run pipeline
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
@@ -555,12 +573,13 @@ clustering behavior.
 
 ## Known Limitations
 
-- The main dashboard still uses mock storyboard data.
-- Claude signals are inspectable, but they do not yet power trend ranking or
-  storyboards.
+- The legacy mock storyboard fixtures remain for development compatibility, but
+  live storyboard routes use curated narrative observations and trends.
+- Narrative history is only meaningful after a representative historical
+  document backfill and classification run.
+- GDELT is discovery metadata only and is excluded from full-text classification.
+- Premium financial-news feeds require a separate license and credentials.
 - The copilot is a UI preview, not a live retrieval system yet.
-- Lint currently delegates to TypeScript checks; add ESLint before production
-  hardening.
 
 ## Repository
 

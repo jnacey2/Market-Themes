@@ -227,8 +227,13 @@ export async function persistDocuments(
       await upsertSource(client, document);
       const contentHash = document.contentHash ?? hashContent(document.body);
       const documentId = await resolveDocumentId(client, document.id, contentHash);
+      const nearDuplicateKey =
+        document.nearDuplicateKey ?? hashContent(normalizeDuplicateText(document.title));
 
-      if (!documentId) {
+      if (
+        !documentId ||
+        (await hasNearDuplicate(client, nearDuplicateKey, document.publishedAt))
+      ) {
         skippedDocuments += 1;
         continue;
       }
@@ -246,8 +251,16 @@ export async function persistDocuments(
           summary,
           retrieval_method,
           metadata,
-          content_hash
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          content_hash,
+          canonical_url,
+          publisher_id,
+          publisher_owner,
+          retention_policy,
+          near_duplicate_key
+        ) values (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+          $13, $14, $15, $16, $17
+        )
         on conflict (content_hash) do nothing
         returning id`,
         [
@@ -262,7 +275,12 @@ export async function persistDocuments(
           document.summary,
           document.retrievalMethod,
           JSON.stringify(document.metadata ?? {}),
-          contentHash
+          contentHash,
+          document.canonicalUrl ?? canonicalizeUrl(document.url),
+          document.publisherId ?? normalizePublisherId(document.publisher),
+          document.publisherOwner ?? normalizePublisherId(document.publisher),
+          document.retentionPolicy ?? "full_text",
+          nearDuplicateKey
         ]
       );
 
@@ -272,6 +290,10 @@ export async function persistDocuments(
       }
 
       insertedDocuments += 1;
+      if (document.retentionPolicy === "metadata_only") {
+        continue;
+      }
+
       await upsertDocumentText(client, documentId, document.body, "ingestion");
       const chunks = chunkText(document.body);
 
@@ -344,7 +366,7 @@ export async function selectDocumentsForAnalysis(
           and ar.analysis_type = $1
           and ar.model = $2
           and ar.prompt_version = $3
-        where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
+        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
           and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
           and exists (
             select 1
@@ -996,7 +1018,7 @@ export async function repairMissingDocumentTextsFromChunks(
         select d.id
         from documents d
         left join document_texts dt on dt.document_id = d.id
-        where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
+        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
           and dt.document_id is null
           and not (
             d.source_id = 'sec-filings'
@@ -1034,7 +1056,7 @@ export async function repairMissingDocumentTextsFromChunks(
       `select count(*)::text as count
        from documents d
        left join document_texts dt on dt.document_id = d.id
-       where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
+       where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
         and dt.document_id is null
         and not (
           d.source_id = 'sec-filings'
@@ -1093,7 +1115,7 @@ export async function getAnalysisStatus(
             where dt.document_id = d.id
           ) as has_full_text
         from documents d
-        where d.source_id in ('sec-filings', 'fmp-transcripts', 'fmp-news')
+        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
           and not (
             d.source_id = 'sec-filings'
             and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
@@ -2004,6 +2026,51 @@ export async function getIngestionStatus(
 
 export function hashContent(content: string) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+function normalizeDuplicateText(value: string) {
+  return value
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
+function canonicalizeUrl(value: string) {
+  try {
+    const url = new URL(value);
+    for (const key of [...url.searchParams.keys()]) {
+      if (key.startsWith("utm_") || ["ref", "source", "campaign"].includes(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+function normalizePublisherId(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+async function hasNearDuplicate(
+  client: DbClient,
+  nearDuplicateKey: string,
+  publishedAt: string
+) {
+  const result = await client.query(
+    `select 1
+     from documents
+     where near_duplicate_key = $1
+       and published_at between $2::timestamptz - interval '72 hours'
+                            and $2::timestamptz + interval '72 hours'
+     limit 1`,
+    [nearDuplicateKey, publishedAt]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 async function loadSignalsForTrendComputation(

@@ -1,10 +1,13 @@
 import Link from "next/link";
-import { getIngestionStatus } from "@market-themes/db";
+import { getIngestionStatus, getOperationsStatus } from "@market-themes/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function IngestionPage() {
-  const status = await getIngestionStatus();
+  const [status, operations] = await Promise.all([
+    getIngestionStatus(),
+    getOperationsStatus()
+  ]);
 
   return (
     <div className="shell">
@@ -79,6 +82,52 @@ export default async function IngestionPage() {
         />
       </section>
 
+      <section className="section">
+        <p className="eyebrow">Pipeline Operations</p>
+        <div className="grid four">
+          <OperationalMetric label="Analyzed" value={`${operations.analyzedDocuments}/${operations.totalDocuments}`} />
+          <OperationalMetric label="Extraction backlog" value={String(operations.extractionBacklog)} />
+          <OperationalMetric label="Normalization backlog" value={String(operations.normalizationBacklog)} />
+          <OperationalMetric label="Latest trend" value={formatDate(operations.latestNarrativeTrendDate ?? operations.latestTrendDate)} />
+        </div>
+      </section>
+
+      <section className="section grid two">
+        <div className="panel">
+          <p className="eyebrow">Connector Health</p>
+          <div className="grid">
+            {operations.connectors.length === 0 ? (
+              <p>No connector checkpoints have been recorded yet.</p>
+            ) : operations.connectors.map((connector) => (
+              <div className="metric" key={connector.connectorId}>
+                <span>{connector.connectorId}</span>
+                <strong>{connector.lastError ? "Needs attention" : "Healthy"}</strong>
+                <p>
+                  Last success {formatDate(connector.lastSuccessAt)} · inserted{" "}
+                  {connector.documentsInserted}
+                </p>
+                {connector.lastError ? <p className="error-text">{connector.lastError}</p> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="panel">
+          <p className="eyebrow">Recent Pipeline Runs</p>
+          <div className="grid">
+            {operations.recentRuns.length === 0 ? (
+              <p>No pipeline runs have been recorded yet.</p>
+            ) : operations.recentRuns.slice(0, 8).map((run) => (
+              <div className="metric" key={run.id}>
+                <span>{run.stage} · {formatDate(run.startedAt)}</span>
+                <strong>{run.status}</strong>
+                <p>{run.processedCount} processed · {run.failedCount} failed</p>
+                {run.errorMessage ? <p className="error-text">{run.errorMessage}</p> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className="section grid two">
         <div className="panel">
           <p className="eyebrow">Source counts</p>
@@ -102,6 +151,15 @@ export default async function IngestionPage() {
           <div className="copilot-box">npm run sec:backfill</div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function OperationalMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="panel">
+      <span className="label">{label}</span>
+      <h2>{value}</h2>
     </div>
   );
 }
