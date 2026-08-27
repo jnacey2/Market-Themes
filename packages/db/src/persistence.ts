@@ -1556,6 +1556,7 @@ export async function recomputeThemeTrends(
     options.onProgress?.(`grouped ${themes.size} themes`);
     let lowHistoryRows = 0;
     let trendRowsWritten = 0;
+    let themesStored = 0;
     const latestTrends: TrendSummary[] = [];
     await client.query("begin");
     await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
@@ -1623,9 +1624,12 @@ export async function recomputeThemeTrends(
 
       await insertTrendRows(client, themeTrendRows);
       trendRowsWritten += themeTrendRows.length;
-      options.onProgress?.(
-        `stored ${trendRowsWritten} trend rows across processed themes`
-      );
+      themesStored += 1;
+      if (themesStored % 25 === 0 || themesStored === themes.size) {
+        options.onProgress?.(
+          `stored ${trendRowsWritten} trend rows for ${themesStored}/${themes.size} themes`
+        );
+      }
     }
 
     await client.query("commit");
