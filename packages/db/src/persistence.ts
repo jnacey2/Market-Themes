@@ -180,7 +180,9 @@ export function createDatabaseClient(
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required.");
   }
-  const queryTimeoutMs = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS;
+  const queryTimeoutMs =
+    options.queryTimeoutMs ??
+    Number(process.env.DB_QUERY_TIMEOUT_MS ?? DEFAULT_QUERY_TIMEOUT_MS);
   const statementTimeoutMs = options.statementTimeoutMs ?? queryTimeoutMs;
 
   const client = new Client({
@@ -1233,7 +1235,15 @@ export async function selectThemeGroupsForNormalization(
   options: SelectThemeGroupsOptions,
   databaseUrl = process.env.DATABASE_URL
 ): Promise<ThemeGroupForNormalization[]> {
-  const client = createDatabaseClient(databaseUrl);
+  const normalizationQueryTimeoutMs = Number(
+    process.env.THEME_NORMALIZATION_QUERY_TIMEOUT_MS ??
+      process.env.DB_QUERY_TIMEOUT_MS ??
+      120_000
+  );
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: normalizationQueryTimeoutMs,
+    statementTimeoutMs: normalizationQueryTimeoutMs
+  });
   await client.connect();
 
   try {
@@ -1245,28 +1255,31 @@ export async function selectThemeGroupsForNormalization(
       affected_entities: string[];
       evidence_snippet: string;
     }>(
-      `with selected_themes as (
+      `with unmapped_themes as (
         select
           t.id,
           t.label,
-          t.description,
-          signal_stats.signal_count,
-          signal_stats.latest_extracted_at
+          t.description
         from themes t
-        left join theme_mappings tm
-          on tm.extracted_theme_id = t.id
-          and tm.prompt_version = $1
-        join lateral (
-          select
-            count(*)::int as signal_count,
-            max(s.extracted_at) as latest_extracted_at
-          from signals s
-          where s.theme_id = t.id
-        ) signal_stats on true
-        where tm.id is null
-          and signal_stats.signal_count > 0
-          and coalesce(t.theme_level, 'extracted') = 'extracted'
-        order by signal_stats.signal_count desc, signal_stats.latest_extracted_at desc
+        where coalesce(t.theme_level, 'extracted') = 'extracted'
+          and not exists (
+            select 1
+            from theme_mappings tm
+            where tm.extracted_theme_id = t.id
+              and tm.prompt_version = $1
+          )
+      ),
+      selected_themes as (
+        select
+          ut.id,
+          ut.label,
+          ut.description,
+          count(*)::int as signal_count,
+          max(s.extracted_at) as latest_extracted_at
+        from unmapped_themes ut
+        join signals s on s.theme_id = ut.id
+        group by ut.id, ut.label, ut.description
+        order by signal_count desc, latest_extracted_at desc
         limit $2
       )
       select
