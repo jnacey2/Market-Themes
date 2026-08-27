@@ -3,7 +3,7 @@ import { isAuthorized } from "./lib/ops-auth";
 
 const PROTECTED_PATHS = ["/analysis", "/ingestion", "/theme-mappings", "/api/backfill"];
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (!PROTECTED_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {
     return NextResponse.next();
   }

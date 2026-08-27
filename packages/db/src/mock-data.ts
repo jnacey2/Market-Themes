@@ -20,6 +20,8 @@ export const storyboards: Storyboard[] = [
       press_release: 11,
       transcript: 42,
       newspaper: 24,
+      government: 0,
+      central_bank: 0,
       manual: 5
     },
     trend: [
@@ -82,6 +84,8 @@ export const storyboards: Storyboard[] = [
       press_release: 15,
       transcript: 51,
       newspaper: 19,
+      government: 0,
+      central_bank: 0,
       manual: 5
     },
     trend: [
@@ -144,6 +148,8 @@ export const storyboards: Storyboard[] = [
       press_release: 8,
       transcript: 46,
       newspaper: 9,
+      government: 0,
+      central_bank: 0,
       manual: 3
     },
     trend: [

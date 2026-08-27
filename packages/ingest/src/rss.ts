@@ -55,9 +55,8 @@ export function createRssConnector(config: RssFeedConfig): SourceConnector {
 
       return items
         .map((item) => toDocument(config, item))
-        .filter((document): document is PersistableDocument => {
-          return Boolean(document) && new Date(document.publishedAt).getTime() >= cutoff;
-        });
+        .filter((document): document is PersistableDocument => document !== null)
+        .filter((document) => new Date(document.publishedAt).getTime() >= cutoff);
     }
   };
 }

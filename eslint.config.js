@@ -14,6 +14,12 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    files: ["**/*.mjs"],
+    languageOptions: {
+      globals: globals.node
+    }
+  },
+  {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       globals: {
@@ -23,6 +29,7 @@ export default tseslint.config(
     },
     rules: {
       "no-undef": "off",
+      "preserve-caught-error": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
     }

@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.9.1",
     "globals": "^17.11.0",
     "tsx": "latest",
@@ -40,5 +41,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "esbuild": "$esbuild"
   }
 }
