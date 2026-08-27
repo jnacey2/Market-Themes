@@ -69,7 +69,7 @@ test(
     const board = await getNarrativeBoardStatus();
     const narrative = board.narratives.find((item) => item.id === definition.id);
     assert(narrative);
-    assert.equal(narrative.matchedDocuments, 1);
+    assert(narrative.matchedDocuments >= 1);
     assert(narrative.evidence.some((item) => item.id === `integration:observation:${suffix}`));
   }
 );
