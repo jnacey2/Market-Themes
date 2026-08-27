@@ -308,6 +308,10 @@ services:
         value: "true"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: THEME_NORMALIZATION_QUERY_TIMEOUT_MS
+        value: "120000"
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
