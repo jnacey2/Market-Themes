@@ -220,12 +220,16 @@ function stockNewsToDocument(
     sourceClass: "newspaper",
     title,
     publisher,
+    publisherId: normalizePublisher(publisher),
+    publisherOwner: normalizePublisher(publisher),
     url,
+    canonicalUrl: canonicalizeUrl(url),
     publishedAt,
     tickers: [ticker],
     summary: title,
     body,
     retrievalMethod: "api",
+    retentionPolicy: "full_text",
     contentHash,
     metadata: {
       ticker,
@@ -254,12 +258,16 @@ function generalNewsToDocument(item: FmpGeneralNewsItem): PersistableDocument | 
     sourceClass: "newspaper",
     title,
     publisher,
+    publisherId: normalizePublisher(publisher),
+    publisherOwner: normalizePublisher(publisher),
     url,
+    canonicalUrl: canonicalizeUrl(url),
     publishedAt,
     tickers: [],
     summary: title,
     body,
     retrievalMethod: "api",
+    retentionPolicy: "full_text",
     contentHash,
     metadata: {
       site: item.site,
@@ -354,6 +362,25 @@ function parseTickers(value: string | undefined) {
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
+}
+
+function normalizePublisher(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function canonicalizeUrl(value: string) {
+  try {
+    const url = new URL(value);
+    for (const key of [...url.searchParams.keys()]) {
+      if (key.startsWith("utm_") || ["ref", "source", "campaign"].includes(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return value;
+  }
 }
 
 function sleep(ms: number) {

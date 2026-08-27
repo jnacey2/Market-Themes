@@ -2,10 +2,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   getThemeDetailStatus,
+  getNarrativeDetailStatus,
+  type NarrativeTrendSummary,
   type ThemeDetailStatus,
   type ThemeTrendPoint,
   type TrendSummary
 } from "@market-themes/db";
+import { NarrativeExplorer } from "../../../components/narratives/NarrativeExplorer";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +20,12 @@ type ThemePageProps = {
 
 export default async function ThemeDetailPage({ params }: ThemePageProps) {
   const { themeId } = await params;
+  const narrative = await getNarrativeDetailStatus(decodeURIComponent(themeId));
+
+  if (narrative) {
+    return <NarrativeDetailPage narrative={narrative} />;
+  }
+
   const detail = await getThemeDetailStatus(decodeURIComponent(themeId));
 
   if (detail.databaseConfigured && !detail.theme) {
@@ -143,6 +152,71 @@ export default async function ThemeDetailPage({ params }: ThemePageProps) {
       </section>
     </div>
   );
+}
+
+function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }) {
+  return (
+    <div className="shell wide-shell">
+      <nav className="nav">
+        <Link className="brand" href="/">Market Themes</Link>
+        <div className="nav-links">
+          <Link href="/trends">Narrative Currents</Link>
+          <Link href="/ingestion">Operations</Link>
+        </div>
+      </nav>
+
+      <section className="hero narrative-detail-hero">
+        <div>
+          <p className="eyebrow">{narrative.category} · Version {narrative.version}</p>
+          <h1>{narrative.name}</h1>
+          <p className="lede">{narrative.proposition}</p>
+          <div className="pill-row">
+            <span className="pill">{narrative.percentileRank}th percentile</span>
+            <span className="pill">z {narrative.zScore.toFixed(1)}</span>
+            <span className="pill">{narrative.publisherOwnerBreadth} independent owners</span>
+            {narrative.lowHistory ? <span className="pill warning-pill">Low history</span> : null}
+          </div>
+          <div className="button-row">
+            <Link className="button" href={`/storyboards/${encodeURIComponent(narrative.slug)}`}>
+              Open live storyboard
+            </Link>
+          </div>
+        </div>
+        <div className="panel">
+          <p className="eyebrow">Current signal</p>
+          <div className="metric-row">
+            <Metric label="Density" value={narrative.density.toFixed(1)} />
+            <Metric label="7d change" value={signedMetric(narrative.change)} />
+            <Metric label="Acceleration" value={signedMetric(narrative.acceleration)} />
+          </div>
+          <p>
+            {narrative.matchedDocuments} matched documents from{" "}
+            {narrative.publisherBreadth} publishers and {narrative.entityBreadth} entities.
+          </p>
+        </div>
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">Density vs historical baseline</p>
+        <NarrativeExplorer narrative={narrative} />
+      </section>
+
+      <section className="section grid two">
+        <div className="panel">
+          <p className="eyebrow">Included framing</p>
+          <p>{narrative.inclusionGuidance}</p>
+        </div>
+        <div className="panel">
+          <p className="eyebrow">Excluded framing</p>
+          <p>{narrative.exclusionGuidance}</p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function signedMetric(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
 }
 
 function TrendPanel({ title, trend }: { title: string; trend: TrendSummary | null }) {

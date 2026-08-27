@@ -11,9 +11,11 @@
   "scripts": {
     "dev": "npm run dev --workspace @market-themes/web",
     "build": "npm run build --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "eslint .",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "node --import tsx --test packages/*/src/*.test.ts apps/web/lib/*.test.ts",
     "worker": "npm run start --workspace @market-themes/workers",
+    "pipeline": "npm run pipeline --workspace @market-themes/workers",
     "sec:smoke": "npm run sec:smoke --workspace @market-themes/workers",
     "sec:backfill": "npm run sec:backfill --workspace @market-themes/workers",
     "fmp:smoke": "npm run fmp:smoke --workspace @market-themes/workers",
@@ -21,13 +23,26 @@
     "fmp:poll": "npm run fmp:poll --workspace @market-themes/workers",
     "claude:extract:smoke": "npm run claude:extract:smoke --workspace @market-themes/workers",
     "claude:extract:backfill": "npm run claude:extract:backfill --workspace @market-themes/workers",
+    "narratives:classify": "npm run narratives:classify --workspace @market-themes/workers",
+    "narrative-trends:recompute": "npm run narrative-trends:recompute --workspace @market-themes/workers",
     "repair:document-texts": "npm run repair:document-texts --workspace @market-themes/workers",
     "themes:normalize": "npm run themes:normalize --workspace @market-themes/workers",
     "themes:normalize:backfill": "npm run themes:normalize:backfill --workspace @market-themes/workers",
     "db:schema": "node packages/db/scripts/print-schema.mjs",
     "db:apply": "node packages/db/scripts/apply-schema.mjs"
   },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.9.1",
+    "globals": "^17.11.0",
+    "tsx": "latest",
+    "typescript-eslint": "^8.68.0"
+  },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "esbuild": "$esbuild"
   }
 }

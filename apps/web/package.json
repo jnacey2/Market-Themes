@@ -14,7 +14,7 @@
     "@market-themes/analysis": "0.1.0",
     "@market-themes/db": "0.1.0",
     "@market-themes/ingest": "0.1.0",
-    "next": "latest",
+    "next": "^16.3.3",
     "react": "latest",
     "react-dom": "latest"
   },

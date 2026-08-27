@@ -5,6 +5,8 @@ export type SourceClass =
   | "press_release"
   | "transcript"
   | "newspaper"
+  | "government"
+  | "central_bank"
   | "manual";
 
 export type Document = {
@@ -24,6 +26,11 @@ export type PersistableDocument = Document & {
   body: string;
   retrievalMethod: "api" | "rss" | "credentialed" | "scrape" | "manual";
   contentHash?: string;
+  canonicalUrl?: string;
+  publisherId?: string;
+  publisherOwner?: string;
+  retentionPolicy?: "full_text" | "snippet" | "metadata_only";
+  nearDuplicateKey?: string;
 };
 
 export type PersistDocumentsResult = {
@@ -337,6 +344,126 @@ export type IngestionStatus = {
     category: string;
     count: number;
   }>;
+};
+
+export type ConnectorCheckpointSummary = {
+  connectorId: string;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastDocumentAt: string | null;
+  lastError: string | null;
+  documentsFetched: number;
+  documentsInserted: number;
+};
+
+export type PipelineRunSummary = {
+  id: string;
+  stage: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  processedCount: number;
+  failedCount: number;
+  estimatedCostUsd: number | null;
+  errorMessage: string | null;
+};
+
+export type OperationsStatus = {
+  databaseConfigured: boolean;
+  latestDocumentAt: string | null;
+  totalDocuments: number;
+  analyzedDocuments: number;
+  extractionBacklog: number;
+  normalizationBacklog: number;
+  latestTrendDate: string | null;
+  latestNarrativeTrendDate: string | null;
+  connectors: ConnectorCheckpointSummary[];
+  recentRuns: PipelineRunSummary[];
+};
+
+export type NarrativeDefinition = {
+  id: string;
+  slug: string;
+  version: number;
+  name: string;
+  proposition: string;
+  category: string;
+  inclusionGuidance: string;
+  exclusionGuidance: string;
+  positiveExamples: string[];
+  negativeExamples: string[];
+  status: string;
+};
+
+export type NarrativeObservationInput = {
+  id: string;
+  narrativeDefinitionId: string;
+  documentId: string;
+  matched: boolean;
+  matchScore: number;
+  stance: ToneDirection;
+  riskTone: number;
+  bullishTone: number;
+  evidenceSnippet: string;
+  interpretation: string;
+  affectedEntities: string[];
+  model: string;
+  promptVersion: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type NarrativeTrendPoint = {
+  date: string;
+  density: number;
+  baselineMean: number;
+  zScore: number;
+  percentileRank: number;
+  change: number;
+  acceleration: number;
+  riskTone: number;
+  bullishTone: number;
+};
+
+export type NarrativeEvidence = {
+  id: string;
+  title: string;
+  publisher: string;
+  publishedAt: string;
+  url: string;
+  sourceClass: SourceClass;
+  stance: ToneDirection;
+  evidenceSnippet: string;
+  interpretation: string;
+  affectedEntities: string[];
+  matchScore: number;
+};
+
+export type NarrativeTrendSummary = NarrativeDefinition & {
+  trendWindow: TrendWindow;
+  latestDate: string | null;
+  density: number;
+  baselineMean: number;
+  zScore: number;
+  percentileRank: number;
+  change: number;
+  acceleration: number;
+  riskTone: number;
+  bullishTone: number;
+  eligibleDocuments: number;
+  matchedDocuments: number;
+  publisherBreadth: number;
+  publisherOwnerBreadth: number;
+  sourceClassBreadth: number;
+  entityBreadth: number;
+  lowHistory: boolean;
+  history: NarrativeTrendPoint[];
+  evidence: NarrativeEvidence[];
+};
+
+export type NarrativeBoardStatus = {
+  databaseConfigured: boolean;
+  latestDate: string | null;
+  narratives: NarrativeTrendSummary[];
 };
 
 export type EvidenceCard = {

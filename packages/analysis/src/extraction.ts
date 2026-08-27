@@ -26,21 +26,6 @@ export type ExtractSignalsOptions = {
   maxEvidenceChars?: number;
 };
 
-type ClaudeSignal = {
-  rawThemeLabel: string;
-  canonicalThemeLabel: string;
-  themeDescription: string;
-  stance: ToneDirection;
-  riskTone: number;
-  bullishTone: number;
-  confidence: number;
-  affectedEntities: string[];
-  evidenceSnippet: string;
-  interpretation: string;
-  sectionLabel?: string | null;
-  speaker?: string | null;
-};
-
 export async function extractSignalsFromDocument(
   document: AnalysisDocument,
   options: ExtractSignalsOptions = {}

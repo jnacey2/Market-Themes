@@ -1,125 +1,99 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { storyboards } from "@market-themes/db";
+import { getNarrativeDetailStatus } from "@market-themes/db";
+import { NarrativeExplorer } from "../../../components/narratives/NarrativeExplorer";
 
-type StoryboardPageProps = {
-  params: {
-    id: string;
-  };
-};
+export const dynamic = "force-dynamic";
 
-export function generateStaticParams() {
-  return storyboards.map((storyboard) => ({ id: storyboard.id }));
-}
+export default async function StoryboardPage({
+  params
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const narrative = await getNarrativeDetailStatus(decodeURIComponent(id));
 
-export default function StoryboardPage({ params }: StoryboardPageProps) {
-  const storyboard = storyboards.find((item) => item.id === params.id);
-
-  if (!storyboard) {
+  if (!narrative) {
     notFound();
   }
 
-  const maxIntensity = Math.max(...storyboard.trend.map((point) => point.intensity));
+  const direction = narrative.change > 0 ? "rising" : narrative.change < 0 ? "fading" : "steady";
+  const breadth =
+    narrative.publisherOwnerBreadth >= 3
+      ? "across several independent publisher groups"
+      : "with limited independent-source confirmation";
+  const whyUnusual = narrative.lowHistory
+    ? "The series does not yet have enough history for a reliable unusualness judgment."
+    : `The current reading is in the ${narrative.percentileRank}th percentile of its own history with a z-score of ${narrative.zScore.toFixed(1)}.`;
 
   return (
-    <div className="shell">
+    <div className="shell wide-shell">
       <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
+        <Link className="brand" href="/">Market Themes</Link>
         <div className="nav-links">
-          <Link href="/">Dashboard</Link>
+          <Link href="/trends">Narrative Currents</Link>
+          <Link href={`/themes/${encodeURIComponent(narrative.id)}`}>Data view</Link>
         </div>
       </nav>
 
       <section className="hero">
         <div>
-          <p className="eyebrow">Storyboard</p>
-          <h1>{storyboard.theme}</h1>
-          <p className="lede">{storyboard.narrative}</p>
-          <div className="pill-row">
-            {storyboard.affectedEntities.map((entity) => (
-              <span className="pill" key={entity}>
-                {entity}
-              </span>
-            ))}
-          </div>
+          <p className="eyebrow">Live Storyboard · {narrative.category}</p>
+          <h1>{narrative.name}</h1>
+          <p className="lede">
+            This narrative is {direction} {breadth}. Current normalized density is{" "}
+            {narrative.density.toFixed(1)}, a {signed(narrative.change)} change from
+            the prior seven-day window.
+          </p>
+          <p className="synthesis-disclosure">
+            System synthesis derived from measured observations. Evidence and model
+            interpretations are separated below.
+          </p>
         </div>
         <div className="panel">
           <p className="eyebrow">Why this is unusual</p>
-          <p>{storyboard.whyUnusual}</p>
+          <p>{whyUnusual}</p>
           <div className="metric-row">
-            <div className="metric">
-              <span>Z-score</span>
-              <strong>{storyboard.zScore.toFixed(1)}</strong>
-            </div>
-            <div className="metric">
-              <span>Percentile</span>
-              <strong>{storyboard.percentileRank}</strong>
-            </div>
-            <div className="metric">
-              <span>Confidence</span>
-              <strong>{storyboard.confidence}</strong>
-            </div>
+            <Metric label="Z-score" value={narrative.zScore.toFixed(1)} />
+            <Metric label="Percentile" value={String(narrative.percentileRank)} />
+            <Metric label="Owners" value={String(narrative.publisherOwnerBreadth)} />
           </div>
         </div>
       </section>
 
-      <section className="grid two">
-        <div className="panel">
-          <p className="eyebrow">Trend vs baseline</p>
-          <div className="chart" aria-label="Theme intensity chart">
-            {storyboard.trend.map((point) => (
-              <div
-                className="bar"
-                key={point.date}
-                style={{ height: `${(point.intensity / maxIntensity) * 100}%` }}
-                title={`${point.date}: ${point.intensity}`}
-              />
-            ))}
-          </div>
-        </div>
-        <div className="panel">
-          <p className="eyebrow">Source mix</p>
-          <div className="grid">
-            {Object.entries(storyboard.sourceMix).map(([sourceClass, value]) => (
-              <div className="metric" key={sourceClass}>
-                <span>{sourceClass.replace("_", " ")}</span>
-                <strong>{value}%</strong>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="section">
-        <p className="eyebrow">Evidence</p>
-        <div className="grid two">
-          {storyboard.evidence.map((evidence) => (
-            <article className="evidence-card" key={evidence.id}>
-              <span className="label">
-                {evidence.publisher} · {evidence.sourceClass.replace("_", " ")}
-              </span>
-              <h3>{evidence.title}</h3>
-              <p>{evidence.snippet}</p>
-              <a className="pill" href={evidence.url}>
-                Source link
-              </a>
-            </article>
-          ))}
-        </div>
+      <section className="panel">
+        <p className="eyebrow">Narrative movement and evidence</p>
+        <NarrativeExplorer narrative={narrative} />
       </section>
 
       <section className="section panel">
         <p className="eyebrow">What to investigate next</p>
-        <div className="grid">
-          {storyboard.followUpQuestions.map((question) => (
-            <div className="copilot-box" key={question}>
-              {question}
-            </div>
-          ))}
+        <div className="grid three">
+          {followUps(narrative.name, narrative.change, narrative.publisherOwnerBreadth).map(
+            (question) => <div className="copilot-box" key={question}>{question}</div>
+          )}
         </div>
       </section>
     </div>
   );
+}
+
+function followUps(name: string, change: number, owners: number) {
+  return [
+    `Which entities are driving the latest ${name} observations?`,
+    change >= 0
+      ? "Is the acceleration broadening across source classes or concentrated in one channel?"
+      : "Is the decline a genuine fade or a temporary lull in source coverage?",
+    owners < 3
+      ? "What independent evidence would confirm this early signal?"
+      : "Do independent publishers share the same framing and tone?"
+  ];
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function signed(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
 }
