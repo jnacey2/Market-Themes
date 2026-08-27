@@ -13,6 +13,7 @@
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "node --import tsx --test \"packages/**/*.test.ts\" \"apps/**/*.test.ts\" \"workers/**/*.test.ts\"",
     "worker": "npm run start --workspace @market-themes/workers",
     "sec:smoke": "npm run sec:smoke --workspace @market-themes/workers",
     "sec:backfill": "npm run sec:backfill --workspace @market-themes/workers",
@@ -26,6 +27,9 @@
     "themes:normalize:backfill": "npm run themes:normalize:backfill --workspace @market-themes/workers",
     "db:schema": "node packages/db/scripts/print-schema.mjs",
     "db:apply": "node packages/db/scripts/apply-schema.mjs"
+  },
+  "devDependencies": {
+    "tsx": "latest"
   },
   "engines": {
     "node": ">=20"

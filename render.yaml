@@ -22,7 +22,7 @@ services:
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-5-20250929
       - key: CLAUDE_PROMPT_VERSION
-        value: market_signal_extraction_v1
+        value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
         value: "20"
       - key: CLAUDE_EXTRACTION_BATCH_SIZE
@@ -44,12 +44,16 @@ services:
       - key: BACKFILL_WORKER_POLL_INTERVAL_MS
         value: "45000"
       - key: THEME_NORMALIZATION_PROMPT_VERSION
-        value: theme_normalization_v2
+        value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
       - key: APP_BASE_URL
         sync: false
       - key: SESSION_SECRET
+        generateValue: true
+      - key: OPS_USERNAME
+        value: operator
+      - key: OPS_PASSWORD
         generateValue: true
       - key: SOURCE_CONFIG_JSON
         value: "{}"
@@ -104,7 +108,7 @@ services:
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-5-20250929
       - key: CLAUDE_PROMPT_VERSION
-        value: market_signal_extraction_v1
+        value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
         value: "20"
       - key: CLAUDE_EXTRACTION_BATCH_SIZE
@@ -126,7 +130,7 @@ services:
       - key: BACKFILL_WORKER_POLL_INTERVAL_MS
         value: "45000"
       - key: THEME_NORMALIZATION_PROMPT_VERSION
-        value: theme_normalization_v2
+        value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
       - key: SOURCE_CONFIG_JSON
@@ -202,7 +206,7 @@ services:
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-5-20250929
       - key: CLAUDE_PROMPT_VERSION
-        value: market_signal_extraction_v1
+        value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
         value: "20"
       - key: CLAUDE_EXTRACTION_BATCH_SIZE
@@ -222,7 +226,7 @@ services:
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
         value: capital_markets
       - key: THEME_NORMALIZATION_PROMPT_VERSION
-        value: theme_normalization_v2
+        value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
       - key: SOURCE_CONFIG_JSON
