@@ -1562,7 +1562,7 @@ export async function recomputeThemeTrends(
 
     for (const theme of themes.values()) {
       const themeTrendRows: TrendRowInput[] = [];
-      for (const date of enumerateDates(startDate, asOfDate)) {
+      for (const date of enumerateDates(storageStartDate, asOfDate)) {
         for (const trendWindow of windows) {
           const windowDays = trendWindowDays(trendWindow);
           const score = scoreTrendWindow(
@@ -1578,20 +1578,18 @@ export async function recomputeThemeTrends(
             lowHistoryRows += 1;
           }
 
-          if (date >= storageStartDate) {
-            themeTrendRows.push({
-              id: trendId(theme.themeId, trendWindow, date),
-              themeId: theme.themeId,
-              trendWindow,
-              date,
-              intensity: score.intensity,
-              baselineMean: score.baselineMean,
-              baselineStddev: score.baselineStddev,
-              zScore: score.zScore,
-              percentileRank: score.percentileRank,
-              sourceMix: score.sourceMix
-            });
-          }
+          themeTrendRows.push({
+            id: trendId(theme.themeId, trendWindow, date),
+            themeId: theme.themeId,
+            trendWindow,
+            date,
+            intensity: score.intensity,
+            baselineMean: score.baselineMean,
+            baselineStddev: score.baselineStddev,
+            zScore: score.zScore,
+            percentileRank: score.percentileRank,
+            sourceMix: score.sourceMix
+          });
 
           if (date === asOfDate) {
             latestTrends.push({
