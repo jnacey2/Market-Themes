@@ -31,6 +31,23 @@ test("rejects an unknown resume stage", () => {
   }
 });
 
+test("omits disabled stages before applying resume selection", () => {
+  const previous = process.env.PIPELINE_START_AT;
+  delete process.env.PIPELINE_START_AT;
+  try {
+    assert.deepEqual(
+      selectStages([
+        stages[0],
+        { name: "disabled", script: "disabled", enabled: () => false },
+        stages[2]
+      ]).map((stage) => stage.name),
+      ["extract", "trends"]
+    );
+  } finally {
+    restoreEnvironment("PIPELINE_START_AT", previous);
+  }
+});
+
 function restoreEnvironment(name: string, value: string | undefined) {
   if (value === undefined) {
     delete process.env[name];
