@@ -9,11 +9,37 @@ export async function startPipelineRun(stage: string, metadata: Record<string, u
 
   try {
     await client.query(
+      `update pipeline_runs
+       set status = 'failed',
+           completed_at = now(),
+           error_message = 'Superseded by a new pipeline run after the prior process stopped.'
+       where stage = $1 and status = 'running'`,
+      [stage]
+    );
+    await client.query(
       `insert into pipeline_runs (id, stage, status, metadata)
        values ($1, $2, 'running', $3::jsonb)`,
       [id, stage, JSON.stringify(metadata)]
     );
     return id;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function updatePipelineRunProgress(
+  id: string,
+  metadata: Record<string, unknown>
+) {
+  const client = createDatabaseClient();
+  await client.connect();
+  try {
+    await client.query(
+      `update pipeline_runs
+       set metadata = metadata || $2::jsonb
+       where id = $1`,
+      [id, JSON.stringify(metadata)]
+    );
   } finally {
     await client.end();
   }
@@ -119,8 +145,7 @@ export async function getOperationsStatus(
   await client.connect();
 
   try {
-    const [counts, connectors, runs] = await Promise.all([
-      client.query<{
+    const counts = await client.query<{
         latest_document_at: string | null;
         total_documents: string;
         analyzed_documents: string;
@@ -146,8 +171,8 @@ export async function getOperationsStatus(
                )) as normalization_backlog,
           (select max(date)::text from theme_trends) as latest_trend_date,
           (select max(date)::text from narrative_trends) as latest_narrative_trend_date`
-      ),
-      client.query<{
+      );
+    const connectors = await client.query<{
         connector_id: string;
         last_attempt_at: string | null;
         last_success_at: string | null;
@@ -160,8 +185,8 @@ export async function getOperationsStatus(
                 last_document_at::text, last_error, documents_fetched, documents_inserted
          from connector_checkpoints
          order by connector_id`
-      ),
-      client.query<{
+      );
+    const runs = await client.query<{
         id: string;
         stage: string;
         status: string;
@@ -177,8 +202,7 @@ export async function getOperationsStatus(
          from pipeline_runs
          order by started_at desc
          limit 20`
-      )
-    ]);
+      );
 
     const row = counts.rows[0];
     return {

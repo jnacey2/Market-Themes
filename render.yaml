@@ -10,6 +10,7 @@ services:
     runtime: node
     plan: starter
     buildCommand: npm install && npm run build --workspace @market-themes/web
+    preDeployCommand: npm run db:apply
     startCommand: npm run start --workspace @market-themes/web
     healthCheckPath: /api/health
     envVars:
@@ -300,11 +301,13 @@ services:
       - key: TREND_LOW_HISTORY_DAYS
         value: "30"
       - key: TREND_STORAGE_DAYS
-        value: "365"
+        value: "90"
       - key: TREND_INSERT_BATCH_SIZE
         value: "250"
       - key: PIPELINE_SKIP_INGEST
         value: "true"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL

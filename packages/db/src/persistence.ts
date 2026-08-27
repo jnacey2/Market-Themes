@@ -1555,11 +1555,15 @@ export async function recomputeThemeTrends(
     const themes = groupSignalsByTheme(signals, startDate, asOfDate);
     options.onProgress?.(`grouped ${themes.size} themes`);
     let lowHistoryRows = 0;
+    let trendRowsWritten = 0;
+    let themesStored = 0;
     const latestTrends: TrendSummary[] = [];
-    const trendRows: TrendRowInput[] = [];
+    await client.query("begin");
+    await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
 
     for (const theme of themes.values()) {
-      for (const date of enumerateDates(startDate, asOfDate)) {
+      const themeTrendRows: TrendRowInput[] = [];
+      for (const date of enumerateDates(storageStartDate, asOfDate)) {
         for (const trendWindow of windows) {
           const windowDays = trendWindowDays(trendWindow);
           const score = scoreTrendWindow(
@@ -1567,27 +1571,26 @@ export async function recomputeThemeTrends(
             date,
             windowDays,
             lowHistoryDays,
-            theme.trendLevel
+            theme.trendLevel,
+            startDate
           );
 
           if (score.lowHistory) {
             lowHistoryRows += 1;
           }
 
-          if (date >= storageStartDate) {
-            trendRows.push({
-              id: trendId(theme.themeId, trendWindow, date),
-              themeId: theme.themeId,
-              trendWindow,
-              date,
-              intensity: score.intensity,
-              baselineMean: score.baselineMean,
-              baselineStddev: score.baselineStddev,
-              zScore: score.zScore,
-              percentileRank: score.percentileRank,
-              sourceMix: score.sourceMix
-            });
-          }
+          themeTrendRows.push({
+            id: trendId(theme.themeId, trendWindow, date),
+            themeId: theme.themeId,
+            trendWindow,
+            date,
+            intensity: score.intensity,
+            baselineMean: score.baselineMean,
+            baselineStddev: score.baselineStddev,
+            zScore: score.zScore,
+            percentileRank: score.percentileRank,
+            sourceMix: score.sourceMix
+          });
 
           if (date === asOfDate) {
             latestTrends.push({
@@ -1618,20 +1621,23 @@ export async function recomputeThemeTrends(
           }
         }
       }
+
+      await insertTrendRows(client, themeTrendRows);
+      trendRowsWritten += themeTrendRows.length;
+      themesStored += 1;
+      if (themesStored % 25 === 0 || themesStored === themes.size) {
+        options.onProgress?.(
+          `stored ${trendRowsWritten} trend rows for ${themesStored}/${themes.size} themes`
+        );
+      }
     }
 
-    options.onProgress?.(
-      `upserting ${trendRows.length} trend rows for stored range ${storageStartDate} to ${asOfDate}`
-    );
-    await client.query("begin");
-    await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
-    await insertTrendRows(client, trendRows, options.onProgress);
     await client.query("commit");
     options.onProgress?.("trend rows committed");
 
     return {
       themesProcessed: themes.size,
-      trendRowsWritten: trendRows.length,
+      trendRowsWritten,
       lowHistoryRows,
       topTrends: latestTrends
         .sort((left, right) => right.zScore - left.zScore)
@@ -2199,7 +2205,6 @@ async function deleteTrendRowsForDateRange(
 }
 
 function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, endDate: string) {
-  const dates = enumerateDates(startDate, endDate);
   const themes = new Map<
     string,
     {
@@ -2218,30 +2223,15 @@ function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, end
         themeId: signal.themeId,
         themeLabel: signal.themeLabel,
         trendLevel: signal.trendLevel,
-        buckets: new Map(
-          dates.map((date) => [
-            date,
-            {
-              date,
-              baseIntensity: 0,
-              intensity: 0,
-              evidenceCount: 0,
-              documentIds: new Set<string>(),
-              sourceMix: {},
-              sourceClasses: new Set<SourceClass>(),
-              entities: new Set<string>()
-            }
-          ])
-        )
+        buckets: new Map()
       };
       themes.set(signal.themeId, theme);
     }
 
-    const bucket = theme.buckets.get(signal.signalDate);
-
-    if (!bucket) {
+    if (signal.signalDate < startDate || signal.signalDate > endDate) {
       continue;
     }
+    const bucket = getOrCreateTrendBucket(theme.buckets, signal.signalDate);
 
     bucket.baseIntensity += signal.scoreContribution;
     bucket.evidenceCount += 1;
@@ -2276,15 +2266,19 @@ function scoreTrendWindow(
   date: string,
   windowDays: number,
   lowHistoryDays: number,
-  trendLevel: "market" | "sector" | "unmapped"
+  trendLevel: "market" | "sector" | "unmapped",
+  startDate: string
 ) {
   const currentDates = enumerateDates(addDays(date, -(windowDays - 1)), date);
   const currentBuckets = currentDates.map((currentDate) => bucketForDate(buckets, currentDate));
   const currentSummary = summarizeBuckets(currentBuckets);
   const baselineEnd = addDays(currentDates[0], -1);
-  const baselineBuckets = Array.from(buckets.values()).filter(
-    (bucket) => bucket.date <= baselineEnd
-  );
+  const baselineBuckets =
+    baselineEnd < startDate
+      ? []
+      : enumerateDates(startDate, baselineEnd).map((baselineDate) =>
+          bucketForDate(buckets, baselineDate)
+        );
   const baselineValues = rollingWindowTotals(baselineBuckets, windowDays);
   const baselineMean = average(baselineValues);
   const rawStddev = standardDeviation(baselineValues, baselineMean);
@@ -2730,6 +2724,20 @@ function bucketForDate(buckets: Map<string, DailyTrendBucket>, date: string): Da
       entities: new Set<string>()
     }
   );
+}
+
+function getOrCreateTrendBucket(
+  buckets: Map<string, DailyTrendBucket>,
+  date: string
+) {
+  const existing = buckets.get(date);
+  if (existing) {
+    return existing;
+  }
+
+  const bucket = bucketForDate(buckets, date);
+  buckets.set(date, bucket);
+  return bucket;
 }
 
 function enumerateDates(startDate: string, endDate: string) {
