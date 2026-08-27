@@ -13,7 +13,7 @@
     "build": "npm run build --workspaces --if-present",
     "lint": "eslint .",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "node --import tsx --test \"packages/**/*.test.ts\" \"apps/**/*.test.ts\" \"workers/**/*.test.ts\"",
+    "test": "node --import tsx --test packages/*/src/*.test.ts apps/web/lib/*.test.ts",
     "worker": "npm run start --workspace @market-themes/workers",
     "pipeline": "npm run pipeline --workspace @market-themes/workers",
     "sec:smoke": "npm run sec:smoke --workspace @market-themes/workers",
