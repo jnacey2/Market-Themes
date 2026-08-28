@@ -23,6 +23,11 @@ const maxArticles = Number(process.env.PREMIUM_SCRAPER_MAX_ARTICLES ?? 5);
 const lookbackHours = Number(process.env.PREMIUM_SCRAPER_LOOKBACK_HOURS ?? 24);
 const rateLimitMs = Number(process.env.PREMIUM_SCRAPER_RATE_LIMIT_MS ?? 2_000);
 
+if (process.env.SCRAPING_ENABLED !== "true") {
+  console.log("[premium-scraper] SCRAPING_ENABLED is not true; exiting");
+  process.exit(0);
+}
+
 if (publisherIds.length === 0) {
   console.log("[premium-scraper] no publishers enabled");
   process.exit(0);
@@ -50,13 +55,12 @@ try {
 
     let context: BrowserContext | null = null;
     try {
+      const configuredUserAgent = process.env.PREMIUM_SCRAPER_USER_AGENT?.trim();
       context = await browser.newContext({
         storageState: decodeStorageState(encodedState) as Awaited<
           ReturnType<BrowserContext["storageState"]>
         >,
-        userAgent:
-          process.env.PREMIUM_SCRAPER_USER_AGENT ??
-          "MarketThemesResearch/1.0 (+https://themes-web.onrender.com)"
+        ...(configuredUserAgent ? { userAgent: configuredUserAgent } : {})
       });
       const discovered = await discoverArticles(profile);
       const documents: PersistableDocument[] = [];
@@ -67,6 +71,9 @@ try {
         try {
           documents.push(await scrapeArticle(page, article, profile));
         } catch (error) {
+          if (error instanceof PublisherAccessError) {
+            throw error;
+          }
           console.warn(
             `[premium-scraper] publisher=${profile.id} article=${article.url} skipped: ${
               error instanceof Error ? error.message : String(error)
@@ -149,18 +156,35 @@ async function scrapeArticle(
     waitUntil: "domcontentloaded",
     timeout: 45_000
   });
+  if (response && [401, 403, 429].includes(response.status())) {
+    throw new PublisherAccessError(
+      `Publisher returned HTTP ${response.status()}; session or rate limit requires attention.`
+    );
+  }
   if (!response?.ok()) {
     throw new Error(`Article returned HTTP ${response?.status() ?? "unknown"}.`);
   }
   if (!isAllowedPublisherUrl(page.url(), profile)) {
-    throw new Error("Article redirected outside the publisher allowlist.");
+    throw new PublisherAccessError(
+      "Article redirected outside the publisher allowlist; session may be expired."
+    );
+  }
+  if (
+    profile.id === "ft" &&
+    ((await response.headerValue("ft-access-decision"))?.toUpperCase() === "DENIED" ||
+      ["ABSENT", "EXPIRED", "REVOKED", "CONCURRENCY", "CORRUPT"].includes(
+        (await response.headerValue("ft-session-status"))?.toUpperCase() ?? ""
+      ))
+  ) {
+    throw new PublisherAccessError("Financial Times session is absent, expired, or denied.");
   }
 
   const snapshot = await readArticleSnapshot(page, profile);
   const body = normalizeParagraphs(snapshot.paragraphs);
-  if (body.length < 500) {
+  if (body.length < 500 || snapshot.paragraphs.length < 3) {
     const reason = sessionFailureReason(snapshot.pageText);
-    throw new Error(reason ?? "Article body was unavailable or too short.");
+    if (reason) throw new PublisherAccessError(reason);
+    throw new Error("Article body was unavailable, too short, or insufficiently structured.");
   }
 
   const canonicalUrl =
@@ -208,10 +232,19 @@ async function readArticleSnapshot(page: Page, profile: PremiumPublisherProfile)
   let paragraphs: string[] = [];
 
   for (const selector of profile.bodySelectors) {
-    const values = (await page.locator(selector).allTextContents())
+    const values = (await page.locator(selector).evaluateAll((elements) =>
+      elements
+        .filter(
+          (element) =>
+            !element.closest(
+              "aside, figure, figcaption, nav, [role='navigation'], [data-testid*='ad'], [data-qa*='ad']"
+            )
+        )
+        .map((element) => (element as HTMLElement).innerText)
+    ))
       .map((value) => value.trim())
       .filter((value) => value.length >= 20);
-    if (normalizeParagraphs(values).length >= 500) {
+    if (values.length >= 3 && normalizeParagraphs(values).length >= 500) {
       paragraphs = values;
       break;
     }
@@ -305,3 +338,5 @@ function newestDate(documents: PersistableDocument[]) {
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+class PublisherAccessError extends Error {}

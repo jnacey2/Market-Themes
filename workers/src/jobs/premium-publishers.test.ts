@@ -46,4 +46,15 @@ test("rejects credentialed, insecure, and lookalike article URLs", () => {
     isAllowedPublisherUrl("https://user:secret@www.wsj.com/finance/example", profile),
     false
   );
+  assert.equal(
+    isAllowedPublisherUrl("https://www.wsj.com/client/login", profile),
+    false
+  );
+  assert.equal(
+    isAllowedPublisherUrl(
+      "https://www.ft.com/content/d15851dc-9177-4bfe-9039-8d9994a2e4b3",
+      premiumPublisherProfiles.ft
+    ),
+    true
+  );
 });

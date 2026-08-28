@@ -380,7 +380,7 @@ services:
   - type: cron
     name: scrape-premium-publishers
     runtime: docker
-    plan: starter
+    plan: 1c-2g
     schedule: "45 */4 * * *"
     dockerfilePath: ./Dockerfile.scraper
     dockerCommand: npm run premium:scrape --workspace @market-themes/workers
@@ -391,14 +391,14 @@ services:
           property: connectionString
       - key: PREMIUM_PUBLISHERS
         value: ""
+      - key: SCRAPING_ENABLED
+        value: "false"
       - key: PREMIUM_SCRAPER_MAX_ARTICLES
         value: "5"
       - key: PREMIUM_SCRAPER_LOOKBACK_HOURS
         value: "24"
       - key: PREMIUM_SCRAPER_RATE_LIMIT_MS
         value: "2000"
-      - key: PREMIUM_SCRAPER_USER_AGENT
-        value: MarketThemesResearch/1.0 (+https://themes-web.onrender.com)
       - key: WSJ_STORAGE_STATE_B64
         sync: false
       - key: NYT_STORAGE_STATE_B64

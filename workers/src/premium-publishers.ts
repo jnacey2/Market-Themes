@@ -8,6 +8,7 @@ export type PremiumPublisherProfile = {
   sessionEnvKey: string;
   feedUrls: string[];
   allowedHosts: string[];
+  articlePathPatterns: RegExp[];
   bodySelectors: string[];
 };
 
@@ -26,8 +27,15 @@ export const premiumPublisherProfiles: Record<
     publisherOwner: "Dow Jones",
     loginUrl: "https://accounts.wsj.com/login",
     sessionEnvKey: "WSJ_STORAGE_STATE_B64",
-    feedUrls: ["https://feeds.a.dj.com/rss/RSSMarketsMain.xml"],
+    feedUrls: [
+      "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
+      "https://feeds.content.dowjones.io/public/rss/WSJcomUSBusiness"
+    ],
     allowedHosts: ["wsj.com"],
+    articlePathPatterns: [
+      /^\/articles\//,
+      /^\/(business|finance|economy|markets|tech)\//
+    ],
     bodySelectors: [
       "article [data-type='paragraph']",
       "article [data-testid='article-body'] p",
@@ -40,8 +48,13 @@ export const premiumPublisherProfiles: Record<
     publisherOwner: "The New York Times Company",
     loginUrl: "https://myaccount.nytimes.com/auth/login",
     sessionEnvKey: "NYT_STORAGE_STATE_B64",
-    feedUrls: ["https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"],
+    feedUrls: [
+      "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+      "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml",
+      "https://rss.nytimes.com/services/xml/rss/nyt/Dealbook.xml"
+    ],
     allowedHosts: ["nytimes.com"],
+    articlePathPatterns: [/^\/\d{4}\/\d{2}\/\d{2}\//],
     bodySelectors: [
       "section[name='articleBody'] p",
       "[data-testid='article-body'] p",
@@ -56,8 +69,11 @@ export const premiumPublisherProfiles: Record<
     sessionEnvKey: "WAPO_STORAGE_STATE_B64",
     feedUrls: ["https://feeds.washingtonpost.com/rss/business"],
     allowedHosts: ["washingtonpost.com"],
+    articlePathPatterns: [/^\/[a-z-]+\/\d{4}\/\d{2}\/\d{2}\//],
     bodySelectors: [
       "[data-qa='article-body'] p",
+      ".article-body p",
+      ".meteredContent p",
       "[data-testid='article-body'] p",
       "article p"
     ]
@@ -68,11 +84,18 @@ export const premiumPublisherProfiles: Record<
     publisherOwner: "The Financial Times Ltd",
     loginUrl: "https://accounts.ft.com/login",
     sessionEnvKey: "FT_STORAGE_STATE_B64",
-    feedUrls: ["https://www.ft.com/rss/home"],
+    feedUrls: [
+      "https://www.ft.com/markets?format=rss",
+      "https://www.ft.com/global-economy?format=rss",
+      "https://www.ft.com/companies?format=rss"
+    ],
     allowedHosts: ["ft.com"],
+    articlePathPatterns: [/^\/content\/[0-9a-f-]+$/i],
     bodySelectors: [
       "[data-component='article-body'] p",
+      "article.js-article__content-body p",
       ".article__content-body p",
+      ".n-content-body p",
       "article p"
     ]
   },
@@ -84,10 +107,14 @@ export const premiumPublisherProfiles: Record<
     sessionEnvKey: "BLOOMBERG_STORAGE_STATE_B64",
     feedUrls: [
       "https://feeds.bloomberg.com/markets/news.rss",
-      "https://feeds.bloomberg.com/economics/news.rss"
+      "https://feeds.bloomberg.com/economics/news.rss",
+      "https://feeds.bloomberg.com/business/news.rss",
+      "https://feeds.bloomberg.com/industries/news.rss"
     ],
     allowedHosts: ["bloomberg.com"],
+    articlePathPatterns: [/^\/(news|opinion)\/articles\//],
     bodySelectors: [
+      "[itemprop='articleBody'] p",
       "[data-component='body'] p",
       "[data-testid='article-body'] p",
       "article p"
@@ -123,7 +150,8 @@ export function isAllowedPublisherUrl(
       !url.password &&
       profile.allowedHosts.some(
         (host) => url.hostname === host || url.hostname.endsWith(`.${host}`)
-      )
+      ) &&
+      profile.articlePathPatterns.some((pattern) => pattern.test(url.pathname))
     );
   } catch {
     return false;

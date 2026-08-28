@@ -275,7 +275,8 @@ BLOOMBERG_STORAGE_STATE_B64
 ```
 
 Enable only captured publishers in `PREMIUM_PUBLISHERS`, for example
-`wsj,nyt,ft`. The `scrape-premium-publishers` Render cron runs in the pinned
+`wsj,nyt,ft`, and set `SCRAPING_ENABLED=true` only after validating every
+configured session. The `scrape-premium-publishers` Render cron runs in the pinned
 Playwright container, applies strict rate and article-count limits, and routes
 all documents through the same deduplication and evidence-review gates.
 
