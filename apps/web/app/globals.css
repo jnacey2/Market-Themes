@@ -544,6 +544,57 @@ h3 {
   color: var(--warning);
 }
 
+.review-queue {
+  display: grid;
+  gap: 18px;
+}
+
+.review-card {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.36fr);
+}
+
+.review-card blockquote {
+  border-left: 3px solid var(--accent);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.65;
+  margin-left: 0;
+  padding-left: 18px;
+}
+
+.review-controls {
+  border-left: 1px solid var(--line);
+  padding-left: 24px;
+}
+
+.review-controls label {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.review-controls textarea {
+  background: #080d1b;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 12px;
+  resize: vertical;
+}
+
+.review-approved {
+  border-color: rgba(134, 239, 172, 0.35);
+  color: var(--bullish);
+}
+
+.review-rejected {
+  border-color: rgba(251, 113, 133, 0.35);
+  color: var(--risk);
+}
+
 @media (max-width: 840px) {
   .hero,
   .grid.two,
@@ -564,6 +615,17 @@ h3 {
   .current-name,
   .sparkline {
     grid-column: 1 / -1;
+  }
+
+  .review-card {
+    grid-template-columns: 1fr;
+  }
+
+  .review-controls {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding-left: 0;
+    padding-top: 20px;
   }
 
   .nav {

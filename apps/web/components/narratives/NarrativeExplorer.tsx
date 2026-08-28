@@ -112,7 +112,9 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
             </span>
             <h3>{item.title}</h3>
             <blockquote>{item.evidenceSnippet}</blockquote>
-            <p><span className="synthesis-label">Model synthesis</span> {item.interpretation}</p>
+            <p className="label">
+              Reviewed evidence match · classifier score {item.matchScore.toFixed(0)}
+            </p>
             <a className="pill" href={item.url} rel="noreferrer" target="_blank">Open source</a>
           </article>
         ))}

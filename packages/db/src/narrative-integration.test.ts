@@ -6,7 +6,8 @@ import {
   getNarrativeBoardStatus,
   persistDocuments,
   persistNarrativeObservations,
-  recomputeNarrativeTrends
+  recomputeNarrativeTrends,
+  reviewNarrativeObservation
 } from "./index";
 
 test(
@@ -58,6 +59,34 @@ test(
         promptVersion: "integration-v1"
       }
     ]);
+
+    await recomputeNarrativeTrends({
+      asOfDate: "2026-08-27",
+      lookbackDays: 10,
+      lowHistoryDays: 2,
+      promptVersion: "integration-v1"
+    });
+    const pendingBoard = await getNarrativeBoardStatus(
+      process.env.DATABASE_URL,
+      "integration-v1"
+    );
+    assert(
+      pendingBoard.narratives.every(
+        (item) =>
+          !item.evidence.some(
+            (evidence) => evidence.id === `integration:observation:${suffix}`
+          )
+      )
+    );
+
+    await reviewNarrativeObservation(
+      {
+        id: `integration:observation:${suffix}`,
+        status: "approved",
+        note: "Approved by integration contract."
+      },
+      process.env.DATABASE_URL
+    );
 
     const recomputed = await recomputeNarrativeTrends({
       asOfDate: "2026-08-27",
