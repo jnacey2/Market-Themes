@@ -8,7 +8,7 @@ import type {
 import { resolvePublisherOwner } from "./publisher-owners";
 
 export function normalizePublicationFeedInput(input: {
-  name: unknown;
+  name?: unknown;
   url: unknown;
   platform: unknown;
   publisherOwner?: unknown;

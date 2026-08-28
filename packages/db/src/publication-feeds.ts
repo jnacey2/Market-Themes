@@ -140,6 +140,8 @@ export async function createPublicationFeed(
   }
 }
 
+export const upsertPublicationFeed = createPublicationFeed;
+
 export async function setPublicationFeedEnabled(
   id: string,
   enabled: boolean,

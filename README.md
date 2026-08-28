@@ -243,7 +243,8 @@ for publications you already pay for.
   Investment Process list in one click. The seed is `config/substacks.yaml`
   (names and URLs only).
 - Scrape by URL or from that YAML without a deploy:
-  `npm run substack:scrape -- --url https://moontower.substack.com`
+  `npm run substack:scrape -- --url https://moontower.substack.com`,
+  `npm run substack:scrape -- --config config/substacks.yaml`,
   or `npm run substack:scrape -- --all`. If `DATABASE_URL` is unset the CLI
   still fetches archive and post JSON.
 - Capture the session locally with `npm run substack:capture-session`, confirm a

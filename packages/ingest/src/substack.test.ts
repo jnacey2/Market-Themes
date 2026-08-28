@@ -18,6 +18,7 @@ import {
   stripSubstackChrome,
   SubstackAccessError,
   cookieHeaderForUrl,
+  loadSubstackSession,
   type CachedSubstackPost,
   type SubstackPost
 } from "./substack";
@@ -402,6 +403,24 @@ test("incremental refresh is idempotent once a watermark is stored", async () =>
   assert.equal(second.length, 0);
 });
 
+test("sends host-specific cookies to custom domains and not other publications", () => {
+  const session = {
+    cookies: [
+      { name: "substack.sid", value: "sid", domain: ".substack.com" },
+      { name: "connect.sid", value: "pine", domain: ".pinebrookcap.com" },
+      { name: "connect.sid", value: "other", domain: ".fidenzamacro.com" }
+    ]
+  };
+  const pinebrook = cookieHeaderForUrl(session, "https://www.pinebrookcap.com/api/v1/archive");
+  assert.match(pinebrook, /connect\.sid=pine/);
+  assert.doesNotMatch(pinebrook, /connect\.sid=other/);
+  assert.doesNotMatch(pinebrook, /substack\.sid=sid/);
+
+  const moontower = cookieHeaderForUrl(session, "https://moontower.substack.com/api/v1/posts/note");
+  assert.match(moontower, /substack\.sid=sid/);
+  assert.doesNotMatch(moontower, /connect\.sid=/);
+});
+
 test("selects the partition-matching cookie when several share a name", () => {
   const header = cookieHeaderForUrl(
     {
@@ -426,6 +445,10 @@ test("selects the partition-matching cookie when several share a name", () => {
   assert.match(header, /cf_clearance=substack/);
   assert.doesNotMatch(header, /cf_clearance=pinebrook/);
   assert.match(header, /substack\.sid=sid/);
+});
+
+test("does not auto-load ignored .auth session files while tests run", () => {
+  assert.equal(loadSubstackSession(), null);
 });
 
 test("loads a Playwright session from an explicit storage-state file", async () => {

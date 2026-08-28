@@ -72,6 +72,17 @@ test("resolves a URL to the named preset when it matches", () => {
   assert.equal(matchSubstackPreset("https://moontower.substack.com/archive")?.name, "moontower");
 });
 
+test("normalizes article and archive URLs to the publication origin", () => {
+  const article = feedFromSubstackUrl("https://moontower.substack.com/p/some-note?utm_source=web");
+  assert.equal(article.name, "moontower");
+  assert.equal(article.homepageUrl, "https://moontower.substack.com/");
+  assert.equal(article.feedUrl, "https://moontower.substack.com/feed");
+
+  const archived = feedFromSubstackUrl("https://www.fidenzamacro.com/archive");
+  assert.equal(archived.name, "fidenza");
+  assert.equal(archived.homepageUrl, "https://www.fidenzamacro.com/");
+});
+
 test("loads publications from inline YAML or JSON env overrides", () => {
   const yaml = loadSubstackPublications({
     SUBSTACK_PUBLICATIONS_YAML: "- name: example\n  base_url: https://example.substack.com\n"

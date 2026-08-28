@@ -47,11 +47,13 @@ export function SourceManager({
   const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scrapeNote, setScrapeNote] = useState<string | null>(null);
   const registeredUrls = new Set(feeds.map((feed) => feed.feedUrl));
 
   async function addFeed(formData: FormData) {
     setPending("create");
     setError(null);
+    setScrapeNote(null);
     try {
       await createPublication({
         name: formData.get("name"),
@@ -61,7 +63,7 @@ export function SourceManager({
         retentionPolicy: formData.get("retentionPolicy"),
         backfillDays: formData.get("backfillDays"),
         maxPostsPerPoll: formData.get("maxPostsPerPoll"),
-        termsNotes: formData.get("termsNotes")
+        termsNotes: formData.get("termsNotes") || SUBSTACK_FEED_TERMS
       });
       router.refresh();
     } catch (createError) {
@@ -69,6 +71,39 @@ export function SourceManager({
     } finally {
       setPending(null);
     }
+  }
+
+  async function scrapeUrl(input: { url: string; name?: string; limit?: number; pendingKey: string }) {
+    setPending(input.pendingKey);
+    setError(null);
+    setScrapeNote(null);
+    try {
+      const summaries = await scrapePublications({
+        url: input.url,
+        name: input.name,
+        limit: input.limit ?? 12
+      });
+      setScrapeNote(formatScrapeNote(summaries));
+      router.refresh();
+    } catch (scrapeError) {
+      setError(scrapeError instanceof Error ? scrapeError.message : String(scrapeError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function scrapeFromForm(formData: FormData) {
+    const url = String(formData.get("url") ?? "").trim();
+    if (!url) {
+      setError("A publication URL is required to scrape.");
+      return;
+    }
+    await scrapeUrl({
+      url,
+      name: String(formData.get("name") ?? "").trim() || undefined,
+      limit: Number(formData.get("maxPostsPerPoll") || 12),
+      pendingKey: "scrape"
+    });
   }
 
   async function addPreset(preset: NewspaperPreset) {
@@ -205,7 +240,7 @@ export function SourceManager({
                 ? "Adding…"
                 : remainingSubstacks.length === 0
                   ? "Added"
-                  : `Add all ${remainingSubstacks.length}`}
+                  : "Add my paid Substacks"}
             </button>
           </div>
           <div className="preset-row">
@@ -340,14 +375,25 @@ export function SourceManager({
           Terms / permission note
           <input
             name="termsNotes"
-            placeholder={NEWSPAPER_FEED_TERMS}
-            required
+            placeholder={SUBSTACK_FEED_TERMS}
           />
         </label>
-        <button className="button" disabled={pending === "create"} type="submit">
-          {pending === "create" ? "Validating…" : "Add publication"}
-        </button>
+        <div className="source-form-wide preset-row">
+          <button className="button" disabled={pending !== null} type="submit">
+            {pending === "create" ? "Validating…" : "Add publication"}
+          </button>
+          <button
+            className="button"
+            disabled={pending !== null}
+            formNoValidate
+            type="submit"
+            formAction={scrapeFromForm}
+          >
+            {pending === "scrape" ? "Scraping…" : "Add and scrape"}
+          </button>
+        </div>
         {error ? <p className="error-text source-form-wide">{error}</p> : null}
+        {scrapeNote ? <p className="source-form-wide">{scrapeNote}</p> : null}
         <p className="source-form-wide">
           Substack session:{" "}
           <strong>{substackSessionConfigured ? "configured" : "not configured"}</strong>
@@ -382,6 +428,22 @@ export function SourceManager({
               <span className="label">Latest publication</span>
               <strong>{formatDate(feed.lastPublishedAt)}</strong>
               {feed.lastError ? <p className="error-text">{feed.lastError}</p> : null}
+              {feed.platform === "substack" ? (
+                <button
+                  className="button"
+                  disabled={pending !== null}
+                  onClick={() =>
+                    scrapeUrl({
+                      url: feed.homepageUrl,
+                      name: feed.name,
+                      pendingKey: `scrape:${feed.id}`
+                    })
+                  }
+                  type="button"
+                >
+                  {pending === `scrape:${feed.id}` ? "Scraping…" : "Scrape"}
+                </button>
+              ) : null}
               <button
                 className={feed.enabled ? "button danger" : "button"}
                 disabled={pending === feed.id}
@@ -454,6 +516,37 @@ async function createPublication(body: Record<string, unknown>) {
   });
   const result = (await response.json()) as { error?: string };
   if (!response.ok) throw new Error(result.error ?? "Unable to add publication.");
+}
+
+type ScrapeSummary = {
+  name: string;
+  fetched: number;
+  full: number;
+  preview: number;
+  error?: string;
+  errorKind?: string;
+};
+
+async function scrapePublications(body: Record<string, unknown>) {
+  const response = await fetch("/api/publication-feeds/scrape", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const result = (await response.json()) as { error?: string; summaries?: ScrapeSummary[] };
+  if (!response.ok) throw new Error(result.error ?? "Unable to scrape publication.");
+  return result.summaries ?? [];
+}
+
+function formatScrapeNote(summaries: ScrapeSummary[]) {
+  if (summaries.length === 0) return "No publications scraped.";
+  return summaries
+    .map((summary) =>
+      summary.error
+        ? `${summary.name}: failed (${summary.errorKind ?? "error"})`
+        : `${summary.name}: fetched ${summary.fetched} (full ${summary.full}, preview ${summary.preview})`
+    )
+    .join(" · ");
 }
 
 function formatDate(value: string | null) {
