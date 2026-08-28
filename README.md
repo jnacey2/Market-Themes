@@ -218,6 +218,27 @@ For copyrighted or paywalled sources, default to storing metadata, embeddings,
 extracted signals, and short citation snippets unless source-specific terms
 allow full-text retention.
 
+### Managed Publications
+
+Authenticated operators can add public Substack, RSS, and Atom publications at
+`/sources`. Managed feeds are stored in `publication_feeds`, loaded dynamically
+by `poll-sources`, and do not require a code deployment.
+
+Substack ingestion uses the publication's public archive and post endpoints for
+bounded historical discovery. It:
+
+- Fetches only posts whose audience is explicitly public (`everyone`).
+- Never sends Substack session cookies or attempts to bypass a paywall.
+- Skips paid-only and founding-member posts even if a public endpoint returns a
+  preview or body.
+- Applies per-publication lookback, post-count, rate-limit, retention, and
+  publisher-ownership settings.
+- Rejects feed URLs that resolve to local or private networks.
+
+RSS/Atom feeds support either public full-text retention or snippet-only
+retention. Every managed publication remains subject to canonical URL/content
+deduplication and the human narrative-evidence review gate.
+
 ## Claude Usage
 
 Claude is intended for:

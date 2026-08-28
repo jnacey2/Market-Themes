@@ -6,8 +6,10 @@ const PROTECTED_PATHS = [
   "/ingestion",
   "/theme-mappings",
   "/narrative-review",
+  "/sources",
   "/api/backfill",
-  "/api/narrative-observations"
+  "/api/narrative-observations",
+  "/api/publication-feeds"
 ];
 
 export function proxy(request: NextRequest) {
@@ -42,7 +44,9 @@ export const config = {
     "/ingestion/:path*",
     "/theme-mappings/:path*",
     "/narrative-review/:path*",
+    "/sources/:path*",
     "/api/narrative-observations/:path*",
+    "/api/publication-feeds/:path*",
     "/api/backfill/:path*"
   ]
 };

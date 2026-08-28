@@ -3099,16 +3099,22 @@ async function upsertSource(client: DbClient, document: PersistableDocument) {
       enabled = true`,
     [
       document.sourceId,
-      sourceName(document.sourceId),
+      metadataString(document.metadata, "sourceName") ?? sourceName(document.sourceId),
       document.sourceClass,
       document.retrievalMethod,
-      document.sourceId === "sec-filings"
-        ? "Official SEC endpoints and filing document downloads."
-        : document.sourceId === "fmp-transcripts"
-          ? "Financial Modeling Prep earnings call transcript API."
-        : null
+      metadataString(document.metadata, "termsNotes") ??
+        (document.sourceId === "sec-filings"
+          ? "Official SEC endpoints and filing document downloads."
+          : document.sourceId === "fmp-transcripts"
+            ? "Financial Modeling Prep earnings call transcript API."
+            : null)
     ]
   );
+}
+
+function metadataString(metadata: Record<string, unknown> | undefined, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function sourceName(sourceId: string) {

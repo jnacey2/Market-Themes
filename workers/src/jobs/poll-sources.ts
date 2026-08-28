@@ -1,13 +1,30 @@
-import { defaultConnectors } from "@market-themes/ingest";
-import { persistDocuments, recordConnectorCheckpoint } from "@market-themes/db";
+import {
+  createPublicationFeedConnector,
+  defaultConnectors
+} from "@market-themes/ingest";
+import {
+  listPublicationFeeds,
+  persistDocuments,
+  recordConnectorCheckpoint,
+  recordPublicationFeedPoll
+} from "@market-themes/db";
 import { pathToFileURL } from "node:url";
 
 export async function pollSources() {
   let fetched = 0;
   let inserted = 0;
   let failed = 0;
+  const publicationFeeds = await listPublicationFeeds({ enabledOnly: true });
+  const publicationFeedById = new Map(publicationFeeds.map((feed) => [feed.id, feed]));
+  const staticIds = new Set(defaultConnectors.map((connector) => connector.id));
+  const connectors = [
+    ...defaultConnectors,
+    ...publicationFeeds
+      .filter((feed) => !staticIds.has(feed.id))
+      .map(createPublicationFeedConnector)
+  ];
 
-  for (const connector of defaultConnectors) {
+  for (const connector of connectors) {
     try {
       const documents = await connector.poll();
       fetched += documents.length;
@@ -15,6 +32,9 @@ export async function pollSources() {
       if (documents.length === 0) {
         console.log(`[poll-sources] ${connector.id} returned 0 documents`);
         await recordConnectorCheckpoint({ connectorId: connector.id, success: true });
+        if (publicationFeedById.has(connector.id)) {
+          await recordPublicationFeedPoll(connector.id, { success: true });
+        }
         continue;
       }
 
@@ -27,6 +47,12 @@ export async function pollSources() {
         documentsInserted: result.insertedDocuments,
         lastDocumentAt: newestDocumentDate(documents)
       });
+      if (publicationFeedById.has(connector.id)) {
+        await recordPublicationFeedPoll(connector.id, {
+          success: true,
+          lastPublishedAt: newestDocumentDate(documents)
+        });
+      }
       console.log(
         `[poll-sources] ${connector.id} fetched=${documents.length} inserted=${result.insertedDocuments} skipped=${result.skippedDocuments} chunks=${result.insertedChunks}`
       );
@@ -39,6 +65,12 @@ export async function pollSources() {
         success: false,
         error: message
       });
+      if (publicationFeedById.has(connector.id)) {
+        await recordPublicationFeedPoll(connector.id, {
+          success: false,
+          error: message
+        });
+      }
     }
   }
 

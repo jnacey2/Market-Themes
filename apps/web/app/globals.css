@@ -595,6 +595,50 @@ h3 {
   color: var(--risk);
 }
 
+.source-form {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 24px;
+}
+
+.source-form > div:first-child,
+.source-form-wide {
+  grid-column: 1 / -1;
+}
+
+.source-form label {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 7px;
+}
+
+.source-form input,
+.source-form select {
+  background: #080d1b;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 12px;
+}
+
+.managed-source {
+  align-items: start;
+  display: grid;
+  gap: 28px;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.32fr);
+}
+
+.source-status {
+  display: grid;
+  gap: 8px;
+}
+
+.source-status strong {
+  margin-bottom: 8px;
+}
+
 @media (max-width: 840px) {
   .hero,
   .grid.two,
@@ -618,6 +662,11 @@ h3 {
   }
 
   .review-card {
+    grid-template-columns: 1fr;
+  }
+
+  .source-form,
+  .managed-source {
     grid-template-columns: 1fr;
   }
 

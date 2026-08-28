@@ -356,6 +356,44 @@ export type ConnectorCheckpointSummary = {
   documentsInserted: number;
 };
 
+export type PublicationFeedPlatform = "substack" | "rss";
+
+export type PublicationFeed = {
+  id: string;
+  name: string;
+  homepageUrl: string;
+  feedUrl: string;
+  platform: PublicationFeedPlatform;
+  sourceClass: SourceClass;
+  publisherId: string;
+  publisherOwner: string;
+  retentionPolicy: "full_text" | "snippet";
+  enabled: boolean;
+  backfillDays: number;
+  maxPostsPerPoll: number;
+  rateLimitMs: number;
+  tags: string[];
+  termsNotes: string;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastPublishedAt: string | null;
+  lastError: string | null;
+};
+
+export type PublicationFeedInput = {
+  name: string;
+  homepageUrl: string;
+  feedUrl: string;
+  platform: PublicationFeedPlatform;
+  publisherOwner?: string;
+  retentionPolicy?: "full_text" | "snippet";
+  backfillDays?: number;
+  maxPostsPerPoll?: number;
+  rateLimitMs?: number;
+  tags?: string[];
+  termsNotes?: string;
+};
+
 export type PipelineRunSummary = {
   id: string;
   stage: string;

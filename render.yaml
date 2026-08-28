@@ -236,7 +236,13 @@ services:
         value: "{}"
       - key: SCRAPING_ENABLED
         value: "false"
+      - key: SCRAPER_USER_AGENT
+        value: MarketThemesBot/1.0 (+https://themes-web.onrender.com)
+      - key: RSS_LOOKBACK_HOURS
+        value: "48"
       - key: SEC_USER_AGENT
+        sync: false
+      - key: FMP_API_KEY
         sync: false
       - key: SEC_POLL_LOOKBACK_DAYS
         value: "7"
