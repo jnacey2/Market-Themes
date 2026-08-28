@@ -1,0 +1,9 @@
+.git
+.github
+.next
+**/.next
+.auth
+node_modules
+**/node_modules
+coverage
+npm-debug.log*

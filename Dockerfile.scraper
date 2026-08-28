@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/playwright:v1.62.1-noble
+
+WORKDIR /app
+
+COPY . .
+RUN npm ci
+
+ENV NODE_ENV=production
+
+CMD ["npm", "run", "premium:scrape", "--workspace", "@market-themes/workers"]

@@ -1,11 +1,25 @@
 import Link from "next/link";
-import { listPublicationFeeds } from "@market-themes/db";
+import { getOperationsStatus, listPublicationFeeds } from "@market-themes/db";
 import { SourceManager } from "./SourceManager";
 
 export const dynamic = "force-dynamic";
 
 export default async function SourcesPage() {
-  const feeds = await listPublicationFeeds();
+  const [feeds, operations] = await Promise.all([
+    listPublicationFeeds(),
+    getOperationsStatus()
+  ]);
+  const premiumSources = [
+    ["premium-wsj", "The Wall Street Journal"],
+    ["premium-nyt", "The New York Times"],
+    ["premium-wapo", "The Washington Post"],
+    ["premium-ft", "Financial Times"],
+    ["premium-bloomberg", "Bloomberg"]
+  ].map(([id, name]) => ({
+    id,
+    name,
+    checkpoint: operations.connectors.find((connector) => connector.connectorId === id)
+  }));
 
   return (
     <div className="shell wide-shell">
@@ -36,6 +50,39 @@ export default async function SourcesPage() {
       </section>
 
       <SourceManager feeds={feeds} />
+
+      <section className="section">
+        <p className="eyebrow">Authenticated Publishers</p>
+        <p className="lede">
+          These collectors run in an isolated Render browser job. Session files are
+          captured locally and stored only as encrypted Render secrets.
+        </p>
+        <div className="grid two">
+          {premiumSources.map((source) => (
+            <div className="panel" key={source.id}>
+              <span className="label">{source.id}</span>
+              <h2>{source.name}</h2>
+              <p>
+                {source.checkpoint?.lastError
+                  ? source.checkpoint.lastError
+                  : source.checkpoint?.lastSuccessAt
+                    ? `Last successful scrape ${new Date(source.checkpoint.lastSuccessAt).toLocaleString()}`
+                    : "Not enabled or not run yet."}
+              </p>
+              <div className="metric-row">
+                <div className="metric">
+                  <span>Fetched</span>
+                  <strong>{source.checkpoint?.documentsFetched ?? 0}</strong>
+                </div>
+                <div className="metric">
+                  <span>Inserted</span>
+                  <strong>{source.checkpoint?.documentsInserted ?? 0}</strong>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

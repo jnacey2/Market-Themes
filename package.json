@@ -25,6 +25,8 @@
     "claude:extract:backfill": "npm run claude:extract:backfill --workspace @market-themes/workers",
     "narratives:classify": "npm run narratives:classify --workspace @market-themes/workers",
     "narrative-trends:recompute": "npm run narrative-trends:recompute --workspace @market-themes/workers",
+    "premium:scrape": "npm run premium:scrape --workspace @market-themes/workers",
+    "premium:capture-session": "npm run premium:capture-session --workspace @market-themes/workers --",
     "repair:document-texts": "npm run repair:document-texts --workspace @market-themes/workers",
     "themes:normalize": "npm run themes:normalize --workspace @market-themes/workers",
     "themes:normalize:backfill": "npm run themes:normalize:backfill --workspace @market-themes/workers",
