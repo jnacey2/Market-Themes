@@ -197,13 +197,18 @@ export async function recomputeNarrativeTrends(
       source_class: string;
       affected_entities: string[];
     }>(
-      `select no.narrative_definition_id, d.published_at::date::text as date,
+      `with latest_observations as (
+         select distinct on (narrative_definition_id, document_id) *
+         from narrative_observations
+         order by narrative_definition_id, document_id, observed_at desc, prompt_version desc
+       )
+       select no.narrative_definition_id, d.published_at::date::text as date,
               no.document_id, no.matched, no.match_score::float,
               no.risk_tone::float, no.bullish_tone::float,
               coalesce(d.publisher_id, d.publisher) as publisher_id,
               coalesce(d.publisher_owner, d.publisher) as publisher_owner,
               d.source_class, no.affected_entities
-       from narrative_observations no
+       from latest_observations no
        join documents d on d.id = no.document_id
        where d.published_at::date between $1::date and $2::date`,
       [startDate, asOfDate]
@@ -364,12 +369,18 @@ export async function getNarrativeBoardStatus(
         affected_entities: string[];
         match_score: number;
       }>(
-        `select no.id, d.title, d.publisher, d.published_at::text, d.url,
+        `with latest_observations as (
+           select distinct on (narrative_definition_id, document_id) *
+           from narrative_observations
+           where narrative_definition_id = $1
+           order by narrative_definition_id, document_id, observed_at desc, prompt_version desc
+         )
+         select no.id, d.title, d.publisher, d.published_at::text, d.url,
                 d.source_class, no.stance, no.evidence_snippet, no.interpretation,
                 no.affected_entities, no.match_score::float
-         from narrative_observations no
+         from latest_observations no
          join documents d on d.id = no.document_id
-         where no.narrative_definition_id = $1 and no.matched
+         where no.matched
          order by d.published_at desc, no.match_score desc
          limit 12`,
         [definition.id]

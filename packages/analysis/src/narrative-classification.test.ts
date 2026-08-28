@@ -62,6 +62,25 @@ test("requires matched evidence to be an exact source quote", () => {
 
   assert.equal(valid.matched, true);
   assert.equal(invented.matched, false);
-  assert.equal(invented.matchScore, 49);
+  assert.equal(invented.matchScore, 69);
   assert.equal(invented.evidenceSnippet, "");
+});
+
+test("rejects low-confidence semantic adjacency despite an exact quote", () => {
+  const adjacent = normalizeObservation(
+    {
+      matched: true,
+      matchScore: 62,
+      stance: "bullish",
+      evidenceSnippet: "Demand is rising quickly"
+    },
+    definition,
+    document,
+    "model",
+    "prompt"
+  );
+
+  assert.equal(adjacent.matched, false);
+  assert.equal(adjacent.matchScore, 62);
+  assert.equal(adjacent.evidenceSnippet, "");
 });

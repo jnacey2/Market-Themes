@@ -7,7 +7,7 @@ import type {
   ToneDirection
 } from "@market-themes/db";
 
-export const narrativeClassificationPromptVersion = "narrative_classification_v1";
+export const narrativeClassificationPromptVersion = "narrative_classification_v2";
 
 type RawObservation = {
   narrativeDefinitionId?: string;
@@ -45,9 +45,17 @@ export async function classifyDocumentNarratives(
     system: `Classify a source document against stable market-narrative propositions.
 Return only JSON with an "observations" array containing exactly one item per definition.
 Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.
-For matched=false use matchScore 0-49 and empty evidenceSnippet.
-For matched=true use matchScore 50-100 and copy evidenceSnippet exactly from the source.
-Do not make trade recommendations. Stance is risk, bullish, mixed, or neutral.`,
+Set matched=true only when the exact quoted evidence directly entails the proposition.
+Topic, sector, company, or keyword adjacency is not a match.
+Do not infer pricing power from inflation, AI demand from semiconductor adjacency,
+credit deterioration from hypothetical policy risk, or broad deal recovery from one transaction.
+For directional propositions, contradictory evidence is matched=false, not supporting evidence.
+The evidenceSnippet must independently support the match without facts added from elsewhere.
+Interpretation may explain the quote but must not introduce facts absent from it.
+For matched=false use matchScore 0-69 and empty evidenceSnippet.
+For matched=true use matchScore 70-100 and copy evidenceSnippet exactly from the source.
+When uncertain, return matched=false. Do not make trade recommendations.
+Stance is risk, bullish, mixed, or neutral.`,
     messages: [
       {
         role: "user",
@@ -121,7 +129,8 @@ export function normalizeObservation(
   model: string,
   promptVersion: string
 ): NarrativeObservationInput {
-  const requestedMatch = raw?.matched === true;
+  const matchScore = clamp(raw?.matchScore, 0, 100);
+  const requestedMatch = raw?.matched === true && matchScore >= 70;
   const evidence = requestedMatch ? String(raw?.evidenceSnippet ?? "").trim().slice(0, 800) : "";
   const matched = requestedMatch && evidence.length > 0 && document.text.includes(evidence);
   const stance = isStance(raw?.stance) ? raw.stance : "neutral";
@@ -134,7 +143,7 @@ export function normalizeObservation(
     narrativeDefinitionId: definition.id,
     documentId: document.id,
     matched,
-    matchScore: matched ? clamp(raw?.matchScore, 50, 100) : clamp(raw?.matchScore, 0, 49),
+    matchScore: matched ? matchScore : Math.min(matchScore, 69),
     stance,
     riskTone: clamp(raw?.riskTone, 0, 100),
     bullishTone: clamp(raw?.bullishTone, 0, 100),

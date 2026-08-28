@@ -341,7 +341,7 @@ services:
       - key: THEME_NORMALIZATION_MAX_BATCHES
         value: "20"
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v1
+        value: narrative_classification_v2
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
         value: "10"
       - key: NARRATIVE_CLASSIFICATION_MAX_BATCHES

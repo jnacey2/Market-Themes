@@ -16,6 +16,9 @@ test("normalizes density by eligible corpus within each source class", () => {
   assert.equal(point.density, 75);
   assert.equal(point.eligibleDocuments, 3);
   assert.equal(point.matchedDocuments, 2);
+  assert.equal(point.lowHistory, true);
+  assert.equal(point.zScore, 0);
+  assert.equal(point.percentileRank, 0);
 });
 
 test("counts publisher owners independently from syndicated publishers", () => {

@@ -172,15 +172,16 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
           <p className="lede">{narrative.proposition}</p>
           <div className="pill-row">
             <span className="pill">
-              {narrative.eligibleDocuments > 0
+              {narrative.eligibleDocuments > 0 && !narrative.lowHistory
                 ? `${narrative.percentileRank}th percentile`
-                : "No recent coverage"}
+                : narrative.eligibleDocuments > 0
+                  ? "Building baseline"
+                  : "No recent coverage"}
             </span>
-            {narrative.eligibleDocuments > 0 ? (
+            {narrative.eligibleDocuments > 0 && !narrative.lowHistory ? (
               <span className="pill">z {narrative.zScore.toFixed(1)}</span>
             ) : null}
-            <span className="pill">{narrative.publisherOwnerBreadth} independent owners</span>
-            {narrative.lowHistory ? <span className="pill warning-pill">Low history</span> : null}
+            <span className="pill">{narrative.publisherOwnerBreadth} publisher groups</span>
           </div>
           <div className="button-row">
             <Link className="button" href={`/storyboards/${encodeURIComponent(narrative.slug)}`}>
@@ -197,16 +198,25 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
             />
             <Metric
               label="7d change"
-              value={narrative.eligibleDocuments > 0 ? signedMetric(narrative.change) : "—"}
+              value={
+                narrative.eligibleDocuments > 0 && !narrative.lowHistory
+                  ? signedMetric(narrative.change)
+                  : "—"
+              }
             />
             <Metric
               label="Acceleration"
-              value={narrative.eligibleDocuments > 0 ? signedMetric(narrative.acceleration) : "—"}
+              value={
+                narrative.eligibleDocuments > 0 && !narrative.lowHistory
+                  ? signedMetric(narrative.acceleration)
+                  : "—"
+              }
             />
           </div>
           <p>
             {narrative.matchedDocuments} matched documents from{" "}
-            {narrative.publisherBreadth} publishers and {narrative.entityBreadth} entities.
+            {narrative.publisherBreadth} publishers, {narrative.publisherOwnerBreadth} publisher
+            groups, and {narrative.entityBreadth} entities.
           </p>
         </div>
       </section>
