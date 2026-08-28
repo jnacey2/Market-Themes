@@ -13,7 +13,7 @@
     "build": "npm run build --workspaces --if-present",
     "lint": "eslint .",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "node --import tsx --test packages/*/src/*.test.ts apps/web/lib/*.test.ts workers/src/jobs/*.test.ts",
+    "test": "node --import tsx --test packages/*/src/*.test.ts packages/db/scripts/*.test.mjs apps/web/lib/*.test.ts workers/src/jobs/*.test.ts",
     "worker": "npm run start --workspace @market-themes/workers",
     "pipeline": "npm run pipeline --workspace @market-themes/workers",
     "sec:smoke": "npm run sec:smoke --workspace @market-themes/workers",
@@ -33,7 +33,8 @@
     "themes:normalize": "npm run themes:normalize --workspace @market-themes/workers",
     "themes:normalize:backfill": "npm run themes:normalize:backfill --workspace @market-themes/workers",
     "db:schema": "node packages/db/scripts/print-schema.mjs",
-    "db:apply": "node packages/db/scripts/apply-schema.mjs"
+    "db:apply": "node packages/db/scripts/apply-schema.mjs",
+    "db:apply:predeploy": "node packages/db/scripts/apply-schema.mjs --allow-unresolved-host"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

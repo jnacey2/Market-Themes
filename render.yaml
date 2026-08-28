@@ -10,8 +10,13 @@ services:
     runtime: node
     plan: starter
     buildCommand: npm install && npm run build --workspace @market-themes/web
-    preDeployCommand: npm run db:apply
-    startCommand: npm run start --workspace @market-themes/web
+    # Pre-deploy runs on a separate instance that often cannot resolve the
+    # internal Postgres hostname (dpg-… with no *.region-postgres.render.com
+    # suffix). Retries plus --allow-unresolved-host keep a DNS miss from
+    # cancelling the release; start applies the same idempotent schema on
+    # the private network. This is not a database-plan issue.
+    preDeployCommand: npm run db:apply:predeploy
+    startCommand: npm run db:apply && npm run start --workspace @market-themes/web
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
