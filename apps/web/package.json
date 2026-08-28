@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
+    "start": "node server.mjs",
     "lint": "npm run typecheck",
     "typecheck": "tsc --noEmit"
   },
