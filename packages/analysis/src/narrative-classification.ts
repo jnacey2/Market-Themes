@@ -7,7 +7,7 @@ import type {
   ToneDirection
 } from "@market-themes/db";
 
-export const narrativeClassificationPromptVersion = "narrative_classification_v2";
+export const narrativeClassificationPromptVersion = "narrative_classification_v3";
 
 type RawObservation = {
   narrativeDefinitionId?: string;
@@ -132,7 +132,11 @@ export function normalizeObservation(
   const matchScore = clamp(raw?.matchScore, 0, 100);
   const requestedMatch = raw?.matched === true && matchScore >= 70;
   const evidence = requestedMatch ? String(raw?.evidenceSnippet ?? "").trim().slice(0, 800) : "";
-  const matched = requestedMatch && evidence.length > 0 && document.text.includes(evidence);
+  const matched =
+    requestedMatch &&
+    evidence.length > 0 &&
+    document.text.includes(evidence) &&
+    passesDefinitionGuard(definition.slug, evidence);
   const stance = isStance(raw?.stance) ? raw.stance : "neutral";
 
   return {
@@ -156,6 +160,66 @@ export function normalizeObservation(
     promptVersion,
     metadata: { definitionVersion: definition.version }
   };
+}
+
+export function passesDefinitionGuard(slug: string, evidence: string) {
+  const text = evidence.toLowerCase();
+
+  switch (slug) {
+    case "pricing-power":
+      return (
+        /(price|pricing|average ticket|mix)/.test(text) &&
+        /(demand|volume|transactions?|units?|traffic|elasticity)/.test(text) &&
+        !/(declin|decreas|fell|falling|lower|weak).{0,45}(volume|transactions?|units?|traffic)/.test(
+          text
+        )
+      );
+    case "deal-activity-recovery":
+      return (
+        /(pipeline|volumes?|activity|market|advisory|underwriting|issuance|ipos?|m&a)/.test(
+          text
+        ) && /(recover|rebound|reopen|improv|increas|accelerat|growth|stronger|higher)/.test(text)
+      );
+    case "ai-infrastructure-demand":
+      return (
+        /(artificial intelligence|\bai\b|data cent(er|re))/.test(text) &&
+        /(demand|capacity|backlog|orders|load|compute|infrastructure|growth)/.test(text)
+      );
+    case "ai-capex-discipline":
+      return (
+        /(artificial intelligence|\bai\b|data cent(er|re))/.test(text) &&
+        /(return|roi|utilization|discipline|restrain|moderat|efficien|budget)/.test(text)
+      );
+    case "credit-quality-deterioration":
+      return (
+        /(delinquen|default|charge.?off|loss provision|nonperform|credit quality)/.test(text) &&
+        /(deteriorat|worsen|increas|higher|rise|rising|stress)/.test(text)
+      );
+    case "refinancing-risk":
+      return (
+        /(borrower|debt|maturit|refinanc)/.test(text) &&
+        /(higher|cost|difficult|restrict|wall|pressure|risk)/.test(text) &&
+        !/(reinvestment risk|callable note)/.test(text)
+      );
+    case "margin-pressure":
+      return (
+        /(gross margin|operating margin|profit margin)/.test(text) &&
+        /(compress|pressure|declin|decreas|lower|contract)/.test(text)
+      );
+    case "consumer-trade-down":
+      return (
+        /(consumer|customer|shopper|spending|purchase)/.test(text) &&
+        /(trade.?down|value|afford|lower.?price|smaller|cautious|budget|selective)/.test(text)
+      );
+    case "supply-chain-normalization":
+      return (
+        /(supply|inventory|lead time|freight|logistics|availability)/.test(text) &&
+        /(normaliz|easing|shorter|improv|recover|rebalanc|declin)/.test(text) &&
+        !/(disruption|shortage|constraint|ransomware)/.test(text)
+      );
+    default:
+      return true;
+  }
 }
 
 function clamp(value: unknown, minimum: number, maximum: number) {

@@ -48,6 +48,8 @@ services:
         value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v3
       - key: APP_BASE_URL
         sync: false
       - key: SESSION_SECRET
@@ -341,7 +343,7 @@ services:
       - key: THEME_NORMALIZATION_MAX_BATCHES
         value: "20"
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v2
+        value: narrative_classification_v3
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
         value: "10"
       - key: NARRATIVE_CLASSIFICATION_MAX_BATCHES

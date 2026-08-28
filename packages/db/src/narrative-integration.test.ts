@@ -62,11 +62,15 @@ test(
     const recomputed = await recomputeNarrativeTrends({
       asOfDate: "2026-08-27",
       lookbackDays: 10,
-      lowHistoryDays: 2
+      lowHistoryDays: 2,
+      promptVersion: "integration-v1"
     });
     assert.equal(recomputed.definitionsProcessed, definitions.length);
 
-    const board = await getNarrativeBoardStatus();
+    const board = await getNarrativeBoardStatus(
+      process.env.DATABASE_URL,
+      "integration-v1"
+    );
     const narrative = board.narratives.find((item) => item.id === definition.id);
     assert(narrative);
     assert(narrative.matchedDocuments >= 1);

@@ -169,6 +169,7 @@ export async function recomputeNarrativeTrends(
     lookbackDays?: number;
     lowHistoryDays?: number;
     windows?: TrendWindow[];
+    promptVersion?: string;
   } = {},
   databaseUrl = process.env.DATABASE_URL
 ) {
@@ -178,6 +179,10 @@ export async function recomputeNarrativeTrends(
     const asOfDate = options.asOfDate ?? new Date().toISOString().slice(0, 10);
     const lookbackDays = options.lookbackDays ?? 365;
     const lowHistoryDays = options.lowHistoryDays ?? 30;
+    const promptVersion =
+      options.promptVersion ??
+      process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+      "narrative_classification_v3";
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -200,6 +205,7 @@ export async function recomputeNarrativeTrends(
       `with latest_observations as (
          select distinct on (narrative_definition_id, document_id) *
          from narrative_observations
+         where prompt_version = $3
          order by narrative_definition_id, document_id, observed_at desc, prompt_version desc
        )
        select no.narrative_definition_id, d.published_at::date::text as date,
@@ -211,7 +217,7 @@ export async function recomputeNarrativeTrends(
        from latest_observations no
        join documents d on d.id = no.document_id
        where d.published_at::date between $1::date and $2::date`,
-      [startDate, asOfDate]
+      [startDate, asOfDate, promptVersion]
     );
 
     let rowsWritten = 0;
@@ -249,12 +255,13 @@ export async function recomputeNarrativeTrends(
                  change_value, acceleration, risk_tone, bullish_tone,
                  eligible_documents, matched_documents, publisher_breadth,
                  publisher_owner_breadth, source_class_breadth, entity_breadth,
-                 low_history
+                 low_history, prompt_version
                ) values (
                  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
                )
-               on conflict (narrative_definition_id, date, trend_window) do update set
+               on conflict (narrative_definition_id, date, trend_window, prompt_version)
+               do update set
                  density = excluded.density,
                  baseline_mean = excluded.baseline_mean,
                  baseline_stddev = excluded.baseline_stddev,
@@ -272,7 +279,7 @@ export async function recomputeNarrativeTrends(
                  entity_breadth = excluded.entity_breadth,
                  low_history = excluded.low_history`,
               [
-                `narrative:trend:${definition.id}:${window}:${point.date}`,
+                `narrative:trend:${definition.id}:${window}:${point.date}:${promptVersion}`,
                 definition.id,
                 point.date,
                 window,
@@ -291,7 +298,8 @@ export async function recomputeNarrativeTrends(
                 point.publisherOwnerBreadth,
                 point.sourceClassBreadth,
                 point.entityBreadth,
-                point.lowHistory
+                point.lowHistory,
+                promptVersion
               ]
             );
             rowsWritten += 1;
@@ -310,15 +318,19 @@ export async function recomputeNarrativeTrends(
 }
 
 export async function getNarrativeBoardStatus(
-  databaseUrl = process.env.DATABASE_URL
+  databaseUrl = process.env.DATABASE_URL,
+  configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeBoardStatus> {
   if (!databaseUrl) return { databaseConfigured: false, latestDate: null, narratives: [] };
   const definitions = await getActiveNarrativeDefinitions(databaseUrl);
+  const promptVersion =
+    configuredPromptVersion ?? "narrative_classification_v3";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
     const latest = await client.query<{ date: string | null }>(
-      "select max(date)::text as date from narrative_trends"
+      "select max(date)::text as date from narrative_trends where prompt_version = $1",
+      [promptVersion]
     );
     const latestDate = latest.rows[0]?.date ?? null;
     const narratives: NarrativeTrendSummary[] = [];
@@ -350,10 +362,12 @@ export async function getNarrativeBoardStatus(
                 publisher_owner_breadth, source_class_breadth, entity_breadth,
                 low_history
          from narrative_trends
-         where narrative_definition_id = $1 and trend_window = '7d'
+         where narrative_definition_id = $1
+           and trend_window = '7d'
+           and prompt_version = $2
          order by date desc
          limit 90`,
-        [definition.id]
+        [definition.id, promptVersion]
       );
       const current = trends.rows[0];
       const evidence = await client.query<{
@@ -373,6 +387,7 @@ export async function getNarrativeBoardStatus(
            select distinct on (narrative_definition_id, document_id) *
            from narrative_observations
            where narrative_definition_id = $1
+             and prompt_version = $2
            order by narrative_definition_id, document_id, observed_at desc, prompt_version desc
          )
          select no.id, d.title, d.publisher, d.published_at::text, d.url,
@@ -383,7 +398,7 @@ export async function getNarrativeBoardStatus(
          where no.matched
          order by d.published_at desc, no.match_score desc
          limit 12`,
-        [definition.id]
+        [definition.id, promptVersion]
       );
 
       narratives.push({
