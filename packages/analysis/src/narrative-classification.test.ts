@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AnalysisDocument, NarrativeDefinition } from "@market-themes/db";
-import { normalizeObservation } from "./narrative-classification";
+import {
+  normalizeObservation,
+  passesDefinitionGuard
+} from "./narrative-classification";
 
 const definition: NarrativeDefinition = {
   id: "narrative:def:test:v1",
@@ -83,4 +86,35 @@ test("rejects low-confidence semantic adjacency despite an exact quote", () => {
   assert.equal(adjacent.matched, false);
   assert.equal(adjacent.matchScore, 62);
   assert.equal(adjacent.evidenceSnippet, "");
+});
+
+test("applies strict proposition-specific evidence guards", () => {
+  assert.equal(
+    passesDefinitionGuard(
+      "pricing-power",
+      "Average ticket increased 2.3%, offset by a decrease in customer transactions."
+    ),
+    false
+  );
+  assert.equal(
+    passesDefinitionGuard(
+      "deal-activity-recovery",
+      "The company completed its acquisition of Example Corp."
+    ),
+    false
+  );
+  assert.equal(
+    passesDefinitionGuard(
+      "ai-infrastructure-demand",
+      "AI data center demand increased and accelerator capacity remains constrained."
+    ),
+    true
+  );
+  assert.equal(
+    passesDefinitionGuard(
+      "supply-chain-normalization",
+      "Lead times shortened as component availability improved."
+    ),
+    true
+  );
 });
