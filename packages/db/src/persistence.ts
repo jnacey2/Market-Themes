@@ -205,6 +205,14 @@ export function createDatabaseClient(
   return client;
 }
 
+export async function closeDatabaseClient(client: { end: () => Promise<void> }) {
+  try {
+    await client.end();
+  } catch {
+    // Timed-out or canceled connections can throw on close; never fail the request for that.
+  }
+}
+
 export async function persistDocuments(
   documents: PersistableDocument[],
   databaseUrl = process.env.DATABASE_URL
@@ -1804,63 +1812,50 @@ export async function getLiveDashboardStatus(
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     const totals = await client.query<{
-      total_trend_rows: string;
       latest_trend_date: string | null;
     }>(
-      `select
-        count(*)::text as total_trend_rows,
-        max(date)::text as latest_trend_date
+      `select max(date)::text as latest_trend_date
        from theme_trends`
     );
     const latestTrendDate = totals.rows[0]?.latest_trend_date ?? null;
-    const totalTrendRows = Number(totals.rows[0]?.total_trend_rows ?? 0);
 
     if (!latestTrendDate) {
-      return {
-        ...emptyLiveDashboardStatus(true),
-        totalTrendRows
-      };
+      return emptyLiveDashboardStatus(true);
     }
 
-    const sevenDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "7d", 80);
-    const thirtyDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "30d", 60);
+    const sevenDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "7d", 24);
+    const thirtyDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "30d", 12);
     const sevenDayMarketThemes = rankDashboardTrends(
       sevenDayRows.map(trendSummaryWithoutDetails)
     );
     const thirtyDayMarketThemes = rankDashboardTrends(
       thirtyDayRows.map(trendSummaryWithoutDetails)
     );
-    const confirmedSevenDayThemes = sevenDayMarketThemes
-      .filter(isConfirmedDashboardTrend)
-      .slice(0, 8);
-    const emergingSevenDayThemes = sevenDayMarketThemes
-      .filter((trend) => !isConfirmedDashboardTrend(trend))
-      .slice(0, 8);
-    const confirmedThirtyDayThemes = thirtyDayMarketThemes
-      .filter(isConfirmedDashboardTrend)
-      .slice(0, 6);
-
-    const themesToHydrate =
-      confirmedSevenDayThemes.length > 0 ? confirmedSevenDayThemes : confirmedThirtyDayThemes;
 
     return {
       databaseConfigured: true,
-      totalTrendRows,
+      totalTrendRows: sevenDayRows.length + thirtyDayRows.length,
       latestTrendDate,
-      confirmedSevenDayThemes: await hydrateTrendSummaries(client, confirmedSevenDayThemes),
-      emergingSevenDayThemes: await hydrateTrendSummaries(client, emergingSevenDayThemes),
-      confirmedThirtyDayThemes: themesToHydrate === confirmedThirtyDayThemes
-        ? await hydrateTrendSummaries(client, confirmedThirtyDayThemes)
-        : confirmedThirtyDayThemes
+      confirmedSevenDayThemes: sevenDayMarketThemes
+        .filter(isConfirmedDashboardTrend)
+        .slice(0, 8),
+      emergingSevenDayThemes: sevenDayMarketThemes
+        .filter((trend) => !isConfirmedDashboardTrend(trend))
+        .slice(0, 8),
+      confirmedThirtyDayThemes: thirtyDayMarketThemes
+        .filter(isConfirmedDashboardTrend)
+        .slice(0, 6)
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[db] live dashboard query failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     return emptyLiveDashboardStatus(true);
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -1873,9 +1868,8 @@ export async function getThemeDetailStatus(
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     const themeResult = await client.query<{
       id: string;
       label: string;
@@ -1959,10 +1953,13 @@ export async function getThemeDetailStatus(
       relatedSubthemes,
       followUpQuestions: buildThemeFollowUpQuestions(theme.label, affectedEntities)
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[db] theme detail query failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     return emptyThemeDetailStatus(true);
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -1974,9 +1971,8 @@ export async function getIngestionStatus(
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     const totals = await client.query<{
       total_documents: string;
       sec_documents: string;
@@ -2036,10 +2032,13 @@ export async function getIngestionStatus(
         count: Number(countRow.count)
       }))
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[db] ingestion status query failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     return emptyStatus(true);
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -2539,26 +2538,6 @@ function trendSummaryWithoutDetails(row: ThemeTrendDbRow): TrendSummary {
     affectedEntities: [],
     recentEvidence: []
   };
-}
-
-async function hydrateTrendSummaries(client: DbClient, trends: TrendSummary[]) {
-  const hydrated: TrendSummary[] = [];
-
-  for (const trend of trends) {
-    const windowDays = trendWindowDays(trend.trendWindow);
-    hydrated.push({
-      ...trend,
-      affectedEntities: await loadTrendAffectedEntities(
-        client,
-        trend.themeId,
-        trend.date,
-        windowDays
-      ),
-      recentEvidence: await loadTrendEvidence(client, trend.themeId, trend.date, windowDays)
-    });
-  }
-
-  return hydrated;
 }
 
 async function themeTrendSummaryFromRow(
