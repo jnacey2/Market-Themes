@@ -22,6 +22,7 @@ const publisherIds = parsePremiumPublisherIds(process.env.PREMIUM_PUBLISHERS);
 const maxArticles = Number(process.env.PREMIUM_SCRAPER_MAX_ARTICLES ?? 5);
 const lookbackHours = Number(process.env.PREMIUM_SCRAPER_LOOKBACK_HOURS ?? 24);
 const rateLimitMs = Number(process.env.PREMIUM_SCRAPER_RATE_LIMIT_MS ?? 2_000);
+class PublisherAccessError extends Error {}
 
 if (process.env.SCRAPING_ENABLED !== "true") {
   console.log("[premium-scraper] SCRAPING_ENABLED is not true; exiting");
@@ -338,5 +339,3 @@ function newestDate(documents: PersistableDocument[]) {
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-class PublisherAccessError extends Error {}
