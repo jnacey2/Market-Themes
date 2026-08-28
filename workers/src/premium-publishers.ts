@@ -11,6 +11,11 @@ export type PremiumPublisherProfile = {
   bodySelectors: string[];
 };
 
+export type EncodedBrowserStorageState = {
+  cookies: unknown[];
+  origins: unknown[];
+};
+
 export const premiumPublisherProfiles: Record<
   PremiumPublisherId,
   PremiumPublisherProfile
@@ -122,5 +127,18 @@ export function isAllowedPublisherUrl(
     );
   } catch {
     return false;
+  }
+}
+
+export function decodeStorageState(encoded: string): EncodedBrowserStorageState {
+  try {
+    const text = Buffer.from(encoded, "base64").toString("utf8");
+    const parsed = JSON.parse(text) as EncodedBrowserStorageState;
+    if (!Array.isArray(parsed.cookies) || !Array.isArray(parsed.origins)) {
+      throw new Error("missing cookies or origins");
+    }
+    return parsed;
+  } catch {
+    throw new Error("Publisher storage state is not valid base64 Playwright JSON.");
   }
 }

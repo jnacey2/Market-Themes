@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  decodeStorageState,
   isAllowedPublisherUrl,
   parsePremiumPublisherIds,
   premiumPublisherProfiles
@@ -9,6 +10,22 @@ import {
 test("parses a deduplicated premium publisher allowlist", () => {
   assert.deepEqual(parsePremiumPublisherIds("wsj,nyt,wsj"), ["wsj", "nyt"]);
   assert.throws(() => parsePremiumPublisherIds("wsj,unknown"), /Unknown premium publisher/);
+});
+
+test("decodes only Playwright-shaped storage state secrets", () => {
+  const state = { cookies: [], origins: [] };
+  assert.deepEqual(
+    decodeStorageState(Buffer.from(JSON.stringify(state)).toString("base64")),
+    state
+  );
+  assert.throws(() => decodeStorageState("not-json"), /not valid/);
+  assert.throws(
+    () =>
+      decodeStorageState(
+        Buffer.from(JSON.stringify({ cookies: [] })).toString("base64")
+      ),
+    /not valid/
+  );
 });
 
 test("rejects credentialed, insecure, and lookalike article URLs", () => {

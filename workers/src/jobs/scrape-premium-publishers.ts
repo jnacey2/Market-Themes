@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   chromium,
-  type Browser,
   type BrowserContext,
   type Page
 } from "playwright";
@@ -12,6 +11,7 @@ import {
 } from "@market-themes/db";
 import { createRssConnector } from "@market-themes/ingest";
 import {
+  decodeStorageState,
   isAllowedPublisherUrl,
   parsePremiumPublisherIds,
   premiumPublisherProfiles,
@@ -22,10 +22,6 @@ const publisherIds = parsePremiumPublisherIds(process.env.PREMIUM_PUBLISHERS);
 const maxArticles = Number(process.env.PREMIUM_SCRAPER_MAX_ARTICLES ?? 5);
 const lookbackHours = Number(process.env.PREMIUM_SCRAPER_LOOKBACK_HOURS ?? 24);
 const rateLimitMs = Number(process.env.PREMIUM_SCRAPER_RATE_LIMIT_MS ?? 2_000);
-type StorageState = Exclude<
-  NonNullable<Parameters<Browser["newContext"]>[0]>["storageState"],
-  string | undefined
->;
 
 if (publisherIds.length === 0) {
   console.log("[premium-scraper] no publishers enabled");
@@ -55,7 +51,9 @@ try {
     let context: BrowserContext | null = null;
     try {
       context = await browser.newContext({
-        storageState: decodeStorageState(encodedState),
+        storageState: decodeStorageState(encodedState) as Awaited<
+          ReturnType<BrowserContext["storageState"]>
+        >,
         userAgent:
           process.env.PREMIUM_SCRAPER_USER_AGENT ??
           "MarketThemesResearch/1.0 (+https://themes-web.onrender.com)"
@@ -258,24 +256,6 @@ function flattenJsonLd(value: unknown): Array<Record<string, unknown>> {
   if (!value || typeof value !== "object") return [];
   const record = value as Record<string, unknown>;
   return [record, ...flattenJsonLd(record["@graph"])];
-}
-
-export function decodeStorageState(encoded: string): StorageState {
-  let text: string;
-  try {
-    text = Buffer.from(encoded, "base64").toString("utf8");
-  } catch {
-    throw new Error("Publisher storage state is not valid base64.");
-  }
-  try {
-    const parsed = JSON.parse(text) as { cookies?: unknown; origins?: unknown };
-    if (!Array.isArray(parsed.cookies) || !Array.isArray(parsed.origins)) {
-      throw new Error("missing cookies or origins");
-    }
-    return parsed as StorageState;
-  } catch {
-    throw new Error("Publisher storage state is not valid Playwright JSON.");
-  }
 }
 
 function sessionFailureReason(pageText: string) {
