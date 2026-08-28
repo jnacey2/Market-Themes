@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   getActiveNarrativeDefinitions,
   getNarrativeBoardStatus,
+  getNarrativeReviewQueue,
   createPublicationFeed,
   listPublicationFeeds,
   persistDocuments,
@@ -90,6 +91,33 @@ test(
       },
       process.env.DATABASE_URL
     );
+    await persistNarrativeObservations([
+      {
+        id: `integration:observation:v2:${suffix}`,
+        narrativeDefinitionId: definition.id,
+        documentId,
+        matched: true,
+        matchScore: 96,
+        stance: "bullish",
+        riskTone: 0,
+        bullishTone: 86,
+        evidenceSnippet:
+          "AI infrastructure demand is rising because capacity remains constrained.",
+        interpretation: "The source reports constrained capacity and rising demand.",
+        affectedEntities: ["TEST"],
+        model: "integration-fixture",
+        promptVersion: "integration-v2"
+      }
+    ]);
+    const inheritedReview = await getNarrativeReviewQueue(
+      process.env.DATABASE_URL,
+      "integration-v2"
+    );
+    const inheritedItem = inheritedReview.items.find(
+      (item) => item.id === `integration:observation:v2:${suffix}`
+    );
+    assert.equal(inheritedItem?.reviewStatus, "approved");
+    assert.equal(inheritedItem?.reviewNote, "Approved by integration contract.");
 
     const recomputed = await recomputeNarrativeTrends({
       asOfDate: "2026-08-27",

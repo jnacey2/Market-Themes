@@ -122,13 +122,28 @@ export async function persistNarrativeObservations(
     let inserted = 0;
     for (const observation of observations) {
       const result = await client.query(
-        `insert into narrative_observations (
+        `with prior_review as (
+           select review_status, reviewed_at, review_note
+           from narrative_observations
+           where $4::boolean
+             and narrative_definition_id = $2
+             and document_id = $3
+             and evidence_snippet = $9
+             and review_status in ('approved', 'rejected')
+           order by reviewed_at desc
+           limit 1
+         )
+         insert into narrative_observations (
            id, narrative_definition_id, document_id, matched, match_score,
            stance, risk_tone, bullish_tone, evidence_snippet, interpretation,
-           affected_entities, model, prompt_version, metadata
-         ) values (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb
+           affected_entities, model, prompt_version, metadata,
+           review_status, reviewed_at, review_note
          )
+         select
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
+           coalesce((select review_status from prior_review), 'pending'),
+           (select reviewed_at from prior_review),
+           (select review_note from prior_review)
          on conflict (narrative_definition_id, document_id, model, prompt_version)
          do update set
            matched = excluded.matched,
@@ -139,7 +154,22 @@ export async function persistNarrativeObservations(
            evidence_snippet = excluded.evidence_snippet,
            interpretation = excluded.interpretation,
            affected_entities = excluded.affected_entities,
-           metadata = excluded.metadata`,
+           metadata = excluded.metadata,
+           review_status = case
+             when narrative_observations.review_status = 'pending'
+               then excluded.review_status
+             else narrative_observations.review_status
+           end,
+           reviewed_at = case
+             when narrative_observations.review_status = 'pending'
+               then excluded.reviewed_at
+             else narrative_observations.reviewed_at
+           end,
+           review_note = case
+             when narrative_observations.review_status = 'pending'
+               then excluded.review_note
+             else narrative_observations.review_note
+           end`,
         [
           observation.id,
           observation.narrativeDefinitionId,
@@ -207,7 +237,7 @@ export async function getNarrativeReviewQueue(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeReviewQueue> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v3";
+    configuredPromptVersion ?? "narrative_classification_v4";
   if (!databaseUrl) {
     return {
       databaseConfigured: false,
@@ -327,7 +357,7 @@ export async function recomputeNarrativeTrends(
     const promptVersion =
       options.promptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v3";
+      "narrative_classification_v4";
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -470,7 +500,7 @@ export async function getNarrativeBoardStatus(
   if (!databaseUrl) return { databaseConfigured: false, latestDate: null, narratives: [] };
   const definitions = await getActiveNarrativeDefinitions(databaseUrl);
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v3";
+    configuredPromptVersion ?? "narrative_classification_v4";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {

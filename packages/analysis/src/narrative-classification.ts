@@ -7,7 +7,7 @@ import type {
   ToneDirection
 } from "@market-themes/db";
 
-export const narrativeClassificationPromptVersion = "narrative_classification_v3";
+export const narrativeClassificationPromptVersion = "narrative_classification_v4";
 
 type RawObservation = {
   narrativeDefinitionId?: string;
@@ -49,6 +49,8 @@ Set matched=true only when the exact quoted evidence directly entails the propos
 Topic, sector, company, or keyword adjacency is not a match.
 Do not infer pricing power from inflation, AI demand from semiconductor adjacency,
 credit deterioration from hypothetical policy risk, or broad deal recovery from one transaction.
+Do not infer AI-driven demand from data-center adjacency without explicit AI language,
+or structural energy-demand growth from short-term weather-driven consumption.
 For directional propositions, contradictory evidence is matched=false, not supporting evidence.
 The evidenceSnippet must independently support the match without facts added from elsewhere.
 Interpretation may explain the quote but must not introduce facts absent from it.
@@ -182,7 +184,7 @@ export function passesDefinitionGuard(slug: string, evidence: string) {
       );
     case "ai-infrastructure-demand":
       return (
-        /(artificial intelligence|\bai\b|data cent(er|re))/.test(text) &&
+        /(artificial intelligence|\bai\b)/.test(text) &&
         /(demand|capacity|backlog|orders|load|compute|infrastructure|growth)/.test(text)
       );
     case "ai-capex-discipline":
@@ -216,6 +218,17 @@ export function passesDefinitionGuard(slug: string, evidence: string) {
         /(supply|inventory|lead time|freight|logistics|availability)/.test(text) &&
         /(normaliz|easing|shorter|improv|recover|rebalanc|declin)/.test(text) &&
         !/(disruption|shortage|constraint|ransomware)/.test(text)
+      );
+    case "energy-demand-growth":
+      return (
+        /(demand|load|consumption)/.test(text) &&
+        /(accelerat|expand|growth|increas|higher|record|rising)/.test(text) &&
+        /(economic|industrial|electrif|electric vehicle|data cent(er|re)|artificial intelligence|\bai\b)/.test(
+          text
+        ) &&
+        !/(weather|temperature|summer|winter|heat wave|cold snap|cooling degree|heating degree)/.test(
+          text
+        )
       );
     default:
       return true;
