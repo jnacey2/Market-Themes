@@ -207,6 +207,11 @@ async function scrapeOne(
   console.log(
     `[substack:scrape] ${feed.name} ${publication.baseUrl} session=${session ? "yes" : "no"} fetched=${documents.length} full=${full} preview=${preview} registered=${registered} persisted=${persisted}`
   );
+  for (const post of posts) {
+    console.log(
+      `  - slug=${post.slug} audience=${post.audience} content=${post.content} words=${post.wordCount ?? "n/a"} bodyChars=${post.bodyChars}`
+    );
+  }
   return summary;
 }
 
