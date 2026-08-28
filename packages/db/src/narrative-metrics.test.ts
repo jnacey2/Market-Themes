@@ -30,6 +30,32 @@ test("counts publisher owners independently from syndicated publishers", () => {
   assert.equal(point.lowHistory, true);
 });
 
+test("does not rank an uncovered or unmatched window as unusual", () => {
+  const rows = [observation("a", "newspaper", true, "Publisher A", "Owner A")];
+  const points = calculateNarrativeTrendSeries(
+    rows,
+    ["2026-01-01", "2026-01-02"],
+    1,
+    1
+  );
+  const noCoverage = points[1];
+
+  assert.equal(noCoverage.eligibleDocuments, 0);
+  assert.equal(noCoverage.zScore, 0);
+  assert.equal(noCoverage.percentileRank, 0);
+  assert.equal(noCoverage.change, 0);
+  assert.equal(noCoverage.lowHistory, true);
+
+  const unmatched = calculateNarrativeTrendSeries(
+    [observation("b", "newspaper", false, "Publisher B", "Owner B")],
+    ["2026-01-01"],
+    1,
+    1
+  )[0];
+  assert.equal(unmatched.percentileRank, 0);
+  assert.equal(unmatched.zScore, 0);
+});
+
 function observation(
   documentId: string,
   sourceClass: string,

@@ -64,14 +64,34 @@ export default async function TrendsPage() {
             </div>
             <NarrativeSparkline points={narrative.history} label={narrative.name} />
             <div className="current-level">
-              <strong>{narrative.density.toFixed(1)}</strong>
-              <span>{narrative.percentileRank}th pct</span>
+              <strong>
+                {narrative.eligibleDocuments > 0 ? narrative.density.toFixed(1) : "—"}
+              </strong>
+              <span>
+                {narrative.eligibleDocuments > 0
+                  ? `${narrative.percentileRank}th pct`
+                  : "no recent coverage"}
+              </span>
             </div>
             <div className="current-movement">
-              <strong className={narrative.change >= 0 ? "rising" : "fading"}>
-                {narrative.change >= 0 ? "↑" : "↓"} {Math.abs(narrative.change).toFixed(1)}
+              <strong
+                className={
+                  narrative.eligibleDocuments === 0
+                    ? ""
+                    : narrative.change >= 0
+                      ? "rising"
+                      : "fading"
+                }
+              >
+                {narrative.eligibleDocuments > 0
+                  ? `${narrative.change >= 0 ? "↑" : "↓"} ${Math.abs(narrative.change).toFixed(1)}`
+                  : "Not measured"}
               </strong>
-              <span>accel {signed(narrative.acceleration)}</span>
+              <span>
+                {narrative.eligibleDocuments > 0
+                  ? `accel ${signed(narrative.acceleration)}`
+                  : "ingest recent sources"}
+              </span>
             </div>
             <div className="current-breadth">
               <strong>{narrative.publisherOwnerBreadth}</strong>
