@@ -1,14 +1,14 @@
 import Link from "next/link";
-import { getOperationsStatus, listPublicationFeeds } from "@market-themes/db";
+import { listConnectorCheckpoints, listPublicationFeeds } from "@market-themes/db";
 import { NEWSPAPER_FEED_GROUPS, NEWSPAPER_FEED_PRESETS } from "@market-themes/ingest";
 import { SourceManager } from "./SourceManager";
 
 export const dynamic = "force-dynamic";
 
 export default async function SourcesPage() {
-  const [feeds, operations] = await Promise.all([
+  const [feeds, connectors] = await Promise.all([
     listPublicationFeeds(),
-    getOperationsStatus()
+    listConnectorCheckpoints()
   ]);
   const premiumSources = [
     ["premium-wsj", "The Wall Street Journal"],
@@ -19,7 +19,7 @@ export default async function SourcesPage() {
   ].map(([id, name]) => ({
     id,
     name,
-    checkpoint: operations.connectors.find((connector) => connector.connectorId === id)
+    checkpoint: connectors.find((connector) => connector.connectorId === id)
   }));
 
   return (

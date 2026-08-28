@@ -7,7 +7,19 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const dashboard = await getLiveDashboardStatus();
+  const dashboard = await getLiveDashboardStatus().catch((error) => {
+    console.warn(
+      `[web] live dashboard failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return {
+      databaseConfigured: Boolean(process.env.DATABASE_URL),
+      totalTrendRows: 0,
+      latestTrendDate: null,
+      confirmedSevenDayThemes: [],
+      emergingSevenDayThemes: [],
+      confirmedThirtyDayThemes: []
+    };
+  });
   const topSevenDayThemes = topDashboardThemes(
     dashboard.confirmedSevenDayThemes,
     dashboard.emergingSevenDayThemes,

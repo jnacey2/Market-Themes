@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createDatabaseClient } from "./persistence";
-import type { OperationsStatus } from "./types";
+import { closeDatabaseClient, createDatabaseClient } from "./persistence";
+import type { ConnectorCheckpointSummary, OperationsStatus } from "./types";
 
 export async function startPipelineRun(stage: string, metadata: Record<string, unknown> = {}) {
   const client = createDatabaseClient();
@@ -134,6 +134,41 @@ export async function recordConnectorCheckpoint(input: {
   }
 }
 
+export async function listConnectorCheckpoints(
+  databaseUrl = process.env.DATABASE_URL
+): Promise<ConnectorCheckpointSummary[]> {
+  if (!databaseUrl) return [];
+
+  const client = createDatabaseClient(databaseUrl);
+  try {
+    await client.connect();
+    const connectors = await client.query<{
+      connector_id: string;
+      last_attempt_at: string | null;
+      last_success_at: string | null;
+      last_document_at: string | null;
+      last_error: string | null;
+      documents_fetched: number;
+      documents_inserted: number;
+    }>(
+      `select connector_id, last_attempt_at::text, last_success_at::text,
+              last_document_at::text, last_error, documents_fetched, documents_inserted
+       from connector_checkpoints
+       order by connector_id`
+    );
+    return connectors.rows.map(mapConnectorCheckpoint);
+  } catch (error) {
+    console.warn(
+      `[db] connector checkpoint query failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return [];
+  } finally {
+    await closeDatabaseClient(client);
+  }
+}
+
 export async function getOperationsStatus(
   databaseUrl = process.env.DATABASE_URL
 ): Promise<OperationsStatus> {
@@ -142,9 +177,8 @@ export async function getOperationsStatus(
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     const counts = await client.query<{
         latest_document_at: string | null;
         total_documents: string;
@@ -214,15 +248,7 @@ export async function getOperationsStatus(
       normalizationBacklog: Number(row?.normalization_backlog ?? 0),
       latestTrendDate: row?.latest_trend_date ?? null,
       latestNarrativeTrendDate: row?.latest_narrative_trend_date ?? null,
-      connectors: connectors.rows.map((connector) => ({
-        connectorId: connector.connector_id,
-        lastAttemptAt: connector.last_attempt_at,
-        lastSuccessAt: connector.last_success_at,
-        lastDocumentAt: connector.last_document_at,
-        lastError: connector.last_error,
-        documentsFetched: connector.documents_fetched,
-        documentsInserted: connector.documents_inserted
-      })),
+      connectors: connectors.rows.map(mapConnectorCheckpoint),
       recentRuns: runs.rows.map((run) => ({
         id: run.id,
         stage: run.stage,
@@ -235,9 +261,37 @@ export async function getOperationsStatus(
         errorMessage: run.error_message
       }))
     };
+  } catch (error) {
+    console.warn(
+      `[db] operations status query failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return {
+      ...emptyOperationsStatus(),
+      databaseConfigured: true
+    };
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
+}
+
+function mapConnectorCheckpoint(connector: {
+  connector_id: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_document_at: string | null;
+  last_error: string | null;
+  documents_fetched: number;
+  documents_inserted: number;
+}): ConnectorCheckpointSummary {
+  return {
+    connectorId: connector.connector_id,
+    lastAttemptAt: connector.last_attempt_at,
+    lastSuccessAt: connector.last_success_at,
+    lastDocumentAt: connector.last_document_at,
+    lastError: connector.last_error,
+    documentsFetched: connector.documents_fetched,
+    documentsInserted: connector.documents_inserted
+  };
 }
 
 function emptyOperationsStatus(): OperationsStatus {
