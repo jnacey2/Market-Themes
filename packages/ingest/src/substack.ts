@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import type { PersistableDocument, PublicationFeed } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
 import { assertPublicNetworkUrl } from "./publication-feed";
 import { cleanHtml } from "./rss";
+import { findRepoRoot } from "./substack-publications";
 
 export const ARCHIVE_PAGE_SIZE = 25;
 export const REQUEST_DELAY_SECONDS = 1.5;
@@ -41,6 +44,7 @@ export type SubstackCookie = {
   name: string;
   value: string;
   domain?: string;
+  partitionKey?: string;
 };
 
 export type SubstackSession = {
@@ -272,44 +276,75 @@ export function loadSubstackSession(
   env: NodeJS.ProcessEnv = process.env
 ): SubstackSession | null {
   const encoded = env.SUBSTACK_STORAGE_STATE_B64?.trim();
-  if (!encoded) return null;
-  return parseSubstackSession(encoded);
+  if (encoded) return parseSubstackSession(encoded);
+
+  const explicit = env.SUBSTACK_STORAGE_STATE_PATH?.trim();
+  if (explicit) return readSubstackSessionFile(explicit);
+
+  if (shouldSkipDefaultAuthFiles(env)) return null;
+
+  const authDirectory = resolveAuthDirectory();
+  if (!authDirectory) return null;
+  const jsonPath = path.join(authDirectory, "substack.storage-state.json");
+  const encodedPath = path.join(authDirectory, "substack.storage-state.b64");
+  if (existsSync(jsonPath)) return readSubstackSessionFile(jsonPath);
+  if (existsSync(encodedPath)) return readSubstackSessionFile(encodedPath);
+  return null;
 }
 
 export function resolveSubstackSession(
   env: NodeJS.ProcessEnv = process.env
 ): SubstackSession | null {
-  const encoded = env.SUBSTACK_STORAGE_STATE_B64?.trim();
-  if (!encoded) return null;
-  const session = parseSubstackSession(encoded);
+  const session = loadSubstackSession(env);
+  if (!session) return null;
   if (!isValidSubstackSession(session)) {
     throw new Error(
-      "SUBSTACK_STORAGE_STATE_B64 is present but does not contain a Substack session cookie. Recapture with npm run substack:capture-session."
+      "A Substack storage state is present but does not contain a Substack session cookie. Recapture with npm run substack:capture-session."
     );
   }
   return session;
 }
 
+export function isSubstackSessionConfigured(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  try {
+    return isValidSubstackSession(loadSubstackSession(env));
+  } catch {
+    return false;
+  }
+}
+
 export function parseSubstackSession(encoded: string): SubstackSession {
   try {
-    const parsed = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as {
-      cookies?: SubstackCookie[];
-    };
-    if (!Array.isArray(parsed.cookies)) {
-      throw new Error("missing cookies");
+    return parseSubstackSessionJson(Buffer.from(encoded, "base64").toString("utf8"));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("missing cookies")) {
+      throw new Error("SUBSTACK_STORAGE_STATE_B64 is not valid base64 Playwright JSON.");
     }
-    return {
-      cookies: parsed.cookies
-        .filter((cookie) => cookie && typeof cookie.name === "string" && typeof cookie.value === "string")
-        .map((cookie) => ({
-          name: cookie.name,
-          value: cookie.value,
-          domain: cookie.domain
-        }))
-    };
-  } catch {
     throw new Error("SUBSTACK_STORAGE_STATE_B64 is not valid base64 Playwright JSON.");
   }
+}
+
+export function parseSubstackSessionJson(raw: string): SubstackSession {
+  const parsed = JSON.parse(raw) as { cookies?: SubstackCookie[] };
+  if (!Array.isArray(parsed.cookies)) {
+    throw new Error("missing cookies");
+  }
+  return {
+    cookies: parsed.cookies
+      .filter((cookie) => cookie && typeof cookie.name === "string" && typeof cookie.value === "string")
+      .map((cookie) => ({
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        partitionKey: typeof cookie.partitionKey === "string" ? cookie.partitionKey : undefined
+      }))
+  };
+}
+
+export function cookieHeaderForUrl(session: SubstackSession | null, url: string | URL): string {
+  return cookieHeader(session, typeof url === "string" ? new URL(url) : url);
 }
 
 export function isValidSubstackSession(session: SubstackSession | null): boolean {
@@ -441,10 +476,69 @@ function requestHeaders(url: URL, session: SubstackSession | null | undefined) {
 
 function cookieHeader(session: SubstackSession | null, url: URL): string {
   if (!session) return "";
-  return session.cookies
-    .filter((cookie) => !cookie.domain || hostMatches(url.hostname, cookie.domain))
-    .map((cookie) => `${cookie.name}=${cookie.value}`)
-    .join("; ");
+  const matching = session.cookies.filter(
+    (cookie) => !cookie.domain || hostMatches(url.hostname, cookie.domain)
+  );
+  const selected = new Map<string, SubstackCookie>();
+  for (const cookie of matching) {
+    const current = selected.get(cookie.name);
+    if (!current || cookiePreference(cookie, url) > cookiePreference(current, url)) {
+      selected.set(cookie.name, cookie);
+    }
+  }
+  return [...selected.values()].map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+}
+
+function cookiePreference(cookie: SubstackCookie, url: URL): number {
+  if (!cookie.partitionKey) return 1;
+  return partitionMatches(cookie, url) ? 2 : 0;
+}
+
+function partitionMatches(cookie: SubstackCookie, url: URL): boolean {
+  if (!cookie.partitionKey) return true;
+  try {
+    const partitioned = new URL(cookie.partitionKey);
+    const host = url.hostname.toLowerCase();
+    const partHost = partitioned.hostname.toLowerCase().replace(/^www\./, "");
+    return (
+      host === partitioned.hostname.toLowerCase() ||
+      host === partHost ||
+      host.endsWith(`.${partHost}`)
+    );
+  } catch {
+    const needle = cookie.partitionKey.toLowerCase();
+    return url.hostname.toLowerCase().includes(needle.replace(/^https?:\/\//, "").replace(/^www\./, ""));
+  }
+}
+
+function readSubstackSessionFile(filePath: string): SubstackSession {
+  const raw = readFileSync(filePath, "utf8").trim();
+  if (!raw) {
+    throw new Error("Substack storage state file is empty.");
+  }
+  if (raw.startsWith("{")) {
+    return parseSubstackSessionJson(raw);
+  }
+  return parseSubstackSession(raw);
+}
+
+function shouldSkipDefaultAuthFiles(env: NodeJS.ProcessEnv) {
+  if (env.SUBSTACK_LOAD_AUTH_FILE === "1" || env.SUBSTACK_LOAD_AUTH_FILE === "true") {
+    return false;
+  }
+  if (env.SUBSTACK_LOAD_AUTH_FILE === "0" || env.SUBSTACK_LOAD_AUTH_FILE === "false") {
+    return true;
+  }
+  if (env.NODE_TEST_CONTEXT) return true;
+  return env !== process.env;
+}
+
+function resolveAuthDirectory(): string | null {
+  const root = findRepoRoot();
+  const fromRoot = path.join(root, ".auth");
+  if (existsSync(fromRoot)) return fromRoot;
+  const fromCwd = path.join(process.cwd(), ".auth");
+  return existsSync(fromCwd) ? fromCwd : null;
 }
 
 function hostMatches(hostname: string, domain: string) {

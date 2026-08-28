@@ -17,6 +17,7 @@ import {
   sanitizeSlug,
   stripSubstackChrome,
   SubstackAccessError,
+  cookieHeaderForUrl,
   type CachedSubstackPost,
   type SubstackPost
 } from "./substack";
@@ -399,6 +400,49 @@ test("incremental refresh is idempotent once a watermark is stored", async () =>
     }
   );
   assert.equal(second.length, 0);
+});
+
+test("selects the partition-matching cookie when several share a name", () => {
+  const header = cookieHeaderForUrl(
+    {
+      cookies: [
+        {
+          name: "cf_clearance",
+          value: "substack",
+          domain: ".substack.com",
+          partitionKey: "https://substack.com"
+        },
+        {
+          name: "cf_clearance",
+          value: "pinebrook",
+          domain: ".substack.com",
+          partitionKey: "https://pinebrookcap.com"
+        },
+        { name: "substack.sid", value: "sid", domain: ".substack.com" }
+      ]
+    },
+    "https://moontower.substack.com/api/v1/archive"
+  );
+  assert.match(header, /cf_clearance=substack/);
+  assert.doesNotMatch(header, /cf_clearance=pinebrook/);
+  assert.match(header, /substack\.sid=sid/);
+});
+
+test("loads a Playwright session from an explicit storage-state file", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = mkdtempSync(join(tmpdir(), "substack-session-"));
+  const file = join(directory, "substack.storage-state.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      cookies: [{ name: "substack.sid", value: "from-file", domain: ".substack.com" }],
+      origins: []
+    })
+  );
+  const session = resolveSubstackSession({ SUBSTACK_STORAGE_STATE_PATH: file });
+  assert.equal(session?.cookies[0]?.value, "from-file");
 });
 
 test("parses and validates Playwright Substack sessions", () => {

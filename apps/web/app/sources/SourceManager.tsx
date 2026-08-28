@@ -22,15 +22,26 @@ export type NewspaperPresetGroup = {
   publisherOwner: string;
 };
 
+export type SubstackPreset = {
+  id: string;
+  name: string;
+  baseUrl: string;
+};
+
+const SUBSTACK_FEED_TERMS =
+  "Subscriber posts the operator already pays for; stored as full text when the captured session can read them, otherwise as previews.";
+
 export function SourceManager({
   feeds,
   newspaperGroups,
   newspaperPresets,
+  substackPresets,
   substackSessionConfigured
 }: {
   feeds: PublicationFeed[];
   newspaperGroups: NewspaperPresetGroup[];
   newspaperPresets: NewspaperPreset[];
+  substackPresets: SubstackPreset[];
   substackSessionConfigured: boolean;
 }) {
   const router = useRouter();
@@ -65,6 +76,35 @@ export function SourceManager({
     setError(null);
     try {
       await createPublication(presetPayload(preset));
+      router.refresh();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function addSubstackPreset(preset: SubstackPreset) {
+    setPending(`substack:${preset.id}`);
+    setError(null);
+    try {
+      await createPublication(substackPresetPayload(preset));
+      router.refresh();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function addAllSubstackPresets() {
+    const remaining = substackPresets.filter((preset) => !isSubstackPresetRegistered(preset, feeds));
+    setPending("substack:all");
+    setError(null);
+    try {
+      for (const preset of remaining) {
+        await createPublication(substackPresetPayload(preset));
+      }
       router.refresh();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
@@ -111,6 +151,7 @@ export function SourceManager({
   }
 
   const substackFeeds = feeds.filter((feed) => feed.platform === "substack");
+  const remainingSubstacks = remainingSubstackPresets(substackPresets, feeds);
 
   return (
     <>
@@ -129,9 +170,67 @@ export function SourceManager({
           <p>
             {substackSessionConfigured
               ? "Paid subscriber posts can be stored as full text and later upgraded if an earlier poll only got a preview."
-              : "Run `npm run substack:capture-session`, confirm a paid article opens, then set SUBSTACK_STORAGE_STATE_B64 on web, worker, and poll-sources."}
+              : "Run `npm run substack:capture-session`, confirm a paid article opens, then set SUBSTACK_STORAGE_STATE_B64 on web, worker, and poll-sources. Local CLI also loads `.auth/substack.storage-state.json`."}
           </p>
         </div>
+      </section>
+
+      <section className="panel newspaper-presets">
+        <div>
+          <p className="eyebrow">Paid Substacks</p>
+          <h2>Add the Investment Process publications</h2>
+          <p>
+            Names and homepage URLs only. The subscriber session stays in
+            environment secrets or ignored `.auth` files — never in this list.
+            Custom domains and `*.substack.com` sites use the same archive and
+            post JSON endpoints.
+          </p>
+        </div>
+        <article className="preset-group">
+          <div className="preset-group-header">
+            <div>
+              <h3>Investment Process</h3>
+              <p>
+                {substackPresets.length - remainingSubstacks.length} of {substackPresets.length}{" "}
+                registered
+              </p>
+            </div>
+            <button
+              className="button"
+              disabled={pending !== null || remainingSubstacks.length === 0}
+              onClick={() => addAllSubstackPresets()}
+              type="button"
+            >
+              {pending === "substack:all"
+                ? "Adding…"
+                : remainingSubstacks.length === 0
+                  ? "Added"
+                  : `Add all ${remainingSubstacks.length}`}
+            </button>
+          </div>
+          <div className="preset-row">
+            {substackPresets.map((preset) => {
+              const added = isSubstackPresetRegistered(preset, feeds);
+              return (
+                <button
+                  className={`preset-chip${added ? " preset-chip-added" : ""}`}
+                  disabled={pending !== null || added}
+                  key={preset.id}
+                  onClick={() => addSubstackPreset(preset)}
+                  title={preset.baseUrl}
+                  type="button"
+                >
+                  {pending === `substack:${preset.id}`
+                    ? "Adding…"
+                    : added
+                      ? `${preset.name} added`
+                      : preset.name}
+                </button>
+              );
+            })}
+          </div>
+        </article>
+        {error ? <p className="error-text">{error}</p> : null}
       </section>
 
       <section className="panel newspaper-presets">
@@ -197,19 +296,19 @@ export function SourceManager({
           <p className="eyebrow">Add Publication</p>
           <h2>Register a Substack or RSS feed</h2>
           <p>
-            Add each Substack you subscribe to by homepage URL, including custom
-            domains. Paid posts are stored as full text when the captured
-            subscriber session can read them, otherwise as previews. Generic
-            publications use RSS or Atom.
+            Paste a homepage URL to register it. The name is inferred from the
+            hostname when left blank. Paid posts are stored as full text when
+            the captured subscriber session can read them, otherwise as
+            previews. Generic publications use RSS or Atom.
           </p>
         </div>
         <label>
           Publication name
-          <input name="name" placeholder="Example Macro Letter" required />
+          <input name="name" placeholder="Optional — inferred from the URL" />
         </label>
         <label>
           Publication URL
-          <input name="url" placeholder="https://example.substack.com" required type="url" />
+          <input name="url" placeholder="https://moontower.substack.com" required type="url" />
         </label>
         <label>
           Platform
@@ -297,6 +396,39 @@ export function SourceManager({
       </div>
     </>
   );
+}
+
+function substackPresetPayload(preset: SubstackPreset) {
+  return {
+    name: preset.name,
+    url: preset.baseUrl,
+    homepageUrl: preset.baseUrl,
+    platform: "substack",
+    retentionPolicy: "full_text",
+    backfillDays: 30,
+    maxPostsPerPoll: 50,
+    tags: ["substack", "preset"],
+    termsNotes: SUBSTACK_FEED_TERMS
+  };
+}
+
+function isSubstackPresetRegistered(preset: SubstackPreset, feeds: PublicationFeed[]) {
+  try {
+    const origin = new URL(preset.baseUrl).origin;
+    return feeds.some((feed) => {
+      try {
+        return new URL(feed.homepageUrl).origin === origin || new URL(feed.feedUrl).origin === origin;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+function remainingSubstackPresets(presets: SubstackPreset[], feeds: PublicationFeed[]) {
+  return presets.filter((preset) => !isSubstackPresetRegistered(preset, feeds));
 }
 
 function presetPayload(preset: NewspaperPreset) {

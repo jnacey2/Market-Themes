@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { listConnectorCheckpoints, listPublicationFeeds } from "@market-themes/db";
-import { NEWSPAPER_FEED_GROUPS, NEWSPAPER_FEED_PRESETS } from "@market-themes/ingest";
+import {
+  isSubstackSessionConfigured,
+  NEWSPAPER_FEED_GROUPS,
+  NEWSPAPER_FEED_PRESETS,
+  SUBSTACK_PUBLICATION_PRESETS
+} from "@market-themes/ingest";
 import { SourceManager } from "./SourceManager";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +15,7 @@ export default async function SourcesPage() {
     listPublicationFeeds(),
     listConnectorCheckpoints()
   ]);
-  const substackSessionConfigured = Boolean(process.env.SUBSTACK_STORAGE_STATE_B64?.trim());
+  const substackSessionConfigured = isSubstackSessionConfigured();
   const premiumSources = [
     ["premium-wsj", "The Wall Street Journal"],
     ["premium-nyt", "The New York Times"],
@@ -39,8 +44,9 @@ export default async function SourcesPage() {
           <p className="eyebrow">Source Registry</p>
           <h1>Managed publications.</h1>
           <p className="lede">
-            Add the Substacks you subscribe to, plus blogs and official newspaper
-            RSS, without a code deploy. A captured Substack subscriber session
+            Add the Substacks you subscribe to — paste a homepage URL or add the
+            Investment Process list in one click — plus blogs and official
+            newspaper RSS, without a code deploy. A captured subscriber session
             downloads paid posts you already pay for. Headline feeds stay
             snippet-only. Each source is deduplicated, checkpointed, and routed
             through evidence review before it can affect published narratives.
@@ -57,6 +63,7 @@ export default async function SourcesPage() {
         feeds={feeds}
         newspaperGroups={NEWSPAPER_FEED_GROUPS}
         newspaperPresets={NEWSPAPER_FEED_PRESETS}
+        substackPresets={SUBSTACK_PUBLICATION_PRESETS}
         substackSessionConfigured={substackSessionConfigured}
       />
 

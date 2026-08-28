@@ -28,6 +28,7 @@
     "premium:scrape": "npm run premium:scrape --workspace @market-themes/workers",
     "premium:capture-session": "npm run premium:capture-session --workspace @market-themes/workers --",
     "substack:capture-session": "npm run substack:capture-session --workspace @market-themes/workers --",
+    "substack:scrape": "npm run substack:scrape --workspace @market-themes/workers --",
     "repair:document-texts": "npm run repair:document-texts --workspace @market-themes/workers",
     "themes:normalize": "npm run themes:normalize --workspace @market-themes/workers",
     "themes:normalize:backfill": "npm run themes:normalize:backfill --workspace @market-themes/workers",

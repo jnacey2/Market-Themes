@@ -3,6 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { chromium, type Page } from "playwright";
 import { listPublicationFeeds } from "@market-themes/db";
+import { SUBSTACK_PUBLICATION_PRESETS } from "@market-themes/ingest";
 
 const headless = process.argv.includes("--headless");
 const extraUrls = process.argv
@@ -112,6 +113,9 @@ async function publicationHomepages(explicit: string[]) {
     for (const feed of feeds.filter((item) => item.platform === "substack")) {
       urls.push(feed.homepageUrl);
     }
+  }
+  if (urls.length === 0) {
+    urls.push(...SUBSTACK_PUBLICATION_PRESETS.map((preset) => preset.baseUrl));
   }
   return [...new Set(urls.map((value) => value.replace(/\/+$/, "")))];
 }
