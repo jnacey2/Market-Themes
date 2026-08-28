@@ -4,10 +4,13 @@ import test from "node:test";
 import {
   getActiveNarrativeDefinitions,
   getNarrativeBoardStatus,
+  createPublicationFeed,
+  listPublicationFeeds,
   persistDocuments,
   persistNarrativeObservations,
   recomputeNarrativeTrends,
-  reviewNarrativeObservation
+  reviewNarrativeObservation,
+  setPublicationFeedEnabled
 } from "./index";
 
 test(
@@ -104,5 +107,35 @@ test(
     assert(narrative);
     assert(narrative.matchedDocuments >= 1);
     assert(narrative.evidence.some((item) => item.id === `integration:observation:${suffix}`));
+  }
+);
+
+test(
+  "registers and disables a managed publication feed",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const suffix = randomUUID();
+    const created = await createPublicationFeed({
+      name: `Integration Publication ${suffix}`,
+      homepageUrl: `https://${suffix}.example.com/`,
+      feedUrl: `https://${suffix}.example.com/feed`,
+      platform: "rss",
+      publisherOwner: "Integration Publisher",
+      termsNotes: "Public integration fixture."
+    });
+    assert.equal(created.enabled, true);
+
+    const enabled = await listPublicationFeeds(
+      { enabledOnly: true },
+      process.env.DATABASE_URL
+    );
+    assert(enabled.some((feed) => feed.id === created.id));
+
+    await setPublicationFeedEnabled(created.id, false, process.env.DATABASE_URL);
+    const afterDisable = await listPublicationFeeds(
+      { enabledOnly: true },
+      process.env.DATABASE_URL
+    );
+    assert.equal(afterDisable.some((feed) => feed.id === created.id), false);
   }
 );

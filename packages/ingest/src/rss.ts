@@ -11,6 +11,9 @@ export type RssFeedConfig = {
   publisherOwner?: string;
   tickers?: string[];
   retentionPolicy?: "full_text" | "snippet";
+  lookbackHours?: number;
+  termsNotes?: string;
+  fetchImpl?: typeof fetch;
 };
 
 type FeedItem = {
@@ -38,7 +41,7 @@ export function createRssConnector(config: RssFeedConfig): SourceConnector {
     sourceClass: config.sourceClass,
     description: `${config.name} RSS feed.`,
     async poll() {
-      const response = await fetch(config.url, {
+      const response = await (config.fetchImpl ?? fetch)(config.url, {
         headers: {
           Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
           "User-Agent": process.env.SCRAPER_USER_AGENT ?? "MarketThemesBot/0.1"
@@ -51,7 +54,9 @@ export function createRssConnector(config: RssFeedConfig): SourceConnector {
 
       const parsed = parser.parse(await response.text()) as Record<string, unknown>;
       const items = extractItems(parsed);
-      const cutoff = Date.now() - Number(process.env.RSS_LOOKBACK_HOURS ?? 48) * 3_600_000;
+      const cutoff =
+        Date.now() -
+        Number(config.lookbackHours ?? process.env.RSS_LOOKBACK_HOURS ?? 48) * 3_600_000;
 
       return items
         .map((item) => toDocument(config, item))
@@ -91,9 +96,13 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
   const title = cleanHtml(text(item.title));
   const url = text(item.link) || text(item.guid);
   const publishedAt = normalizeDate(item.pubDate ?? item.published ?? item.updated);
-  const body = cleanHtml(
+  const fullBody = cleanHtml(
     text(item["content:encoded"]) || text(item.content) || text(item.description) || text(item.summary)
   );
+  const body =
+    config.retentionPolicy === "snippet"
+      ? cleanHtml(text(item.description) || text(item.summary) || fullBody).slice(0, 2_000)
+      : fullBody;
 
   if (!title || !url || !publishedAt || !body) {
     return null;
@@ -119,7 +128,12 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
     retentionPolicy: config.retentionPolicy ?? "full_text",
     contentHash: createHash("sha256").update(body).digest("hex"),
     nearDuplicateKey: createHash("sha256").update(normalizeTitle(title)).digest("hex"),
-    metadata: { feedUrl: config.url, publisherOwner: config.publisherOwner ?? config.name }
+    metadata: {
+      feedUrl: config.url,
+      publisherOwner: config.publisherOwner ?? config.name,
+      sourceName: config.name,
+      termsNotes: config.termsNotes
+    }
   };
 }
 
@@ -139,7 +153,7 @@ function text(value: unknown): string {
   return record ? text(record["#text"] ?? record["@_href"]) : "";
 }
 
-function cleanHtml(value: string) {
+export function cleanHtml(value: string) {
   return value
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
