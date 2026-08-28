@@ -3,6 +3,7 @@ import { createSecFilingsConnector } from "./sec";
 import { createFmpNewsConnector } from "./fmp-news";
 import { createCompanyIrConnectors, createOfficialSourceConnectors } from "./official-sources";
 import { createGdeltConnector } from "./gdelt";
+import { createNytSearchConnector } from "./nyt-search";
 
 export type RawDocument = PersistableDocument;
 
@@ -49,5 +50,6 @@ export const defaultConnectors: SourceConnector[] = [
     "Earnings call transcript connector for licensed or public sources."
   ),
   createFmpNewsConnector(),
+  createNytSearchConnector(),
   createGdeltConnector()
 ];

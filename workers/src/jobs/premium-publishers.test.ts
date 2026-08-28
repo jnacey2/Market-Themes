@@ -7,6 +7,14 @@ import {
   premiumPublisherProfiles
 } from "../premium-publishers";
 
+test("premium publisher owners use shared slugs", () => {
+  assert.equal(premiumPublisherProfiles.wsj.publisherOwner, "dow-jones");
+  assert.equal(premiumPublisherProfiles.nyt.publisherOwner, "nyt");
+  assert.equal(premiumPublisherProfiles.wapo.publisherOwner, "washington-post");
+  assert.equal(premiumPublisherProfiles.ft.publisherOwner, "financial-times");
+  assert.equal(premiumPublisherProfiles.bloomberg.publisherOwner, "bloomberg");
+});
+
 test("parses a deduplicated premium publisher allowlist", () => {
   assert.deepEqual(parsePremiumPublisherIds("wsj,nyt,wsj"), ["wsj", "nyt"]);
   assert.throws(() => parsePremiumPublisherIds("wsj,unknown"), /Unknown premium publisher/);

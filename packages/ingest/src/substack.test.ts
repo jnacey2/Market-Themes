@@ -7,6 +7,22 @@ import {
 } from "./publication-feed";
 import { fetchSubstackPosts } from "./substack";
 
+test("infers newspaper owners and homepage URLs for RSS presets", () => {
+  const input = normalizePublicationFeedInput({
+    name: "NYT Business",
+    url: "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+    homepageUrl: "https://www.nytimes.com/",
+    platform: "rss",
+    retentionPolicy: "snippet",
+    tags: ["rss", "newspaper", "preset"],
+    termsNotes: "Public RSS headline and summary only."
+  });
+  assert.equal(input.homepageUrl, "https://www.nytimes.com/");
+  assert.equal(input.publisherOwner, "nyt");
+  assert.equal(input.retentionPolicy, "snippet");
+  assert.deepEqual(input.tags, ["rss", "newspaper", "preset"]);
+});
+
 test("normalizes Substack homepages and rejects private feed targets", () => {
   const input = normalizePublicationFeedInput({
     name: "Example Letter",

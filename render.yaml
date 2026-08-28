@@ -244,6 +244,14 @@ services:
         sync: false
       - key: FMP_API_KEY
         sync: false
+      - key: GDELT_ENABLED
+        value: "false"
+      - key: GDELT_DOMAINS
+        value: "wsj.com,nytimes.com,bloomberg.com,washingtonpost.com,ft.com,reuters.com"
+      - key: NYT_API_KEY
+        sync: false
+      - key: NYT_SEARCH_LOOKBACK_HOURS
+        value: "24"
       - key: SEC_POLL_LOOKBACK_DAYS
         value: "7"
       - key: SEC_RATE_LIMIT_MS
