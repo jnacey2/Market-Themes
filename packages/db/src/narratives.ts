@@ -237,7 +237,7 @@ export async function getNarrativeReviewQueue(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeReviewQueue> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v4";
+    configuredPromptVersion ?? "narrative_classification_v5";
   if (!databaseUrl) {
     return {
       databaseConfigured: false,
@@ -357,7 +357,7 @@ export async function recomputeNarrativeTrends(
     const promptVersion =
       options.promptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v4";
+      "narrative_classification_v5";
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -500,7 +500,7 @@ export async function getNarrativeBoardStatus(
   if (!databaseUrl) return { databaseConfigured: false, latestDate: null, narratives: [] };
   const definitions = await getActiveNarrativeDefinitions(databaseUrl);
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v4";
+    configuredPromptVersion ?? "narrative_classification_v5";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
