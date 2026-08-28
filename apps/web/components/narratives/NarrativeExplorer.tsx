@@ -97,8 +97,8 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
           <strong>{active?.date ?? "No observations"}</strong>
           <span>Density {active?.density.toFixed(1) ?? "0.0"}</span>
           <span>Baseline {active?.baselineMean.toFixed(1) ?? "0.0"}</span>
-          <span>Z-score {active?.zScore.toFixed(1) ?? "0.0"}</span>
-          <span>Change {signed(active?.change ?? 0)}</span>
+          <span>Z-score {narrative.lowHistory ? "—" : active?.zScore.toFixed(1) ?? "0.0"}</span>
+          <span>Change {narrative.lowHistory ? "—" : signed(active?.change ?? 0)}</span>
         </div>
       </div>
 

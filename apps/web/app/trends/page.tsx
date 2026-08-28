@@ -68,35 +68,41 @@ export default async function TrendsPage() {
                 {narrative.eligibleDocuments > 0 ? narrative.density.toFixed(1) : "—"}
               </strong>
               <span>
-                {narrative.eligibleDocuments > 0
+                {narrative.eligibleDocuments > 0 && !narrative.lowHistory
                   ? `${narrative.percentileRank}th pct`
-                  : "no recent coverage"}
+                  : narrative.eligibleDocuments > 0
+                    ? "building baseline"
+                    : "no recent coverage"}
               </span>
             </div>
             <div className="current-movement">
               <strong
                 className={
-                  narrative.eligibleDocuments === 0
+                  narrative.eligibleDocuments === 0 || narrative.lowHistory
                     ? ""
                     : narrative.change >= 0
                       ? "rising"
                       : "fading"
                 }
               >
-                {narrative.eligibleDocuments > 0
+                {narrative.eligibleDocuments > 0 && !narrative.lowHistory
                   ? `${narrative.change >= 0 ? "↑" : "↓"} ${Math.abs(narrative.change).toFixed(1)}`
-                  : "Not measured"}
+                  : narrative.eligibleDocuments > 0
+                    ? "Baseline pending"
+                    : "Not measured"}
               </strong>
               <span>
-                {narrative.eligibleDocuments > 0
+                {narrative.eligibleDocuments > 0 && !narrative.lowHistory
                   ? `accel ${signed(narrative.acceleration)}`
-                  : "ingest recent sources"}
+                  : narrative.eligibleDocuments > 0
+                    ? "movement suppressed"
+                    : "ingest recent sources"}
               </span>
             </div>
             <div className="current-breadth">
               <strong>{narrative.publisherOwnerBreadth}</strong>
-              <span>independent owners</span>
-              {narrative.lowHistory ? <em>low history</em> : null}
+              <span>publisher groups</span>
+              {narrative.lowHistory ? <em>building baseline</em> : null}
             </div>
           </Link>
         ))}

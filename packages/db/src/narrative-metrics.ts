@@ -58,6 +58,7 @@ export function calculateNarrativeTrendSeries(
     const baselineStddev = Math.max(standardDeviation(baselineValues, baselineMean), 0.01);
     const hasCoverage = current.eligibleDocuments > 0;
     const hasMatch = current.matchedDocuments > 0;
+    const lowHistory = !hasCoverage || baselineValues.length < lowHistoryDays;
     const change =
       hasCoverage && previous.eligibleDocuments > 0
         ? current.density - previous.density
@@ -73,11 +74,11 @@ export function calculateNarrativeTrendSeries(
       baselineMean: round(baselineMean),
       baselineStddev: round(baselineStddev),
       zScore:
-        hasCoverage && hasMatch
+        hasCoverage && hasMatch && !lowHistory
           ? round((current.density - baselineMean) / baselineStddev)
           : 0,
       percentileRank:
-        !hasCoverage || !hasMatch || baselineValues.length === 0
+        !hasCoverage || !hasMatch || lowHistory
           ? 0
           : Math.round(
               (baselineValues.filter((value) => value <= current.density).length /
@@ -94,7 +95,7 @@ export function calculateNarrativeTrendSeries(
       publisherOwnerBreadth: current.publisherOwnerBreadth,
       sourceClassBreadth: current.sourceClassBreadth,
       entityBreadth: current.entityBreadth,
-      lowHistory: !hasCoverage || baselineValues.length < lowHistoryDays
+      lowHistory
     };
   });
 }
