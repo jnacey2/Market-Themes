@@ -8,6 +8,8 @@ import type {
   NarrativeBoardStatus,
   NarrativeDefinition,
   NarrativeObservationInput,
+  NarrativeReviewQueue,
+  NarrativeReviewStatus,
   NarrativeTrendSummary,
   TrendWindow
 } from "./types";
@@ -163,6 +165,149 @@ export async function persistNarrativeObservations(
   }
 }
 
+export async function reviewNarrativeObservation(
+  input: {
+    id: string;
+    status: Exclude<NarrativeReviewStatus, "pending">;
+    note?: string;
+  },
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<{
+      id: string;
+      review_status: NarrativeReviewStatus;
+      reviewed_at: string;
+    }>(
+      `update narrative_observations
+       set review_status = $2,
+           review_note = nullif($3, ''),
+           reviewed_at = now()
+       where id = $1 and matched
+       returning id, review_status, reviewed_at::text`,
+      [input.id, input.status, input.note?.trim() ?? ""]
+    );
+    if (!result.rows[0]) {
+      throw new Error("Matched narrative observation not found.");
+    }
+    return {
+      id: result.rows[0].id,
+      reviewStatus: result.rows[0].review_status,
+      reviewedAt: result.rows[0].reviewed_at
+    };
+  } finally {
+    await client.end();
+  }
+}
+
+export async function getNarrativeReviewQueue(
+  databaseUrl = process.env.DATABASE_URL,
+  configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+): Promise<NarrativeReviewQueue> {
+  const promptVersion =
+    configuredPromptVersion ?? "narrative_classification_v3";
+  if (!databaseUrl) {
+    return {
+      databaseConfigured: false,
+      promptVersion,
+      pendingCount: 0,
+      approvedCount: 0,
+      rejectedCount: 0,
+      items: []
+    };
+  }
+
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const counts = await client.query<{
+        review_status: NarrativeReviewStatus;
+        count: string;
+      }>(
+        `select review_status, count(*)::text as count
+         from narrative_observations
+         where matched and prompt_version = $1
+         group by review_status`,
+        [promptVersion]
+      );
+    const items = await client.query<{
+        id: string;
+        narrative_definition_id: string;
+        narrative_name: string;
+        proposition: string;
+        inclusion_guidance: string;
+        exclusion_guidance: string;
+        title: string;
+        publisher: string;
+        published_at: string;
+        url: string;
+        source_class: NarrativeReviewQueue["items"][number]["sourceClass"];
+        stance: NarrativeReviewQueue["items"][number]["stance"];
+        evidence_snippet: string;
+        interpretation: string;
+        affected_entities: string[];
+        match_score: number;
+        prompt_version: string;
+        review_status: NarrativeReviewStatus;
+        review_note: string | null;
+        reviewed_at: string | null;
+      }>(
+        `select no.id, no.narrative_definition_id, nd.name as narrative_name,
+                nd.proposition, nd.inclusion_guidance, nd.exclusion_guidance,
+                d.title, d.publisher, d.published_at::text, d.url, d.source_class,
+                no.stance, no.evidence_snippet, no.interpretation,
+                no.affected_entities, no.match_score::float, no.prompt_version,
+                no.review_status, no.review_note, no.reviewed_at::text
+         from narrative_observations no
+         join narrative_definitions nd on nd.id = no.narrative_definition_id
+         join documents d on d.id = no.document_id
+         where no.matched and no.prompt_version = $1
+         order by
+           case no.review_status when 'pending' then 0 when 'approved' then 1 else 2 end,
+           d.published_at desc,
+           no.match_score desc
+         limit 100`,
+        [promptVersion]
+      );
+    const countFor = (status: NarrativeReviewStatus) =>
+      Number(counts.rows.find((row) => row.review_status === status)?.count ?? 0);
+
+    return {
+      databaseConfigured: true,
+      promptVersion,
+      pendingCount: countFor("pending"),
+      approvedCount: countFor("approved"),
+      rejectedCount: countFor("rejected"),
+      items: items.rows.map((row) => ({
+        id: row.id,
+        narrativeDefinitionId: row.narrative_definition_id,
+        narrativeName: row.narrative_name,
+        proposition: row.proposition,
+        inclusionGuidance: row.inclusion_guidance,
+        exclusionGuidance: row.exclusion_guidance,
+        title: row.title,
+        publisher: row.publisher,
+        publishedAt: row.published_at,
+        url: row.url,
+        sourceClass: row.source_class,
+        stance: row.stance,
+        evidenceSnippet: row.evidence_snippet,
+        interpretation: row.interpretation,
+        affectedEntities: row.affected_entities,
+        matchScore: row.match_score,
+        promptVersion: row.prompt_version,
+        reviewStatus: row.review_status,
+        reviewNote: row.review_note,
+        reviewedAt: row.reviewed_at
+      }))
+    };
+  } finally {
+    await client.end();
+  }
+}
+
 export async function recomputeNarrativeTrends(
   options: {
     asOfDate?: string;
@@ -201,6 +346,7 @@ export async function recomputeNarrativeTrends(
       publisher_owner: string | null;
       source_class: string;
       affected_entities: string[];
+      review_status: NarrativeReviewStatus;
     }>(
       `with latest_observations as (
          select distinct on (narrative_definition_id, document_id) *
@@ -213,7 +359,7 @@ export async function recomputeNarrativeTrends(
               no.risk_tone::float, no.bullish_tone::float,
               coalesce(d.publisher_id, d.publisher) as publisher_id,
               coalesce(d.publisher_owner, d.publisher) as publisher_owner,
-              d.source_class, no.affected_entities
+              d.source_class, no.affected_entities, no.review_status
        from latest_observations no
        join documents d on d.id = no.document_id
        where d.published_at::date between $1::date and $2::date`,
@@ -230,7 +376,7 @@ export async function recomputeNarrativeTrends(
             narrativeDefinitionId: row.narrative_definition_id,
             date: row.date,
             documentId: row.document_id,
-            matched: row.matched,
+            matched: row.matched && row.review_status === "approved",
             matchScore: row.match_score,
             riskTone: row.risk_tone,
             bullishTone: row.bullish_tone,
@@ -382,6 +528,7 @@ export async function getNarrativeBoardStatus(
         interpretation: string;
         affected_entities: string[];
         match_score: number;
+        review_status: NarrativeReviewStatus;
       }>(
         `with latest_observations as (
            select distinct on (narrative_definition_id, document_id) *
@@ -392,10 +539,10 @@ export async function getNarrativeBoardStatus(
          )
          select no.id, d.title, d.publisher, d.published_at::text, d.url,
                 d.source_class, no.stance, no.evidence_snippet, no.interpretation,
-                no.affected_entities, no.match_score::float
+                no.affected_entities, no.match_score::float, no.review_status
          from latest_observations no
          join documents d on d.id = no.document_id
-         where no.matched
+         where no.matched and no.review_status = 'approved'
          order by d.published_at desc, no.match_score desc
          limit 12`,
         [definition.id, promptVersion]
@@ -442,7 +589,8 @@ export async function getNarrativeBoardStatus(
           evidenceSnippet: row.evidence_snippet,
           interpretation: row.interpretation,
           affectedEntities: row.affected_entities,
-          matchScore: row.match_score
+          matchScore: row.match_score,
+          reviewStatus: row.review_status
         }))
       });
     }

@@ -436,6 +436,29 @@ export type NarrativeEvidence = {
   interpretation: string;
   affectedEntities: string[];
   matchScore: number;
+  reviewStatus: NarrativeReviewStatus;
+};
+
+export type NarrativeReviewStatus = "pending" | "approved" | "rejected";
+
+export type NarrativeReviewItem = NarrativeEvidence & {
+  narrativeDefinitionId: string;
+  narrativeName: string;
+  proposition: string;
+  inclusionGuidance: string;
+  exclusionGuidance: string;
+  promptVersion: string;
+  reviewNote: string | null;
+  reviewedAt: string | null;
+};
+
+export type NarrativeReviewQueue = {
+  databaseConfigured: boolean;
+  promptVersion: string;
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  items: NarrativeReviewItem[];
 };
 
 export type NarrativeTrendSummary = NarrativeDefinition & {

@@ -1,7 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorized } from "./lib/ops-auth";
 
-const PROTECTED_PATHS = ["/analysis", "/ingestion", "/theme-mappings", "/api/backfill"];
+const PROTECTED_PATHS = [
+  "/analysis",
+  "/ingestion",
+  "/theme-mappings",
+  "/narrative-review",
+  "/api/backfill",
+  "/api/narrative-observations"
+];
 
 export function proxy(request: NextRequest) {
   if (!PROTECTED_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {
@@ -34,6 +41,8 @@ export const config = {
     "/analysis/:path*",
     "/ingestion/:path*",
     "/theme-mappings/:path*",
+    "/narrative-review/:path*",
+    "/api/narrative-observations/:path*",
     "/api/backfill/:path*"
   ]
 };
