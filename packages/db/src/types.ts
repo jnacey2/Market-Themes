@@ -227,6 +227,7 @@ export type TrendStatus = {
 
 export type LiveDashboardStatus = {
   databaseConfigured: boolean;
+  degraded: boolean;
   totalTrendRows: number;
   latestTrendDate: string | null;
   confirmedSevenDayThemes: TrendSummary[];
