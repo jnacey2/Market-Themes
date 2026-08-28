@@ -54,6 +54,31 @@ export async function listPublicationFeeds(
   }
 }
 
+export async function findPublicationFeedByFeedUrl(
+  feedUrl: string,
+  databaseUrl = process.env.DATABASE_URL
+): Promise<PublicationFeed | null> {
+  if (!databaseUrl) return null;
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<PublicationFeedRow>(
+      `select id, name, homepage_url, feed_url, platform, source_class,
+              publisher_id, publisher_owner, retention_policy, enabled,
+              backfill_days, max_posts_per_poll, rate_limit_ms, tags, terms_notes,
+              last_attempt_at::text, last_success_at::text,
+              last_published_at::text, last_error
+       from publication_feeds
+       where feed_url = $1
+       limit 1`,
+      [feedUrl]
+    );
+    return result.rows[0] ? mapPublicationFeed(result.rows[0]) : null;
+  } finally {
+    await client.end();
+  }
+}
+
 export async function createPublicationFeed(
   input: PublicationFeedInput,
   databaseUrl = process.env.DATABASE_URL
@@ -74,6 +99,20 @@ export async function createPublicationFeed(
        ) values (
          $1, $2, $3, $4, $5, 'newspaper', $6, $7, $8, $9, $10, $11, $12, $13
        )
+       on conflict (feed_url) do update set
+         name = excluded.name,
+         homepage_url = excluded.homepage_url,
+         platform = excluded.platform,
+         publisher_id = excluded.publisher_id,
+         publisher_owner = excluded.publisher_owner,
+         retention_policy = excluded.retention_policy,
+         backfill_days = excluded.backfill_days,
+         max_posts_per_poll = excluded.max_posts_per_poll,
+         rate_limit_ms = excluded.rate_limit_ms,
+         tags = excluded.tags,
+         terms_notes = excluded.terms_notes,
+         enabled = true,
+         updated_at = now()
        returning id, name, homepage_url, feed_url, platform, source_class,
                  publisher_id, publisher_owner, retention_policy, enabled,
                  backfill_days, max_posts_per_poll, rate_limit_ms, tags, terms_notes,
@@ -101,6 +140,8 @@ export async function createPublicationFeed(
   }
 }
 
+export const upsertPublicationFeed = createPublicationFeed;
+
 export async function setPublicationFeedEnabled(
   id: string,
   enabled: boolean,
@@ -118,6 +159,32 @@ export async function setPublicationFeedEnabled(
     );
     if (!result.rows[0]) throw new Error("Publication feed not found.");
     return result.rows[0];
+  } finally {
+    await client.end();
+  }
+}
+
+export async function listSubstackCachedPosts(
+  sourceId: string,
+  databaseUrl = process.env.DATABASE_URL
+): Promise<Map<string, { slug: string; preview: boolean }>> {
+  const cached = new Map<string, { slug: string; preview: boolean }>();
+  if (!databaseUrl) return cached;
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<{ slug: string | null; content: string | null }>(
+      `select metadata->>'substackSlug' as slug, metadata->>'content' as content
+       from documents
+       where source_id = $1
+         and metadata->>'platform' = 'substack'`,
+      [sourceId]
+    );
+    for (const row of result.rows) {
+      if (!row.slug) continue;
+      cached.set(row.slug, { slug: row.slug, preview: row.content === "preview" });
+    }
+    return cached;
   } finally {
     await client.end();
   }

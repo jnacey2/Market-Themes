@@ -8,7 +8,7 @@ import type {
 import { resolvePublisherOwner } from "./publisher-owners";
 
 export function normalizePublicationFeedInput(input: {
-  name: unknown;
+  name?: unknown;
   url: unknown;
   platform: unknown;
   publisherOwner?: unknown;
@@ -19,16 +19,16 @@ export function normalizePublicationFeedInput(input: {
   tags?: unknown;
   termsNotes?: unknown;
 }): PublicationFeedInput {
-  const name = String(input.name ?? "").trim();
   const platform = String(input.platform ?? "") as PublicationFeedPlatform;
   const rawUrl = String(input.url ?? "").trim();
 
-  if (!name) throw new Error("Publication name is required.");
   if (platform !== "substack" && platform !== "rss") {
     throw new Error("Platform must be substack or rss.");
   }
 
   const parsed = validatePublicHttpsUrl(rawUrl);
+  const name = String(input.name ?? "").trim() || inferPublicationNameFromUrl(rawUrl);
+  if (!name) throw new Error("Publication name is required.");
   const homepageUrl = normalizeHomepageUrl(input.homepageUrl, parsed, platform);
   const feedUrl =
     platform === "substack"
@@ -53,7 +53,7 @@ export function normalizePublicationFeedInput(input: {
     retentionPolicy,
     backfillDays: boundedInteger(input.backfillDays, 30, 1, 3650),
     maxPostsPerPoll: boundedInteger(input.maxPostsPerPoll, 50, 1, 250),
-    rateLimitMs: 500,
+    rateLimitMs: platform === "substack" ? 1_500 : 500,
     tags: normalizeTags(input.tags, platform),
     termsNotes: String(
       input.termsNotes ?? "Public feed/API content only; no paywall or authentication bypass."
@@ -72,6 +72,19 @@ export async function assertPublicNetworkUrl(value: string) {
     throw new Error("Feed URL resolved to a private or unavailable network.");
   }
   return url;
+}
+
+export function inferPublicationNameFromUrl(value: string): string {
+  let hostname: string;
+  try {
+    hostname = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+  if (hostname.endsWith(".substack.com")) {
+    return hostname.slice(0, -".substack.com".length) || "substack";
+  }
+  return hostname.split(".")[0] || hostname;
 }
 
 export function validatePublicHttpsUrl(value: string) {

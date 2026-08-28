@@ -237,6 +237,16 @@ export async function persistDocuments(
     for (const document of documents) {
       await upsertSource(client, document);
       const contentHash = document.contentHash ?? hashContent(document.body);
+      const upgradedChunks = await upgradeSubstackPreview(client, document, contentHash);
+      if (upgradedChunks === 0) {
+        skippedDocuments += 1;
+        continue;
+      }
+      if (upgradedChunks !== null) {
+        insertedDocuments += 1;
+        insertedChunks += upgradedChunks;
+        continue;
+      }
       const documentId = await resolveDocumentId(client, document.id, contentHash);
       const nearDuplicateKey =
         document.nearDuplicateKey ?? hashContent(normalizeDuplicateText(document.title));
@@ -2079,6 +2089,61 @@ function canonicalizeUrl(value: string) {
 
 function normalizePublisherId(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+async function upgradeSubstackPreview(
+  client: DbClient,
+  document: PersistableDocument,
+  contentHash: string
+): Promise<number | null> {
+  if (document.metadata?.platform !== "substack" || document.metadata?.content !== "full") {
+    return null;
+  }
+
+  const existing = await client.query<{
+    id: string;
+    content_hash: string;
+    metadata: Record<string, unknown>;
+  }>(`select id, content_hash, metadata from documents where id = $1`, [document.id]);
+  const row = existing.rows[0];
+  if (!row || row.metadata?.content !== "preview") return null;
+  if (row.content_hash === contentHash) return 0;
+
+  // A changed hash is a successful upgrade even when the body is metadata-only.
+
+  await client.query(
+    `update documents
+     set summary = $2,
+         retrieval_method = $3,
+         metadata = $4::jsonb,
+         content_hash = $5
+     where id = $1`,
+    [
+      document.id,
+      document.summary,
+      document.retrievalMethod,
+      JSON.stringify(document.metadata ?? {}),
+      contentHash
+    ]
+  );
+
+  if (document.retentionPolicy === "metadata_only") return 1;
+
+  await upsertDocumentText(client, document.id, document.body, "ingestion");
+  await client.query(`delete from document_chunks where document_id = $1`, [document.id]);
+  const chunks = chunkText(document.body);
+  for (const [index, content] of chunks.entries()) {
+    await client.query(
+      `insert into document_chunks (
+        id,
+        document_id,
+        chunk_index,
+        content
+      ) values ($1, $2, $3, $4)`,
+      [`${document.id}:chunk:${index}`, document.id, index, content]
+    );
+  }
+  return chunks.length;
 }
 
 async function hasNearDuplicate(

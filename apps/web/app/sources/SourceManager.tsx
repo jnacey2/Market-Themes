@@ -22,23 +22,38 @@ export type NewspaperPresetGroup = {
   publisherOwner: string;
 };
 
+export type SubstackPreset = {
+  id: string;
+  name: string;
+  baseUrl: string;
+};
+
+const SUBSTACK_FEED_TERMS =
+  "Subscriber posts the operator already pays for; stored as full text when the captured session can read them, otherwise as previews.";
+
 export function SourceManager({
   feeds,
   newspaperGroups,
-  newspaperPresets
+  newspaperPresets,
+  substackPresets,
+  substackSessionConfigured
 }: {
   feeds: PublicationFeed[];
   newspaperGroups: NewspaperPresetGroup[];
   newspaperPresets: NewspaperPreset[];
+  substackPresets: SubstackPreset[];
+  substackSessionConfigured: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scrapeNote, setScrapeNote] = useState<string | null>(null);
   const registeredUrls = new Set(feeds.map((feed) => feed.feedUrl));
 
   async function addFeed(formData: FormData) {
     setPending("create");
     setError(null);
+    setScrapeNote(null);
     try {
       await createPublication({
         name: formData.get("name"),
@@ -48,7 +63,7 @@ export function SourceManager({
         retentionPolicy: formData.get("retentionPolicy"),
         backfillDays: formData.get("backfillDays"),
         maxPostsPerPoll: formData.get("maxPostsPerPoll"),
-        termsNotes: formData.get("termsNotes")
+        termsNotes: formData.get("termsNotes") || SUBSTACK_FEED_TERMS
       });
       router.refresh();
     } catch (createError) {
@@ -58,11 +73,73 @@ export function SourceManager({
     }
   }
 
+  async function scrapeUrl(input: { url: string; name?: string; limit?: number; pendingKey: string }) {
+    setPending(input.pendingKey);
+    setError(null);
+    setScrapeNote(null);
+    try {
+      const summaries = await scrapePublications({
+        url: input.url,
+        name: input.name,
+        limit: input.limit ?? 12
+      });
+      setScrapeNote(formatScrapeNote(summaries));
+      router.refresh();
+    } catch (scrapeError) {
+      setError(scrapeError instanceof Error ? scrapeError.message : String(scrapeError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function scrapeFromForm(formData: FormData) {
+    const url = String(formData.get("url") ?? "").trim();
+    if (!url) {
+      setError("A publication URL is required to scrape.");
+      return;
+    }
+    await scrapeUrl({
+      url,
+      name: String(formData.get("name") ?? "").trim() || undefined,
+      limit: Number(formData.get("maxPostsPerPoll") || 12),
+      pendingKey: "scrape"
+    });
+  }
+
   async function addPreset(preset: NewspaperPreset) {
     setPending(preset.id);
     setError(null);
     try {
       await createPublication(presetPayload(preset));
+      router.refresh();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function addSubstackPreset(preset: SubstackPreset) {
+    setPending(`substack:${preset.id}`);
+    setError(null);
+    try {
+      await createPublication(substackPresetPayload(preset));
+      router.refresh();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function addAllSubstackPresets() {
+    const remaining = substackPresets.filter((preset) => !isSubstackPresetRegistered(preset, feeds));
+    setPending("substack:all");
+    setError(null);
+    try {
+      for (const preset of remaining) {
+        await createPublication(substackPresetPayload(preset));
+      }
       router.refresh();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
@@ -108,8 +185,89 @@ export function SourceManager({
     }
   }
 
+  const substackFeeds = feeds.filter((feed) => feed.platform === "substack");
+  const remainingSubstacks = remainingSubstackPresets(substackPresets, feeds);
+
   return (
     <>
+      <section className="panel">
+        <div>
+          <p className="eyebrow">Substack Subscriber Session</p>
+          <h2>{substackSessionConfigured ? "Subscriber session configured." : "Capture your paid Substack session."}</h2>
+          <p>
+            Paid posts are scraped with the same account that holds the
+            subscriptions. Playwright only logs in; archive and post JSON
+            endpoints then download the bodies your session can read.
+            {substackFeeds.length > 0
+              ? ` ${substackFeeds.length} Substack publication${substackFeeds.length === 1 ? "" : "s"} registered.`
+              : " Register each Substack you subscribe to below."}
+          </p>
+          <p>
+            {substackSessionConfigured
+              ? "Paid subscriber posts can be stored as full text and later upgraded if an earlier poll only got a preview."
+              : "Run `npm run substack:capture-session`, confirm a paid article opens, then set SUBSTACK_STORAGE_STATE_B64 on web, worker, and poll-sources. Local CLI also loads `.auth/substack.storage-state.json`."}
+          </p>
+        </div>
+      </section>
+
+      <section className="panel newspaper-presets">
+        <div>
+          <p className="eyebrow">Paid Substacks</p>
+          <h2>Add the Investment Process publications</h2>
+          <p>
+            Names and homepage URLs only. The subscriber session stays in
+            environment secrets or ignored `.auth` files — never in this list.
+            Custom domains and `*.substack.com` sites use the same archive and
+            post JSON endpoints.
+          </p>
+        </div>
+        <article className="preset-group">
+          <div className="preset-group-header">
+            <div>
+              <h3>Investment Process</h3>
+              <p>
+                {substackPresets.length - remainingSubstacks.length} of {substackPresets.length}{" "}
+                registered
+              </p>
+            </div>
+            <button
+              className="button"
+              disabled={pending !== null || remainingSubstacks.length === 0}
+              onClick={() => addAllSubstackPresets()}
+              type="button"
+            >
+              {pending === "substack:all"
+                ? "Adding…"
+                : remainingSubstacks.length === 0
+                  ? "Added"
+                  : "Add my paid Substacks"}
+            </button>
+          </div>
+          <div className="preset-row">
+            {substackPresets.map((preset) => {
+              const added = isSubstackPresetRegistered(preset, feeds);
+              return (
+                <button
+                  className={`preset-chip${added ? " preset-chip-added" : ""}`}
+                  disabled={pending !== null || added}
+                  key={preset.id}
+                  onClick={() => addSubstackPreset(preset)}
+                  title={preset.baseUrl}
+                  type="button"
+                >
+                  {pending === `substack:${preset.id}`
+                    ? "Adding…"
+                    : added
+                      ? `${preset.name} added`
+                      : preset.name}
+                </button>
+              );
+            })}
+          </div>
+        </article>
+        {error ? <p className="error-text">{error}</p> : null}
+      </section>
+
       <section className="panel newspaper-presets">
         <div>
           <p className="eyebrow">Major Newspapers</p>
@@ -171,19 +329,21 @@ export function SourceManager({
       <form action={addFeed} className="panel source-form">
         <div>
           <p className="eyebrow">Add Publication</p>
-          <h2>Register a public feed</h2>
+          <h2>Register a Substack or RSS feed</h2>
           <p>
-            Substack uses its public archive and post APIs. Paid-only posts are
-            always skipped. Generic publications use RSS or Atom.
+            Paste a homepage URL to register it. The name is inferred from the
+            hostname when left blank. Paid posts are stored as full text when
+            the captured subscriber session can read them, otherwise as
+            previews. Generic publications use RSS or Atom.
           </p>
         </div>
         <label>
           Publication name
-          <input name="name" placeholder="Example Macro Letter" required />
+          <input name="name" placeholder="Optional — inferred from the URL" />
         </label>
         <label>
           Publication URL
-          <input name="url" placeholder="https://example.substack.com" required type="url" />
+          <input name="url" placeholder="https://moontower.substack.com" required type="url" />
         </label>
         <label>
           Platform
@@ -215,14 +375,32 @@ export function SourceManager({
           Terms / permission note
           <input
             name="termsNotes"
-            placeholder={NEWSPAPER_FEED_TERMS}
-            required
+            placeholder={SUBSTACK_FEED_TERMS}
           />
         </label>
-        <button className="button" disabled={pending === "create"} type="submit">
-          {pending === "create" ? "Validating…" : "Add publication"}
-        </button>
+        <div className="source-form-wide preset-row">
+          <button className="button" disabled={pending !== null} type="submit">
+            {pending === "create" ? "Validating…" : "Add publication"}
+          </button>
+          <button
+            className="button"
+            disabled={pending !== null}
+            formNoValidate
+            type="submit"
+            formAction={scrapeFromForm}
+          >
+            {pending === "scrape" ? "Scraping…" : "Add and scrape"}
+          </button>
+        </div>
         {error ? <p className="error-text source-form-wide">{error}</p> : null}
+        {scrapeNote ? <p className="source-form-wide">{scrapeNote}</p> : null}
+        <p className="source-form-wide">
+          Substack session:{" "}
+          <strong>{substackSessionConfigured ? "configured" : "not configured"}</strong>
+          {substackSessionConfigured
+            ? " Paid subscriber posts can be upgraded from preview to full text."
+            : " Capture one locally with `npm run substack:capture-session`, then set SUBSTACK_STORAGE_STATE_B64."}
+        </p>
       </form>
 
       <div className="review-queue">
@@ -250,6 +428,22 @@ export function SourceManager({
               <span className="label">Latest publication</span>
               <strong>{formatDate(feed.lastPublishedAt)}</strong>
               {feed.lastError ? <p className="error-text">{feed.lastError}</p> : null}
+              {feed.platform === "substack" ? (
+                <button
+                  className="button"
+                  disabled={pending !== null}
+                  onClick={() =>
+                    scrapeUrl({
+                      url: feed.homepageUrl,
+                      name: feed.name,
+                      pendingKey: `scrape:${feed.id}`
+                    })
+                  }
+                  type="button"
+                >
+                  {pending === `scrape:${feed.id}` ? "Scraping…" : "Scrape"}
+                </button>
+              ) : null}
               <button
                 className={feed.enabled ? "button danger" : "button"}
                 disabled={pending === feed.id}
@@ -264,6 +458,39 @@ export function SourceManager({
       </div>
     </>
   );
+}
+
+function substackPresetPayload(preset: SubstackPreset) {
+  return {
+    name: preset.name,
+    url: preset.baseUrl,
+    homepageUrl: preset.baseUrl,
+    platform: "substack",
+    retentionPolicy: "full_text",
+    backfillDays: 30,
+    maxPostsPerPoll: 50,
+    tags: ["substack", "preset"],
+    termsNotes: SUBSTACK_FEED_TERMS
+  };
+}
+
+function isSubstackPresetRegistered(preset: SubstackPreset, feeds: PublicationFeed[]) {
+  try {
+    const origin = new URL(preset.baseUrl).origin;
+    return feeds.some((feed) => {
+      try {
+        return new URL(feed.homepageUrl).origin === origin || new URL(feed.feedUrl).origin === origin;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+function remainingSubstackPresets(presets: SubstackPreset[], feeds: PublicationFeed[]) {
+  return presets.filter((preset) => !isSubstackPresetRegistered(preset, feeds));
 }
 
 function presetPayload(preset: NewspaperPreset) {
@@ -289,6 +516,37 @@ async function createPublication(body: Record<string, unknown>) {
   });
   const result = (await response.json()) as { error?: string };
   if (!response.ok) throw new Error(result.error ?? "Unable to add publication.");
+}
+
+type ScrapeSummary = {
+  name: string;
+  fetched: number;
+  full: number;
+  preview: number;
+  error?: string;
+  errorKind?: string;
+};
+
+async function scrapePublications(body: Record<string, unknown>) {
+  const response = await fetch("/api/publication-feeds/scrape", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const result = (await response.json()) as { error?: string; summaries?: ScrapeSummary[] };
+  if (!response.ok) throw new Error(result.error ?? "Unable to scrape publication.");
+  return result.summaries ?? [];
+}
+
+function formatScrapeNote(summaries: ScrapeSummary[]) {
+  if (summaries.length === 0) return "No publications scraped.";
+  return summaries
+    .map((summary) =>
+      summary.error
+        ? `${summary.name}: failed (${summary.errorKind ?? "error"})`
+        : `${summary.name}: fetched ${summary.fetched} (full ${summary.full}, preview ${summary.preview})`
+    )
+    .join(" · ");
 }
 
 function formatDate(value: string | null) {

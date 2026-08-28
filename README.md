@@ -92,6 +92,7 @@ packages/db          Types, mock data, SQL schema, schema print script
 packages/analysis    Claude prompts and scoring helpers
 packages/ingest      Source connector interfaces
 workers              Worker and cron job entrypoints
+config/substacks.yaml  Paid Substack names and homepage URLs only
 render.yaml          Render blueprint
 .env.example         Local environment variable template
 ```
@@ -222,19 +223,37 @@ allow full-text retention.
 
 ### Managed Publications
 
-Authenticated operators can add public Substack, RSS, and Atom publications at
-`/sources`. Managed feeds are stored in `publication_feeds`, loaded dynamically
-by `poll-sources`, and do not require a code deployment.
+Authenticated operators can add the Substacks they subscribe to, plus RSS and
+Atom publications, at `/sources`. Managed feeds are stored in
+`publication_feeds`, loaded dynamically by `poll-sources`, and do not require a
+code deployment.
 
-Substack ingestion uses the publication's public archive and post endpoints for
-bounded historical discovery. It:
+Substack ingestion uses the publication's archive and post JSON endpoints, not
+article HTML pages. Playwright is used only to capture the subscriber session
+for publications you already pay for.
 
-- Fetches only posts whose audience is explicitly public (`everyone`).
-- Never sends Substack session cookies or attempts to bypass a paywall.
-- Skips paid-only and founding-member posts even if a public endpoint returns a
-  preview or body.
-- Applies per-publication lookback, post-count, rate-limit, retention, and
-  publisher-ownership settings.
+- Discovers posts newest-first from `{origin}/api/v1/archive` in pages of 25.
+- Downloads each post from `{origin}/api/v1/posts/{slug}` with that session.
+- Public posts (`audience=everyone`) are stored as full text when the body is
+  available.
+- Paid subscriber posts are stored as full text when the session can read them.
+  Truncated responses are stored as previews and upgraded on the next
+  authenticated poll.
+- `/sources` can paste a homepage URL (name is inferred) or add the checked-in
+  Investment Process list in one click. The seed is `config/substacks.yaml`
+  (names and URLs only).
+- Scrape by URL or from that YAML without a deploy:
+  `npm run substack:scrape -- --url https://moontower.substack.com`,
+  `npm run substack:scrape -- --config config/substacks.yaml`,
+  or `npm run substack:scrape -- --all`. If `DATABASE_URL` is unset the CLI
+  still fetches archive and post JSON.
+- Capture the session locally with `npm run substack:capture-session`, confirm a
+  paid article opens, then set `SUBSTACK_STORAGE_STATE_B64`. Local CLI also
+  reads ignored `.auth/substack.storage-state.json`.
+- Incremental polls stop at each publication's `lastPublishedAt` watermark and
+  advance that watermark only after documents persist.
+- Applies per-publication lookback, post-count, 1.5s default rate-limit,
+  retention, and publisher-ownership settings.
 - Rejects feed URLs that resolve to local or private networks.
 
 RSS/Atom feeds support either public full-text retention or snippet-only
@@ -273,6 +292,7 @@ Capture a session locally:
 ```bash
 npx playwright install chromium
 npm run premium:capture-session -- wsj
+npm run substack:capture-session
 ```
 
 Supported IDs are `wsj`, `nyt`, `wapo`, `ft`, and `bloomberg`. Log in manually
@@ -388,6 +408,12 @@ REPAIR_DOCUMENT_TEXTS_MAX_BATCHES=20
 APP_BASE_URL=http://localhost:3000
 SESSION_SECRET=replace-with-a-long-random-secret
 SOURCE_CONFIG_JSON={}
+SUBSTACK_STORAGE_STATE_B64=
+SUBSTACK_STORAGE_STATE_PATH=
+SUBSTACK_PUBLICATIONS_YAML=
+SUBSTACK_REFRESH=false
+SUBSTACK_EMAIL=
+SUBSTACK_PASSWORD=
 SCRAPING_ENABLED=false
 SCRAPER_USER_AGENT=MarketThemesBot/0.1 contact@example.com
 GDELT_ENABLED=false
@@ -431,6 +457,9 @@ npm run lint
 npm run db:schema
 npm run db:apply
 npm run poll:sources --workspace @market-themes/workers
+npm run substack:capture-session
+npm run substack:scrape -- --url https://moontower.substack.com
+npm run substack:scrape -- --all
 npm run sec:smoke
 npm run sec:backfill
 npm run fmp:smoke
@@ -575,6 +604,9 @@ Current worker scripts are smoke-testable scaffolds:
 
 ```bash
 npm run poll:sources --workspace @market-themes/workers
+npm run substack:capture-session
+npm run substack:scrape -- --url https://moontower.substack.com
+npm run substack:scrape -- --all
 npm run sec:smoke
 npm run sec:backfill
 npm run fmp:smoke

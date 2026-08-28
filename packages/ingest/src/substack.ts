@@ -1,10 +1,30 @@
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import type { PersistableDocument, PublicationFeed } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
-import { assertPublicNetworkUrl, publicationLookbackHours } from "./publication-feed";
+import { assertPublicNetworkUrl } from "./publication-feed";
 import { cleanHtml } from "./rss";
+import { findRepoRoot } from "./substack-publications";
 
-type SubstackPost = {
+export const ARCHIVE_PAGE_SIZE = 25;
+export const REQUEST_DELAY_SECONDS = 1.5;
+export const REQUEST_TIMEOUT_SECONDS = 30;
+export const RETRY_ATTEMPTS = 4;
+export const RETRY_MIN_MS = 2_000;
+export const RETRY_MAX_MS = 30_000;
+export const PREVIEW_WORD_RATIO = 0.9;
+
+export const CHROME_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9"
+} as const;
+
+const CLOUDFLARE_MARKERS = ["just a moment", "attention required", "cf-error", "cloudflare"];
+
+export type SubstackPost = {
   id?: number;
   title?: string;
   subtitle?: string;
@@ -20,13 +40,45 @@ type SubstackPost = {
   publishedBylines?: Array<{ name?: string }>;
 };
 
-type SubstackConnectorOptions = {
+export type SubstackCookie = {
+  name: string;
+  value: string;
+  domain?: string;
+  partitionKey?: string;
+};
+
+export type SubstackSession = {
+  cookies: SubstackCookie[];
+};
+
+export type CachedSubstackPost = {
+  slug: string;
+  preview: boolean;
+  decodeFailed?: boolean;
+  post?: SubstackPost | null;
+};
+
+export type SubstackConnectorOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
   skipNetworkValidation?: boolean;
+  session?: SubstackSession | null;
+  since?: string | null;
+  refresh?: boolean;
+  upgradePreviews?: boolean;
+  cachedPosts?: Map<string, CachedSubstackPost>;
+  requestDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
 };
 
-const ARCHIVE_PAGE_SIZE = 12;
+export class SubstackAccessError extends Error {
+  readonly kind: "session" | "bot_block";
+
+  constructor(kind: "session" | "bot_block", message: string) {
+    super(message);
+    this.kind = kind;
+  }
+}
 
 export function createSubstackConnector(
   feed: PublicationFeed,
@@ -35,9 +87,12 @@ export function createSubstackConnector(
   return {
     id: feed.id,
     sourceClass: "newspaper",
-    description: `${feed.name} public Substack archive.`,
+    description: `${feed.name} Substack archive.`,
     async poll() {
-      return fetchSubstackPosts(feed, options);
+      return fetchSubstackPosts(feed, {
+        ...options,
+        session: options.session === undefined ? resolveSubstackSession() : options.session
+      });
     }
   };
 }
@@ -48,87 +103,283 @@ export async function fetchSubstackPosts(
 ): Promise<PersistableDocument[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now?.() ?? Date.now();
+  const sleepImpl = options.sleep ?? sleepFn;
+  const delayMs = options.requestDelayMs ?? feed.rateLimitMs;
+  const session = options.session === undefined ? resolveSubstackSession() : options.session;
   const origin = options.skipNetworkValidation
-    ? new URL(feed.homepageUrl).origin
-    : (await assertPublicNetworkUrl(feed.homepageUrl)).origin;
-  const cutoff = now - publicationLookbackHours(feed, now) * 3_600_000;
+    ? stripTrailingSlash(new URL(feed.homepageUrl).origin)
+    : stripTrailingSlash((await assertPublicNetworkUrl(feed.homepageUrl)).origin);
+  const since = resolveSince(feed, options.since, now);
+  const cachedPosts = options.cachedPosts ?? new Map<string, CachedSubstackPost>();
+  const upgradePreviews = options.upgradePreviews ?? Boolean(session);
   const documents: PersistableDocument[] = [];
   const seen = new Set<string>();
 
-  for (
-    let offset = 0;
-    offset < feed.maxPostsPerPoll && documents.length < feed.maxPostsPerPoll;
-    offset += ARCHIVE_PAGE_SIZE
-  ) {
-    const limit = Math.min(ARCHIVE_PAGE_SIZE, feed.maxPostsPerPoll - offset);
-    const archiveUrl = new URL("/api/v1/archive", origin);
-    archiveUrl.searchParams.set("sort", "new");
-    archiveUrl.searchParams.set("offset", String(offset));
-    archiveUrl.searchParams.set("limit", String(limit));
-    const archive = await fetchJson<SubstackPost[]>(fetchImpl, archiveUrl, feed.rateLimitMs);
-    if (!Array.isArray(archive) || archive.length === 0) break;
+  const { entries } = await fetchArchiveMetadata(origin, {
+    fetchImpl,
+    session,
+    since,
+    delayMs,
+    sleep: sleepImpl,
+    maxEntries: feed.maxPostsPerPoll
+  });
 
-    let reachedCutoff = false;
-    for (const preview of archive) {
-      const publishedAt = normalizeDate(preview.post_date);
-      if (!publishedAt || new Date(publishedAt).getTime() < cutoff) {
-        reachedCutoff = true;
-        continue;
-      }
-      if (preview.audience !== "everyone" || !preview.slug) {
-        continue;
-      }
+  for (const preview of entries) {
+    const slug = sanitizeSlug(preview.slug);
+    if (!slug) continue;
 
-      await sleep(feed.rateLimitMs);
-      try {
-        const detailUrl = new URL(`/api/v1/posts/${encodeURIComponent(preview.slug)}`, origin);
-        const post = await fetchJson<SubstackPost>(fetchImpl, detailUrl, feed.rateLimitMs);
-        const document = toSubstackDocument(feed, { ...preview, ...post });
-        if (document && !seen.has(document.canonicalUrl ?? document.url)) {
-          seen.add(document.canonicalUrl ?? document.url);
-          documents.push(document);
-        }
-      } catch (error) {
-        console.warn(
-          `[substack] feed=${feed.id} slug=${preview.slug} failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
+    const cached = cachedPosts.get(slug);
+    const shouldUpgrade = Boolean(
+      session &&
+        upgradePreviews &&
+        cached &&
+        (cached.preview || cached.decodeFailed || cached.post === null)
+    );
+    if (cached && !options.refresh && !shouldUpgrade) {
+      continue;
     }
 
-    if (reachedCutoff || archive.length < limit) break;
+    if (delayMs > 0) await sleepImpl(delayMs);
+    try {
+      const detailUrl = new URL(`/api/v1/posts/${encodeURIComponent(slug)}`, `${origin}/`);
+      const post = await fetchJson<SubstackPost>(fetchImpl, detailUrl, {
+        session,
+        delayMs,
+        sleep: sleepImpl
+      });
+      const document = toSubstackDocument(feed, { ...preview, ...post, slug }, Boolean(session));
+      const key = document.canonicalUrl ?? document.url;
+      if (!seen.has(key)) {
+        seen.add(key);
+        documents.push(document);
+      }
+    } catch (error) {
+      if (error instanceof SubstackAccessError) throw error;
+      console.warn(
+        `[substack] feed=${feed.id} slug=${slug} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
 
-  return documents;
+  return documents.sort((left, right) => left.publishedAt.localeCompare(right.publishedAt));
+}
+
+export async function fetchArchiveMetadata(
+  baseUrl: string,
+  options: {
+    fetchImpl?: typeof fetch;
+    session?: SubstackSession | null;
+    since?: string | null;
+    delayMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    maxEntries?: number;
+  } = {}
+): Promise<{ entries: SubstackPost[]; stoppedAtWatermark: boolean }> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const sleepImpl = options.sleep ?? sleepFn;
+  const delayMs = options.delayMs ?? REQUEST_DELAY_SECONDS * 1_000;
+  const origin = stripTrailingSlash(baseUrl);
+  const sinceMs = parseUtcMs(options.since);
+  const entries: SubstackPost[] = [];
+  let offset = 0;
+  let stoppedAtWatermark = false;
+
+  while (entries.length < (options.maxEntries ?? Number.POSITIVE_INFINITY)) {
+    const archiveUrl = new URL("/api/v1/archive", `${origin}/`);
+    archiveUrl.searchParams.set("sort", "new");
+    archiveUrl.searchParams.set("offset", String(offset));
+    archiveUrl.searchParams.set("limit", String(ARCHIVE_PAGE_SIZE));
+    const page = await fetchJson<SubstackPost[]>(fetchImpl, archiveUrl, {
+      session: options.session,
+      delayMs,
+      sleep: sleepImpl
+    });
+    if (!Array.isArray(page) || page.length === 0) break;
+
+    let reachedWatermark = false;
+    for (const entry of page) {
+      const entryMs = parseUtcMs(entry.post_date);
+      if (sinceMs !== null && entryMs !== null && entryMs <= sinceMs) {
+        reachedWatermark = true;
+        break;
+      }
+      entries.push(entry);
+      if (entries.length >= (options.maxEntries ?? Number.POSITIVE_INFINITY)) break;
+    }
+
+    if (reachedWatermark) {
+      stoppedAtWatermark = true;
+      break;
+    }
+    if (page.length < ARCHIVE_PAGE_SIZE) break;
+    offset += page.length;
+    if (delayMs > 0) await sleepImpl(delayMs);
+  }
+
+  return { entries, stoppedAtWatermark };
+}
+
+export function isPreview(post: SubstackPost): boolean {
+  const audience = post.audience;
+  if (!audience || audience === "everyone") return false;
+
+  const reportedWords = Number.parseInt(String(post.wordcount ?? 0), 10) || 0;
+  const deliveredWords = htmlToText(post.body_html ?? "").split(/\s+/).filter(Boolean).length;
+
+  if (reportedWords > 0) {
+    return deliveredWords < reportedWords * PREVIEW_WORD_RATIO;
+  }
+  return deliveredWords === 0;
+}
+
+export function sanitizeSlug(value: string | undefined): string | null {
+  if (!value) return null;
+  const slug = value.trim().replace(/[/\\]/g, "").replace(/\.\./g, "");
+  return slug.length > 0 ? slug : null;
+}
+
+export function stripSubstackChrome(html: string): string {
+  const withoutWidgets = html.replace(
+    /<([a-z0-9]+)([^>]*class=["'][^"']*(?:subscribe|button-wrapper|post-ufi|digest|share-dialog|paywall|subscription-widget)[^"']*["'][^>]*)>[\s\S]*?<\/\1>/gi,
+    " "
+  );
+  return withoutWidgets.replace(
+    /<(p|div)([^>]*)>\s*(?:thanks for reading|share this post)[\s\S]*?<\/\1>/gi,
+    " "
+  );
+}
+
+export function htmlToText(html: string): string {
+  return cleanHtml(stripSubstackChrome(html));
+}
+
+export function classifyHttpError(status: number, body: string): Error {
+  if (status !== 401 && status !== 403) {
+    return new Error(`Substack returned ${status}`);
+  }
+  const snippet = body.slice(0, 4_000).toLowerCase();
+  if (CLOUDFLARE_MARKERS.some((marker) => snippet.includes(marker))) {
+    return new SubstackAccessError(
+      "bot_block",
+      "Substack returned a Cloudflare or bot-check challenge; aborting scrape."
+    );
+  }
+  return new SubstackAccessError(
+    "session",
+    "Substack session is missing or expired; aborting scrape."
+  );
+}
+
+export function loadSubstackSession(
+  env: NodeJS.ProcessEnv = process.env
+): SubstackSession | null {
+  const encoded = env.SUBSTACK_STORAGE_STATE_B64?.trim();
+  if (encoded) return parseSubstackSession(encoded);
+
+  const explicit = env.SUBSTACK_STORAGE_STATE_PATH?.trim();
+  if (explicit) return readSubstackSessionFile(explicit);
+
+  if (shouldSkipDefaultAuthFiles(env)) return null;
+
+  const authDirectory = resolveAuthDirectory();
+  if (!authDirectory) return null;
+  const jsonPath = path.join(authDirectory, "substack.storage-state.json");
+  const encodedPath = path.join(authDirectory, "substack.storage-state.b64");
+  if (existsSync(jsonPath)) return readSubstackSessionFile(jsonPath);
+  if (existsSync(encodedPath)) return readSubstackSessionFile(encodedPath);
+  return null;
+}
+
+export function resolveSubstackSession(
+  env: NodeJS.ProcessEnv = process.env
+): SubstackSession | null {
+  const session = loadSubstackSession(env);
+  if (!session) return null;
+  if (!isValidSubstackSession(session)) {
+    throw new Error(
+      "A Substack storage state is present but does not contain a Substack session cookie. Recapture with npm run substack:capture-session."
+    );
+  }
+  return session;
+}
+
+export function isSubstackSessionConfigured(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  try {
+    return isValidSubstackSession(loadSubstackSession(env));
+  } catch {
+    return false;
+  }
+}
+
+export function parseSubstackSession(encoded: string): SubstackSession {
+  try {
+    return parseSubstackSessionJson(Buffer.from(encoded, "base64").toString("utf8"));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("missing cookies")) {
+      throw new Error("SUBSTACK_STORAGE_STATE_B64 is not valid base64 Playwright JSON.");
+    }
+    throw new Error("SUBSTACK_STORAGE_STATE_B64 is not valid base64 Playwright JSON.");
+  }
+}
+
+export function parseSubstackSessionJson(raw: string): SubstackSession {
+  const parsed = JSON.parse(raw) as { cookies?: SubstackCookie[] };
+  if (!Array.isArray(parsed.cookies)) {
+    throw new Error("missing cookies");
+  }
+  return {
+    cookies: parsed.cookies
+      .filter((cookie) => cookie && typeof cookie.name === "string" && typeof cookie.value === "string")
+      .map((cookie) => ({
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        partitionKey: typeof cookie.partitionKey === "string" ? cookie.partitionKey : undefined
+      }))
+  };
+}
+
+export function cookieHeaderForUrl(session: SubstackSession | null, url: string | URL): string {
+  return cookieHeader(session, typeof url === "string" ? new URL(url) : url);
+}
+
+export function isValidSubstackSession(session: SubstackSession | null): boolean {
+  return Boolean(
+    session &&
+      session.cookies.length > 0 &&
+      session.cookies.some((cookie) => /sid|substack/i.test(cookie.name))
+  );
 }
 
 function toSubstackDocument(
   feed: PublicationFeed,
-  post: SubstackPost
-): PersistableDocument | null {
-  if (
-    post.audience !== "everyone" ||
-    !post.title ||
-    !post.slug ||
-    !post.canonical_url ||
-    !post.post_date
-  ) {
-    return null;
-  }
-
-  const fullBody = cleanHtml(post.body_html ?? "");
+  post: SubstackPost,
+  authenticated: boolean
+): PersistableDocument {
+  const slug = sanitizeSlug(post.slug) ?? "unknown";
+  const preview = isPreview(post);
+  const cleanedBody = htmlToText(post.body_html ?? "");
   const previewBody = cleanHtml(
     post.truncated_body_text ?? post.description ?? post.subtitle ?? ""
   );
-  const body =
+  const fallback = previewBody || cleanedBody || post.title || "";
+  const rawBody =
     feed.retentionPolicy === "snippet"
-      ? previewBody.slice(0, 2_000)
-      : fullBody;
-  if (body.length < 80) return null;
+      ? (preview ? previewBody || cleanedBody : cleanedBody || previewBody).slice(0, 2_000)
+      : cleanedBody || fallback;
+  const body = preview
+    ? `${rawBody}\n\nThis is a truncated preview; full subscriber content was not available.`.trim()
+    : rawBody;
+  const title = cleanHtml(post.title ?? slug);
+  const canonicalUrl = canonicalizeUrl(
+    post.canonical_url ?? `${stripTrailingSlash(new URL(feed.homepageUrl).origin)}/p/${slug}`
+  );
+  const publishedAt = parseUtcIso(post.post_date) ?? new Date().toISOString();
 
-  const canonicalUrl = canonicalizeUrl(post.canonical_url);
-  const title = cleanHtml(post.title);
   return {
     id: `${feed.id}:${post.id ?? createHash("sha256").update(canonicalUrl).digest("hex").slice(0, 16)}`,
     sourceId: feed.id,
@@ -139,11 +390,11 @@ function toSubstackDocument(
     publisherOwner: feed.publisherOwner,
     url: canonicalUrl,
     canonicalUrl,
-    publishedAt: new Date(post.post_date).toISOString(),
+    publishedAt,
     tickers: [],
     summary: cleanHtml(post.subtitle ?? post.description ?? title).slice(0, 500),
     body,
-    retrievalMethod: "api",
+    retrievalMethod: authenticated ? "credentialed" : "api",
     retentionPolicy: feed.retentionPolicy,
     contentHash: createHash("sha256").update(body).digest("hex"),
     nearDuplicateKey: createHash("sha256")
@@ -153,11 +404,14 @@ function toSubstackDocument(
       sourceName: feed.name,
       termsNotes: feed.termsNotes,
       platform: "substack",
-      audience: post.audience,
+      audience: post.audience ?? "everyone",
+      content: preview ? "preview" : "full",
+      substackSlug: slug,
       substackPostId: post.id,
       wordCount: post.wordcount,
       authors: post.publishedBylines?.map((author) => author.name).filter(Boolean) ?? [],
-      tags: post.postTags?.map((tag) => tag.name).filter(Boolean) ?? []
+      tags: post.postTags?.map((tag) => tag.name).filter(Boolean) ?? [],
+      authenticated
     }
   };
 }
@@ -165,31 +419,146 @@ function toSubstackDocument(
 async function fetchJson<T>(
   fetchImpl: typeof fetch,
   url: URL,
-  rateLimitMs: number,
-  attempts = 3
+  options: {
+    session?: SubstackSession | null;
+    delayMs: number;
+    sleep: (ms: number) => Promise<void>;
+  }
 ): Promise<T> {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
     try {
       const response = await fetchImpl(url, {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": process.env.SCRAPER_USER_AGENT ?? "MarketThemesBot/0.1"
-        },
-        signal: AbortSignal.timeout(20_000)
+        headers: requestHeaders(url, options.session),
+        redirect: "follow",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_SECONDS * 1_000)
       });
-      if (response.ok) return (await response.json()) as T;
-      lastError = new Error(`Substack returned ${response.status} for ${url.pathname}`);
-      if (response.status < 500 && response.status !== 429) break;
+      const text = await response.text();
+      if (response.status === 401 || response.status === 403) {
+        throw classifyHttpError(response.status, text);
+      }
+      if (response.ok) {
+        try {
+          return JSON.parse(text) as T;
+        } catch {
+          lastError = new Error(`Substack returned invalid JSON for ${url.pathname}`);
+        }
+      } else if (response.status === 429 || response.status >= 500) {
+        lastError = new Error(`Substack returned ${response.status} for ${url.pathname}`);
+      } else {
+        throw new Error(`Substack returned ${response.status} for ${url.pathname}`);
+      }
     } catch (error) {
+      if (error instanceof SubstackAccessError) throw error;
+      if (error instanceof Error && /returned [1-5]\d\d/.test(error.message) && !/429|5\d\d/.test(error.message)) {
+        throw error;
+      }
       lastError = error;
     }
-    await sleep(Math.max(rateLimitMs, attempt * 1_000));
+    if (attempt < RETRY_ATTEMPTS) {
+      await options.sleep(backoffMs(attempt));
+    }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-function normalizeDate(value: string | undefined) {
+function requestHeaders(url: URL, session: SubstackSession | null | undefined) {
+  const headers: Record<string, string> = session
+    ? { ...CHROME_HEADERS }
+    : {
+        Accept: "application/json",
+        "User-Agent": process.env.SCRAPER_USER_AGENT ?? "MarketThemesBot/0.1"
+      };
+  const cookie = cookieHeader(session ?? null, url);
+  if (cookie) headers.Cookie = cookie;
+  return headers;
+}
+
+function cookieHeader(session: SubstackSession | null, url: URL): string {
+  if (!session) return "";
+  const matching = session.cookies.filter(
+    (cookie) => !cookie.domain || hostMatches(url.hostname, cookie.domain)
+  );
+  const selected = new Map<string, SubstackCookie>();
+  for (const cookie of matching) {
+    const current = selected.get(cookie.name);
+    if (!current || cookiePreference(cookie, url) > cookiePreference(current, url)) {
+      selected.set(cookie.name, cookie);
+    }
+  }
+  return [...selected.values()].map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+}
+
+function cookiePreference(cookie: SubstackCookie, url: URL): number {
+  if (!cookie.partitionKey) return 1;
+  return partitionMatches(cookie, url) ? 2 : 0;
+}
+
+function partitionMatches(cookie: SubstackCookie, url: URL): boolean {
+  if (!cookie.partitionKey) return true;
+  try {
+    const partitioned = new URL(cookie.partitionKey);
+    const host = url.hostname.toLowerCase();
+    const partHost = partitioned.hostname.toLowerCase().replace(/^www\./, "");
+    return (
+      host === partitioned.hostname.toLowerCase() ||
+      host === partHost ||
+      host.endsWith(`.${partHost}`)
+    );
+  } catch {
+    const needle = cookie.partitionKey.toLowerCase();
+    return url.hostname.toLowerCase().includes(needle.replace(/^https?:\/\//, "").replace(/^www\./, ""));
+  }
+}
+
+function readSubstackSessionFile(filePath: string): SubstackSession {
+  const raw = readFileSync(filePath, "utf8").trim();
+  if (!raw) {
+    throw new Error("Substack storage state file is empty.");
+  }
+  if (raw.startsWith("{")) {
+    return parseSubstackSessionJson(raw);
+  }
+  return parseSubstackSession(raw);
+}
+
+function shouldSkipDefaultAuthFiles(env: NodeJS.ProcessEnv) {
+  if (env.SUBSTACK_LOAD_AUTH_FILE === "1" || env.SUBSTACK_LOAD_AUTH_FILE === "true") {
+    return false;
+  }
+  if (env.SUBSTACK_LOAD_AUTH_FILE === "0" || env.SUBSTACK_LOAD_AUTH_FILE === "false") {
+    return true;
+  }
+  if (env.NODE_TEST_CONTEXT) return true;
+  return env !== process.env;
+}
+
+function resolveAuthDirectory(): string | null {
+  const root = findRepoRoot();
+  const fromRoot = path.join(root, ".auth");
+  if (existsSync(fromRoot)) return fromRoot;
+  const fromCwd = path.join(process.cwd(), ".auth");
+  return existsSync(fromCwd) ? fromCwd : null;
+}
+
+function hostMatches(hostname: string, domain: string) {
+  const normalized = domain.replace(/^\./, "").toLowerCase();
+  const host = hostname.toLowerCase();
+  return host === normalized || host.endsWith(`.${normalized}`);
+}
+
+function resolveSince(feed: PublicationFeed, since: string | null | undefined, now: number) {
+  if (since) return parseUtcIso(since);
+  if (feed.lastPublishedAt) return parseUtcIso(feed.lastPublishedAt);
+  return new Date(now - feed.backfillDays * 86_400_000).toISOString();
+}
+
+function parseUtcMs(value: string | null | undefined): number | null {
+  const iso = parseUtcIso(value);
+  return iso ? new Date(iso).getTime() : null;
+}
+
+function parseUtcIso(value: string | null | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
@@ -206,6 +575,16 @@ function canonicalizeUrl(value: string) {
   return url.toString();
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function stripTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
+}
+
+function backoffMs(attempt: number) {
+  return Math.min(RETRY_MAX_MS, Math.max(RETRY_MIN_MS, RETRY_MIN_MS * 2 ** (attempt - 1)));
+}
+
+function sleepFn(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

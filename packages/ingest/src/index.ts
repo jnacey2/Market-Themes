@@ -9,6 +9,8 @@ export * from "./publication-feed";
 export * from "./publisher-owners";
 export * from "./registered-feed";
 export * from "./rss";
+export * from "./scrape-substack";
 export * from "./sec";
 export * from "./sec-targets";
 export * from "./substack";
+export * from "./substack-publications";
