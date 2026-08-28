@@ -4,31 +4,83 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { PublicationFeed } from "@market-themes/db";
 
-export function SourceManager({ feeds }: { feeds: PublicationFeed[] }) {
+const NEWSPAPER_FEED_TERMS =
+  "Public RSS headline and summary only; snippet retention; no paywall or authentication bypass.";
+
+export type NewspaperPreset = {
+  id: string;
+  group: string;
+  name: string;
+  url: string;
+  homepageUrl: string;
+  publisherOwner: string;
+};
+
+export type NewspaperPresetGroup = {
+  id: string;
+  label: string;
+  publisherOwner: string;
+};
+
+export function SourceManager({
+  feeds,
+  newspaperGroups,
+  newspaperPresets
+}: {
+  feeds: PublicationFeed[];
+  newspaperGroups: NewspaperPresetGroup[];
+  newspaperPresets: NewspaperPreset[];
+}) {
   const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const registeredUrls = new Set(feeds.map((feed) => feed.feedUrl));
 
   async function addFeed(formData: FormData) {
     setPending("create");
     setError(null);
     try {
-      const response = await fetch("/api/publication-feeds", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: formData.get("name"),
-          url: formData.get("url"),
-          platform: formData.get("platform"),
-          publisherOwner: formData.get("publisherOwner"),
-          retentionPolicy: formData.get("retentionPolicy"),
-          backfillDays: formData.get("backfillDays"),
-          maxPostsPerPoll: formData.get("maxPostsPerPoll"),
-          termsNotes: formData.get("termsNotes")
-        })
+      await createPublication({
+        name: formData.get("name"),
+        url: formData.get("url"),
+        platform: formData.get("platform"),
+        publisherOwner: formData.get("publisherOwner"),
+        retentionPolicy: formData.get("retentionPolicy"),
+        backfillDays: formData.get("backfillDays"),
+        maxPostsPerPoll: formData.get("maxPostsPerPoll"),
+        termsNotes: formData.get("termsNotes")
       });
-      const result = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(result.error ?? "Unable to add publication.");
+      router.refresh();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function addPreset(preset: NewspaperPreset) {
+    setPending(preset.id);
+    setError(null);
+    try {
+      await createPublication(presetPayload(preset));
+      router.refresh();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function addGroup(groupId: string) {
+    const remaining = newspaperPresets.filter(
+      (preset) => preset.group === groupId && !registeredUrls.has(preset.url)
+    );
+    setPending(`group:${groupId}`);
+    setError(null);
+    try {
+      for (const preset of remaining) {
+        await createPublication(presetPayload(preset));
+      }
       router.refresh();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
@@ -58,6 +110,64 @@ export function SourceManager({ feeds }: { feeds: PublicationFeed[] }) {
 
   return (
     <>
+      <section className="panel newspaper-presets">
+        <div>
+          <p className="eyebrow">Major Newspapers</p>
+          <h2>Add public headline feeds</h2>
+          <p>
+            Official RSS from NYT, WSJ, Washington Post, Bloomberg, and FT.
+            These store headlines and ledes only. No login or paywall bypass.
+          </p>
+        </div>
+        <div className="preset-groups">
+          {newspaperGroups.map((group) => {
+            const presets = newspaperPresets.filter((preset) => preset.group === group.id);
+            const remaining = presets.filter((preset) => !registeredUrls.has(preset.url));
+            return (
+              <article className="preset-group" key={group.id}>
+                <div className="preset-group-header">
+                  <div>
+                    <h3>{group.label}</h3>
+                    <p>
+                      {presets.length - remaining.length} of {presets.length} registered
+                    </p>
+                  </div>
+                  <button
+                    className="button"
+                    disabled={pending !== null || remaining.length === 0}
+                    onClick={() => addGroup(group.id)}
+                    type="button"
+                  >
+                    {pending === `group:${group.id}`
+                      ? "Adding…"
+                      : remaining.length === 0
+                        ? "Added"
+                        : `Add all ${remaining.length}`}
+                  </button>
+                </div>
+                <div className="preset-row">
+                  {presets.map((preset) => {
+                    const added = registeredUrls.has(preset.url);
+                    return (
+                      <button
+                        className={`preset-chip${added ? " preset-chip-added" : ""}`}
+                        disabled={pending !== null || added}
+                        key={preset.id}
+                        onClick={() => addPreset(preset)}
+                        type="button"
+                      >
+                        {pending === preset.id ? "Adding…" : added ? `${preset.name} added` : preset.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        {error ? <p className="error-text">{error}</p> : null}
+      </section>
+
       <form action={addFeed} className="panel source-form">
         <div>
           <p className="eyebrow">Add Publication</p>
@@ -105,7 +215,7 @@ export function SourceManager({ feeds }: { feeds: PublicationFeed[] }) {
           Terms / permission note
           <input
             name="termsNotes"
-            placeholder="Public posts only; internal research use."
+            placeholder={NEWSPAPER_FEED_TERMS}
             required
           />
         </label>
@@ -154,6 +264,31 @@ export function SourceManager({ feeds }: { feeds: PublicationFeed[] }) {
       </div>
     </>
   );
+}
+
+function presetPayload(preset: NewspaperPreset) {
+  return {
+    name: preset.name,
+    url: preset.url,
+    homepageUrl: preset.homepageUrl,
+    platform: "rss",
+    publisherOwner: preset.publisherOwner,
+    retentionPolicy: "snippet",
+    backfillDays: 7,
+    maxPostsPerPoll: 50,
+    tags: ["rss", "newspaper", "preset"],
+    termsNotes: NEWSPAPER_FEED_TERMS
+  };
+}
+
+async function createPublication(body: Record<string, unknown>) {
+  const response = await fetch("/api/publication-feeds", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const result = (await response.json()) as { error?: string };
+  if (!response.ok) throw new Error(result.error ?? "Unable to add publication.");
 }
 
 function formatDate(value: string | null) {

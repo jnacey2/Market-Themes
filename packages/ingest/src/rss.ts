@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import type { PersistableDocument, SourceClass } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
+import { resolvePublisherOwner, slugPublisher } from "./publisher-owners";
 
 export type RssFeedConfig = {
   id: string;
@@ -109,7 +110,7 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
   }
 
   const canonicalUrl = canonicalizeUrl(url);
-  const publisherId = slug(config.name);
+  const publisherId = slugPublisher(config.name);
   return {
     id: `${config.id}:${createHash("sha256").update(canonicalUrl).digest("hex").slice(0, 24)}`,
     sourceId: config.id,
@@ -117,7 +118,11 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
     title,
     publisher: config.name,
     publisherId,
-    publisherOwner: slug(config.publisherOwner ?? config.name),
+    publisherOwner: resolvePublisherOwner({
+      url,
+      name: config.name,
+      fallback: config.publisherOwner ?? config.name
+    }),
     url,
     canonicalUrl,
     publishedAt,
@@ -174,10 +179,6 @@ function normalizeDate(value: string | undefined) {
 
 function normalizeTitle(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 180);
-}
-
-function slug(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function canonicalizeUrl(value: string) {

@@ -24,7 +24,7 @@ export const premiumPublisherProfiles: Record<
   wsj: {
     id: "wsj",
     name: "The Wall Street Journal",
-    publisherOwner: "Dow Jones",
+    publisherOwner: "dow-jones",
     loginUrl: "https://accounts.wsj.com/login",
     sessionEnvKey: "WSJ_STORAGE_STATE_B64",
     feedUrls: [
@@ -45,7 +45,7 @@ export const premiumPublisherProfiles: Record<
   nyt: {
     id: "nyt",
     name: "The New York Times",
-    publisherOwner: "The New York Times Company",
+    publisherOwner: "nyt",
     loginUrl: "https://myaccount.nytimes.com/auth/login",
     sessionEnvKey: "NYT_STORAGE_STATE_B64",
     feedUrls: [
@@ -64,7 +64,7 @@ export const premiumPublisherProfiles: Record<
   wapo: {
     id: "wapo",
     name: "The Washington Post",
-    publisherOwner: "The Washington Post",
+    publisherOwner: "washington-post",
     loginUrl: "https://www.washingtonpost.com/subscribe/signin/",
     sessionEnvKey: "WAPO_STORAGE_STATE_B64",
     feedUrls: ["https://feeds.washingtonpost.com/rss/business"],
@@ -81,7 +81,7 @@ export const premiumPublisherProfiles: Record<
   ft: {
     id: "ft",
     name: "Financial Times",
-    publisherOwner: "The Financial Times Ltd",
+    publisherOwner: "financial-times",
     loginUrl: "https://accounts.ft.com/login",
     sessionEnvKey: "FT_STORAGE_STATE_B64",
     feedUrls: [
@@ -102,7 +102,7 @@ export const premiumPublisherProfiles: Record<
   bloomberg: {
     id: "bloomberg",
     name: "Bloomberg",
-    publisherOwner: "Bloomberg L.P.",
+    publisherOwner: "bloomberg",
     loginUrl: "https://www.bloomberg.com/account/login",
     sessionEnvKey: "BLOOMBERG_STORAGE_STATE_B64",
     feedUrls: [

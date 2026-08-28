@@ -595,6 +595,63 @@ h3 {
   color: var(--risk);
 }
 
+.newspaper-presets {
+  display: grid;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.preset-groups {
+  display: grid;
+  gap: 18px;
+}
+
+.preset-group {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.preset-group-header {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.preset-group-header h3,
+.preset-group-header p {
+  margin-bottom: 0;
+}
+
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preset-chip {
+  background: rgba(125, 211, 252, 0.08);
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.preset-chip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.preset-chip-added {
+  border-color: rgba(134, 239, 172, 0.28);
+  color: var(--bullish);
+}
+
 .source-form {
   display: grid;
   gap: 16px;

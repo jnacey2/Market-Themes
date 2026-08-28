@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PersistableDocument } from "@market-themes/db";
+import { resolvePublisherOwner, slugPublisher } from "./publisher-owners";
 import { SEC_SMOKE_TEST_TICKERS, SEC_TARGET_TICKERS } from "./sec-targets";
 
 const FMP_BASE_URL_V3 = "https://financialmodelingprep.com/api/v3";
@@ -220,8 +221,12 @@ function stockNewsToDocument(
     sourceClass: "newspaper",
     title,
     publisher,
-    publisherId: normalizePublisher(publisher),
-    publisherOwner: normalizePublisher(publisher),
+    publisherId: slugPublisher(publisher),
+    publisherOwner: resolvePublisherOwner({
+      url,
+      site: publisher,
+      name: publisher
+    }),
     url,
     canonicalUrl: canonicalizeUrl(url),
     publishedAt,
@@ -258,8 +263,12 @@ function generalNewsToDocument(item: FmpGeneralNewsItem): PersistableDocument | 
     sourceClass: "newspaper",
     title,
     publisher,
-    publisherId: normalizePublisher(publisher),
-    publisherOwner: normalizePublisher(publisher),
+    publisherId: slugPublisher(publisher),
+    publisherOwner: resolvePublisherOwner({
+      url,
+      site: publisher,
+      name: publisher
+    }),
     url,
     canonicalUrl: canonicalizeUrl(url),
     publishedAt,
@@ -362,10 +371,6 @@ function parseTickers(value: string | undefined) {
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
-}
-
-function normalizePublisher(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function canonicalizeUrl(value: string) {

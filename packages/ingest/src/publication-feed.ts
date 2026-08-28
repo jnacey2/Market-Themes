@@ -5,6 +5,7 @@ import type {
   PublicationFeedInput,
   PublicationFeedPlatform
 } from "@market-themes/db";
+import { resolvePublisherOwner } from "./publisher-owners";
 
 export function normalizePublicationFeedInput(input: {
   name: unknown;
@@ -14,6 +15,8 @@ export function normalizePublicationFeedInput(input: {
   retentionPolicy?: unknown;
   backfillDays?: unknown;
   maxPostsPerPoll?: unknown;
+  homepageUrl?: unknown;
+  tags?: unknown;
   termsNotes?: unknown;
 }): PublicationFeedInput {
   const name = String(input.name ?? "").trim();
@@ -26,30 +29,32 @@ export function normalizePublicationFeedInput(input: {
   }
 
   const parsed = validatePublicHttpsUrl(rawUrl);
-  const homepageUrl =
-    platform === "substack"
-      ? `${parsed.origin}/`
-      : parsed.pathname.endsWith("/feed") || parsed.pathname.endsWith(".xml")
-        ? `${parsed.origin}/`
-        : parsed.toString();
+  const homepageUrl = normalizeHomepageUrl(input.homepageUrl, parsed, platform);
   const feedUrl =
     platform === "substack"
       ? `${parsed.origin}/feed`
       : parsed.toString();
   const retentionPolicy =
     input.retentionPolicy === "snippet" ? "snippet" : "full_text";
+  const explicitOwner = String(input.publisherOwner ?? "").trim();
 
   return {
     name,
     homepageUrl,
     feedUrl,
     platform,
-    publisherOwner: String(input.publisherOwner ?? name).trim(),
+    publisherOwner:
+      explicitOwner ||
+      resolvePublisherOwner({
+        url: feedUrl,
+        name,
+        fallback: name
+      }),
     retentionPolicy,
     backfillDays: boundedInteger(input.backfillDays, 30, 1, 3650),
     maxPostsPerPoll: boundedInteger(input.maxPostsPerPoll, 50, 1, 250),
     rateLimitMs: 500,
-    tags: platform === "substack" ? ["substack"] : ["rss"],
+    tags: normalizeTags(input.tags, platform),
     termsNotes: String(
       input.termsNotes ?? "Public feed/API content only; no paywall or authentication bypass."
     ).trim()
@@ -93,6 +98,33 @@ export function publicationLookbackHours(feed: PublicationFeed, now = Date.now()
   if (!feed.lastPublishedAt) return feed.backfillDays * 24;
   const elapsed = Math.max(now - new Date(feed.lastPublishedAt).getTime(), 0);
   return Math.max(Math.ceil(elapsed / 3_600_000) + 6, 12);
+}
+
+function normalizeHomepageUrl(
+  value: unknown,
+  feedUrl: URL,
+  platform: PublicationFeedPlatform
+) {
+  if (typeof value === "string" && value.trim()) {
+    const homepage = validatePublicHttpsUrl(value.trim());
+    return homepage.pathname === "/" ? `${homepage.origin}/` : homepage.toString();
+  }
+  if (platform === "substack") {
+    return `${feedUrl.origin}/`;
+  }
+  const path = feedUrl.pathname.toLowerCase();
+  if (path.endsWith("/feed") || path.endsWith(".xml") || path.endsWith(".rss")) {
+    return `${feedUrl.origin}/`;
+  }
+  return feedUrl.toString();
+}
+
+function normalizeTags(value: unknown, platform: PublicationFeedPlatform) {
+  if (Array.isArray(value)) {
+    const tags = value.map((item) => String(item).trim()).filter(Boolean);
+    if (tags.length > 0) return tags;
+  }
+  return platform === "substack" ? ["substack"] : ["rss"];
 }
 
 function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number) {

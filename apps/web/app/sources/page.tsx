@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getOperationsStatus, listPublicationFeeds } from "@market-themes/db";
+import { NEWSPAPER_FEED_GROUPS, NEWSPAPER_FEED_PRESETS } from "@market-themes/ingest";
 import { SourceManager } from "./SourceManager";
 
 export const dynamic = "force-dynamic";
@@ -37,9 +38,10 @@ export default async function SourcesPage() {
           <p className="eyebrow">Source Registry</p>
           <h1>Managed publications.</h1>
           <p className="lede">
-            Add public Substacks, blogs, and RSS publications without a code deploy.
-            Each source is deduplicated, checkpointed, and routed through evidence review
-            before it can affect published narratives.
+            Add public Substacks, blogs, and official newspaper RSS feeds without a
+            code deploy. Headline feeds are snippet-only. Each source is
+            deduplicated, checkpointed, and routed through evidence review before it
+            can affect published narratives.
           </p>
         </div>
         <div className="panel">
@@ -49,7 +51,11 @@ export default async function SourcesPage() {
         </div>
       </section>
 
-      <SourceManager feeds={feeds} />
+      <SourceManager
+        feeds={feeds}
+        newspaperGroups={NEWSPAPER_FEED_GROUPS}
+        newspaperPresets={NEWSPAPER_FEED_PRESETS}
+      />
 
       <section className="section">
         <p className="eyebrow">Authenticated Publishers</p>

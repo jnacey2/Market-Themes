@@ -54,6 +54,8 @@ mix, and follow-up research questions for a market theme.
 - Connector interfaces for source ingestion.
 - Official Federal Reserve, BLS, BEA, EIA, configurable company-IR RSS, and optional
   GDELT discovery connectors.
+- One-click public newspaper RSS presets (NYT, WSJ, Washington Post, Bloomberg, FT)
+  with snippet-only retention and shared publisher-owner mapping.
 - Worker and cron job entrypoints.
 - A scheduled end-to-end pipeline with connector checkpoints and operations status.
 - `render.yaml` blueprint for Render deployment.
@@ -239,6 +241,20 @@ RSS/Atom feeds support either public full-text retention or snippet-only
 retention. Every managed publication remains subject to canonical URL/content
 deduplication and the human narrative-evidence review gate.
 
+`/sources` includes one-click presets for official NYT, WSJ, Washington Post,
+Bloomberg, and FT RSS feeds. Those presets always use snippet retention and do
+not send publisher logins or session cookies. FMP news, RSS, GDELT, and the
+optional authenticated collector share the same publisher-owner slugs
+(`dow-jones`, `nyt`, `washington-post`, `bloomberg`, `financial-times`) so
+syndicated copies do not inflate breadth.
+
+Optional GDELT discovery stays metadata-only. When enabled, `GDELT_DOMAINS`
+defaults to `wsj.com,nytimes.com,bloomberg.com,washingtonpost.com,ft.com,reuters.com`.
+Set `GDELT_DOMAINS=` to query without a domain filter.
+
+The NYT Article Search connector is idle unless `NYT_API_KEY` is set. It stores
+official abstracts only.
+
 ### Authenticated Publisher Collection
 
 An isolated Playwright cron can collect licensed subscriber content from WSJ,
@@ -374,6 +390,10 @@ SESSION_SECRET=replace-with-a-long-random-secret
 SOURCE_CONFIG_JSON={}
 SCRAPING_ENABLED=false
 SCRAPER_USER_AGENT=MarketThemesBot/0.1 contact@example.com
+GDELT_ENABLED=false
+GDELT_DOMAINS=wsj.com,nytimes.com,bloomberg.com,washingtonpost.com,ft.com,reuters.com
+NYT_API_KEY=
+NYT_SEARCH_LOOKBACK_HOURS=24
 SEC_USER_AGENT=MarketThemesBot/0.1 contact@example.com
 SEC_TARGET_TICKERS=AAPL,MSFT,JPM,WMT,XOM
 SEC_POLL_LOOKBACK_DAYS=7
@@ -640,6 +660,7 @@ clustering behavior.
 - Narrative history is only meaningful after a representative historical
   document backfill and classification run.
 - GDELT is discovery metadata only and is excluded from full-text classification.
+- Public newspaper RSS presets store headlines and ledes, not paywalled full text.
 - Premium financial-news feeds require a separate license and credentials.
 - The copilot is a UI preview, not a live retrieval system yet.
 
