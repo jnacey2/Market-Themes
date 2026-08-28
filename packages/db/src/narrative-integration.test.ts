@@ -167,3 +167,64 @@ test(
     assert.equal(afterDisable.some((feed) => feed.id === created.id), false);
   }
 );
+
+test(
+  "upgrades a cached Substack preview after authenticated full-text retrieval",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const suffix = randomUUID();
+    const documentId = `publication:example:${suffix}`;
+    const preview = await persistDocuments([
+      {
+        id: documentId,
+        sourceId: `publication:example:${suffix}`,
+        sourceClass: "newspaper",
+        title: `Preview upgrade ${suffix}`,
+        publisher: "Example Letter",
+        publisherId: "example-letter",
+        publisherOwner: "example-author",
+        url: `https://example.substack.com/p/upgrade-${suffix}`,
+        canonicalUrl: `https://example.substack.com/p/upgrade-${suffix}`,
+        publishedAt: "2026-08-27T12:00:00.000Z",
+        tickers: [],
+        summary: "Preview only",
+        body: "This is a truncated preview; full subscriber content was not available.",
+        retrievalMethod: "api",
+        retentionPolicy: "full_text",
+        metadata: {
+          platform: "substack",
+          content: "preview",
+          substackSlug: `upgrade-${suffix}`
+        }
+      }
+    ]);
+    assert.equal(preview.insertedDocuments, 1);
+
+    const upgraded = await persistDocuments([
+      {
+        id: documentId,
+        sourceId: `publication:example:${suffix}`,
+        sourceClass: "newspaper",
+        title: `Preview upgrade ${suffix}`,
+        publisher: "Example Letter",
+        publisherId: "example-letter",
+        publisherOwner: "example-author",
+        url: `https://example.substack.com/p/upgrade-${suffix}`,
+        canonicalUrl: `https://example.substack.com/p/upgrade-${suffix}`,
+        publishedAt: "2026-08-27T12:00:00.000Z",
+        tickers: [],
+        summary: "Full subscriber argument",
+        body: `Authenticated full subscriber body for ${suffix}. `.repeat(8),
+        retrievalMethod: "credentialed",
+        retentionPolicy: "full_text",
+        metadata: {
+          platform: "substack",
+          content: "full",
+          substackSlug: `upgrade-${suffix}`
+        }
+      }
+    ]);
+    assert.equal(upgraded.insertedDocuments, 1);
+    assert.ok(upgraded.insertedChunks >= 1);
+  }
+);

@@ -123,6 +123,32 @@ export async function setPublicationFeedEnabled(
   }
 }
 
+export async function listSubstackCachedPosts(
+  sourceId: string,
+  databaseUrl = process.env.DATABASE_URL
+): Promise<Map<string, { slug: string; preview: boolean }>> {
+  const cached = new Map<string, { slug: string; preview: boolean }>();
+  if (!databaseUrl) return cached;
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<{ slug: string | null; content: string | null }>(
+      `select metadata->>'substackSlug' as slug, metadata->>'content' as content
+       from documents
+       where source_id = $1
+         and metadata->>'platform' = 'substack'`,
+      [sourceId]
+    );
+    for (const row of result.rows) {
+      if (!row.slug) continue;
+      cached.set(row.slug, { slug: row.slug, preview: row.content === "preview" });
+    }
+    return cached;
+  } finally {
+    await client.end();
+  }
+}
+
 export async function recordPublicationFeedPoll(
   id: string,
   result: {

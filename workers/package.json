@@ -25,6 +25,7 @@
     "narrative-trends:recompute": "node --import tsx src/jobs/recompute-narrative-trends.ts",
     "premium:scrape": "node --import tsx src/jobs/scrape-premium-publishers.ts",
     "premium:capture-session": "node --import tsx src/tools/capture-publisher-session.ts",
+    "substack:capture-session": "node --import tsx src/tools/capture-substack-session.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,9 +1,11 @@
 import {
   createPublicationFeedConnector,
-  defaultConnectors
+  defaultConnectors,
+  loadSubstackSession
 } from "@market-themes/ingest";
 import {
   listPublicationFeeds,
+  listSubstackCachedPosts,
   persistDocuments,
   recordConnectorCheckpoint,
   recordPublicationFeedPoll
@@ -17,11 +19,28 @@ export async function pollSources() {
   const publicationFeeds = await listPublicationFeeds({ enabledOnly: true });
   const publicationFeedById = new Map(publicationFeeds.map((feed) => [feed.id, feed]));
   const staticIds = new Set(defaultConnectors.map((connector) => connector.id));
+  const substackSession = loadSubstackSession();
+  const refresh = process.env.SUBSTACK_REFRESH === "true";
   const connectors = [
     ...defaultConnectors,
-    ...publicationFeeds
-      .filter((feed) => !staticIds.has(feed.id))
-      .map(createPublicationFeedConnector)
+    ...(await Promise.all(
+      publicationFeeds
+        .filter((feed) => !staticIds.has(feed.id))
+        .map(async (feed) =>
+          createPublicationFeedConnector(
+            feed,
+            feed.platform === "substack"
+              ? {
+                  session: substackSession,
+                  cachedPosts: await listSubstackCachedPosts(feed.id),
+                  since: feed.lastPublishedAt,
+                  refresh,
+                  upgradePreviews: Boolean(substackSession)
+                }
+              : {}
+          )
+        )
+    ))
   ];
 
   for (const connector of connectors) {

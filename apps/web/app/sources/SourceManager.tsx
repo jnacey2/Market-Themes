@@ -25,11 +25,13 @@ export type NewspaperPresetGroup = {
 export function SourceManager({
   feeds,
   newspaperGroups,
-  newspaperPresets
+  newspaperPresets,
+  substackSessionConfigured
 }: {
   feeds: PublicationFeed[];
   newspaperGroups: NewspaperPresetGroup[];
   newspaperPresets: NewspaperPreset[];
+  substackSessionConfigured: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
@@ -173,8 +175,10 @@ export function SourceManager({
           <p className="eyebrow">Add Publication</p>
           <h2>Register a public feed</h2>
           <p>
-            Substack uses its public archive and post APIs. Paid-only posts are
-            always skipped. Generic publications use RSS or Atom.
+            Substack uses its archive and post JSON APIs, not article HTML.
+            Paid posts are stored as full text when the captured subscriber
+            session can read them, otherwise as previews. Generic publications
+            use RSS or Atom.
           </p>
         </div>
         <label>
@@ -223,6 +227,13 @@ export function SourceManager({
           {pending === "create" ? "Validating…" : "Add publication"}
         </button>
         {error ? <p className="error-text source-form-wide">{error}</p> : null}
+        <p className="source-form-wide">
+          Substack session:{" "}
+          <strong>{substackSessionConfigured ? "configured" : "not configured"}</strong>
+          {substackSessionConfigured
+            ? " Paid subscriber posts can be upgraded from preview to full text."
+            : " Capture one locally with `npm run substack:capture-session`, then set SUBSTACK_STORAGE_STATE_B64."}
+        </p>
       </form>
 
       <div className="review-queue">

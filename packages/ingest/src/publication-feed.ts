@@ -53,7 +53,7 @@ export function normalizePublicationFeedInput(input: {
     retentionPolicy,
     backfillDays: boundedInteger(input.backfillDays, 30, 1, 3650),
     maxPostsPerPoll: boundedInteger(input.maxPostsPerPoll, 50, 1, 250),
-    rateLimitMs: 500,
+    rateLimitMs: platform === "substack" ? 1_500 : 500,
     tags: normalizeTags(input.tags, platform),
     termsNotes: String(
       input.termsNotes ?? "Public feed/API content only; no paywall or authentication bypass."

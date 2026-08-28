@@ -10,6 +10,7 @@ export default async function SourcesPage() {
     listPublicationFeeds(),
     listConnectorCheckpoints()
   ]);
+  const substackSessionConfigured = Boolean(process.env.SUBSTACK_STORAGE_STATE_B64?.trim());
   const premiumSources = [
     ["premium-wsj", "The Wall Street Journal"],
     ["premium-nyt", "The New York Times"],
@@ -39,9 +40,11 @@ export default async function SourcesPage() {
           <h1>Managed publications.</h1>
           <p className="lede">
             Add public Substacks, blogs, and official newspaper RSS feeds without a
-            code deploy. Headline feeds are snippet-only. Each source is
-            deduplicated, checkpointed, and routed through evidence review before it
-            can affect published narratives.
+            code deploy. Substack uses JSON archive and post endpoints. A captured
+            subscriber session upgrades paid previews; public posts work without it.
+            Headline feeds are snippet-only. Each source is deduplicated,
+            checkpointed, and routed through evidence review before it can affect
+            published narratives.
           </p>
         </div>
         <div className="panel">
@@ -55,6 +58,7 @@ export default async function SourcesPage() {
         feeds={feeds}
         newspaperGroups={NEWSPAPER_FEED_GROUPS}
         newspaperPresets={NEWSPAPER_FEED_PRESETS}
+        substackSessionConfigured={substackSessionConfigured}
       />
 
       <section className="section">

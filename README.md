@@ -226,15 +226,22 @@ Authenticated operators can add public Substack, RSS, and Atom publications at
 `/sources`. Managed feeds are stored in `publication_feeds`, loaded dynamically
 by `poll-sources`, and do not require a code deployment.
 
-Substack ingestion uses the publication's public archive and post endpoints for
-bounded historical discovery. It:
+Substack ingestion uses the publication's archive and post JSON endpoints, not
+article HTML pages. Playwright is used only to capture a subscriber session.
 
-- Fetches only posts whose audience is explicitly public (`everyone`).
-- Never sends Substack session cookies or attempts to bypass a paywall.
-- Skips paid-only and founding-member posts even if a public endpoint returns a
-  preview or body.
-- Applies per-publication lookback, post-count, rate-limit, retention, and
-  publisher-ownership settings.
+- Discovers posts newest-first from `{origin}/api/v1/archive` in pages of 25.
+- Downloads each post from `{origin}/api/v1/posts/{slug}`.
+- Public posts (`audience=everyone`) are always stored as full text when the
+  body is available.
+- Paid posts are classified with a 90% word-count preview check. An
+  authenticated subscriber session can receive the full body; truncated
+  responses are stored as previews and upgraded later.
+- Optional `SUBSTACK_STORAGE_STATE_B64` supplies Playwright cookies. Capture
+  one locally with `npm run substack:capture-session`.
+- Incremental polls stop at each publication's `lastPublishedAt` watermark and
+  advance that watermark only after documents persist.
+- Applies per-publication lookback, post-count, 1.5s default rate-limit,
+  retention, and publisher-ownership settings.
 - Rejects feed URLs that resolve to local or private networks.
 
 RSS/Atom feeds support either public full-text retention or snippet-only
@@ -273,6 +280,7 @@ Capture a session locally:
 ```bash
 npx playwright install chromium
 npm run premium:capture-session -- wsj
+npm run substack:capture-session
 ```
 
 Supported IDs are `wsj`, `nyt`, `wapo`, `ft`, and `bloomberg`. Log in manually
@@ -388,6 +396,10 @@ REPAIR_DOCUMENT_TEXTS_MAX_BATCHES=20
 APP_BASE_URL=http://localhost:3000
 SESSION_SECRET=replace-with-a-long-random-secret
 SOURCE_CONFIG_JSON={}
+SUBSTACK_STORAGE_STATE_B64=
+SUBSTACK_REFRESH=false
+SUBSTACK_EMAIL=
+SUBSTACK_PASSWORD=
 SCRAPING_ENABLED=false
 SCRAPER_USER_AGENT=MarketThemesBot/0.1 contact@example.com
 GDELT_ENABLED=false
@@ -431,6 +443,7 @@ npm run lint
 npm run db:schema
 npm run db:apply
 npm run poll:sources --workspace @market-themes/workers
+npm run substack:capture-session
 npm run sec:smoke
 npm run sec:backfill
 npm run fmp:smoke
@@ -575,6 +588,7 @@ Current worker scripts are smoke-testable scaffolds:
 
 ```bash
 npm run poll:sources --workspace @market-themes/workers
+npm run substack:capture-session
 npm run sec:smoke
 npm run sec:backfill
 npm run fmp:smoke
