@@ -112,6 +112,27 @@ test("applies strict proposition-specific evidence guards", () => {
   );
   assert.equal(
     passesDefinitionGuard(
+      "ai-infrastructure-demand",
+      "Data center revenue increased 90% after a hyperscaler contract."
+    ),
+    false
+  );
+  assert.equal(
+    passesDefinitionGuard(
+      "energy-demand-growth",
+      "Hot summer temperatures drove very high natural gas demand this week."
+    ),
+    false
+  );
+  assert.equal(
+    passesDefinitionGuard(
+      "energy-demand-growth",
+      "Industrial electrification increased regional electricity load to a new record."
+    ),
+    true
+  );
+  assert.equal(
+    passesDefinitionGuard(
       "supply-chain-normalization",
       "Lead times shortened as component availability improved."
     ),
