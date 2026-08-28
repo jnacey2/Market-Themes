@@ -239,6 +239,46 @@ RSS/Atom feeds support either public full-text retention or snippet-only
 retention. Every managed publication remains subject to canonical URL/content
 deduplication and the human narrative-evidence review gate.
 
+### Authenticated Publisher Collection
+
+An isolated Playwright cron can collect licensed subscriber content from WSJ,
+The New York Times, The Washington Post, Financial Times, and Bloomberg. This
+path assumes the operator has confirmed machine retrieval, storage, and LLM
+processing rights for each enabled publisher.
+
+The collector uses public RSS feeds for discovery, then opens only publisher
+article URLs from a hard-coded HTTPS hostname allowlist. It does not bypass
+paywalls, CAPTCHAs, bot checks, or access controls. If a session expires or a
+human-verification challenge appears, that publisher fails closed and reports
+the error in Operations.
+
+Capture a session locally:
+
+```bash
+npx playwright install chromium
+npm run premium:capture-session -- wsj
+```
+
+Supported IDs are `wsj`, `nyt`, `wapo`, `ft`, and `bloomberg`. Log in manually
+in the opened browser and verify a subscriber article, then press Enter in the
+terminal. The tool writes ignored `.auth/<publisher>.storage-state.json` and
+`.auth/<publisher>.storage-state.b64` files with restrictive permissions.
+
+Add the encoded file contents to the matching Render secret:
+
+```text
+WSJ_STORAGE_STATE_B64
+NYT_STORAGE_STATE_B64
+WAPO_STORAGE_STATE_B64
+FT_STORAGE_STATE_B64
+BLOOMBERG_STORAGE_STATE_B64
+```
+
+Enable only captured publishers in `PREMIUM_PUBLISHERS`, for example
+`wsj,nyt,ft`. The `scrape-premium-publishers` Render cron runs in the pinned
+Playwright container, applies strict rate and article-count limits, and routes
+all documents through the same deduplication and evidence-review gates.
+
 ## Claude Usage
 
 Claude is intended for:

@@ -5,6 +5,7 @@ dist
 coverage
 .env
 .env.local
+.auth/
 .DS_Store
 npm-debug.log*
 render-env.log

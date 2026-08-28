@@ -376,3 +376,36 @@ services:
         value: "50"
       - key: FMP_NEWS_RATE_LIMIT_MS
         value: "250"
+
+  - type: cron
+    name: scrape-premium-publishers
+    runtime: docker
+    plan: starter
+    schedule: "45 */4 * * *"
+    dockerfilePath: ./Dockerfile.scraper
+    dockerCommand: npm run premium:scrape --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: PREMIUM_PUBLISHERS
+        value: ""
+      - key: PREMIUM_SCRAPER_MAX_ARTICLES
+        value: "5"
+      - key: PREMIUM_SCRAPER_LOOKBACK_HOURS
+        value: "24"
+      - key: PREMIUM_SCRAPER_RATE_LIMIT_MS
+        value: "2000"
+      - key: PREMIUM_SCRAPER_USER_AGENT
+        value: MarketThemesResearch/1.0 (+https://themes-web.onrender.com)
+      - key: WSJ_STORAGE_STATE_B64
+        sync: false
+      - key: NYT_STORAGE_STATE_B64
+        sync: false
+      - key: WAPO_STORAGE_STATE_B64
+        sync: false
+      - key: FT_STORAGE_STATE_B64
+        sync: false
+      - key: BLOOMBERG_STORAGE_STATE_B64
+        sync: false
