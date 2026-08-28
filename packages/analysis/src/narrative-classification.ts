@@ -7,7 +7,7 @@ import type {
   ToneDirection
 } from "@market-themes/db";
 
-export const narrativeClassificationPromptVersion = "narrative_classification_v4";
+export const narrativeClassificationPromptVersion = "narrative_classification_v5";
 
 type RawObservation = {
   narrativeDefinitionId?: string;
@@ -50,7 +50,9 @@ Topic, sector, company, or keyword adjacency is not a match.
 Do not infer pricing power from inflation, AI demand from semiconductor adjacency,
 credit deterioration from hypothetical policy risk, or broad deal recovery from one transaction.
 Do not infer AI-driven demand from data-center adjacency without explicit AI language,
-or structural energy-demand growth from short-term weather-driven consumption.
+industry maturity, circular financing, or the word "compute" alone. Require a concrete
+demand, capacity, backlog, order, load, infrastructure-investment, or revenue-growth fact.
+Do not infer structural energy-demand growth from short-term weather-driven consumption.
 For directional propositions, contradictory evidence is matched=false, not supporting evidence.
 The evidenceSnippet must independently support the match without facts added from elsewhere.
 Interpretation may explain the quote but must not introduce facts absent from it.
@@ -185,7 +187,12 @@ export function passesDefinitionGuard(slug: string, evidence: string) {
     case "ai-infrastructure-demand":
       return (
         /(artificial intelligence|\bai\b)/.test(text) &&
-        /(demand|capacity|backlog|orders|load|compute|infrastructure|growth)/.test(text)
+        (
+          /\b(demand|capacity|backlog|orders|load)\b/.test(text) ||
+          /infrastructure.{0,35}(invest|spend|build|deploy|expand)/.test(text) ||
+          /(revenue|sales).{0,25}(grow|increas|up\b)/.test(text) ||
+          /(grow|increas|up\b).{0,25}(revenue|sales)/.test(text)
+        )
       );
     case "ai-capex-discipline":
       return (

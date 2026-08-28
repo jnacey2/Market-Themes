@@ -119,6 +119,20 @@ test("applies strict proposition-specific evidence guards", () => {
   );
   assert.equal(
     passesDefinitionGuard(
+      "ai-infrastructure-demand",
+      "Circular financing is a sign that the AI and compute industry is maturing."
+    ),
+    false
+  );
+  assert.equal(
+    passesDefinitionGuard(
+      "ai-infrastructure-demand",
+      "AI accelerator revenue increased 90% as customer orders reached a record."
+    ),
+    true
+  );
+  assert.equal(
+    passesDefinitionGuard(
       "energy-demand-growth",
       "Hot summer temperatures drove very high natural gas demand this week."
     ),
