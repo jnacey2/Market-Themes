@@ -38,6 +38,7 @@ const DEFAULT_CHUNK_SIZE = 8_000;
 const DEFAULT_CHUNK_OVERLAP = 500;
 const DEFAULT_QUERY_TIMEOUT_MS = 20_000;
 const DEFAULT_TREND_QUERY_TIMEOUT_MS = 120_000;
+export const DASHBOARD_QUERY_TIMEOUT_MS = 4_000;
 
 type DatabaseClientOptions = {
   queryTimeoutMs?: number;
@@ -1811,14 +1812,19 @@ export async function getLiveDashboardStatus(
     return emptyLiveDashboardStatus(false);
   }
 
-  const client = createDatabaseClient(databaseUrl);
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: DASHBOARD_QUERY_TIMEOUT_MS,
+    statementTimeoutMs: DASHBOARD_QUERY_TIMEOUT_MS
+  });
   try {
     await client.connect();
     const totals = await client.query<{
       latest_trend_date: string | null;
     }>(
-      `select max(date)::text as latest_trend_date
-       from theme_trends`
+      `select date::text as latest_trend_date
+       from theme_trends
+       order by date desc
+       limit 1`
     );
     const latestTrendDate = totals.rows[0]?.latest_trend_date ?? null;
 
@@ -1837,6 +1843,7 @@ export async function getLiveDashboardStatus(
 
     return {
       databaseConfigured: true,
+      degraded: false,
       totalTrendRows: sevenDayRows.length + thirtyDayRows.length,
       latestTrendDate,
       confirmedSevenDayThemes: sevenDayMarketThemes
@@ -1853,7 +1860,7 @@ export async function getLiveDashboardStatus(
     console.warn(
       `[db] live dashboard query failed: ${error instanceof Error ? error.message : String(error)}`
     );
-    return emptyLiveDashboardStatus(true);
+    return emptyLiveDashboardStatus(true, true);
   } finally {
     await closeDatabaseClient(client);
   }
@@ -3171,9 +3178,13 @@ function emptyTrendStatus(databaseConfigured: boolean): TrendStatus {
   };
 }
 
-function emptyLiveDashboardStatus(databaseConfigured: boolean): LiveDashboardStatus {
+function emptyLiveDashboardStatus(
+  databaseConfigured: boolean,
+  degraded = false
+): LiveDashboardStatus {
   return {
     databaseConfigured,
+    degraded,
     totalTrendRows: 0,
     latestTrendDate: null,
     confirmedSevenDayThemes: [],
