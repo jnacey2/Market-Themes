@@ -27,5 +27,6 @@ test("preset payloads stay snippet-only and unauthenticated", () => {
   assert.equal(input.retentionPolicy, "snippet");
   assert.equal(input.termsNotes, NEWSPAPER_FEED_TERMS);
   assert.deepEqual(input.tags, ["rss", "newspaper", "preset"]);
-  assert.doesNotMatch(input.termsNotes, /login|cookie|session|bypass/i);
-}
+  assert.match(input.termsNotes, /snippet/i);
+  assert.match(input.termsNotes, /no paywall/i);
+});

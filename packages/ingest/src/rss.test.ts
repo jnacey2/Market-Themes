@@ -40,4 +40,4 @@ test("RSS snippet retention keeps the lede and maps publisher owners", async () 
     documents[0].canonicalUrl,
     "https://www.nytimes.com/2026/08/28/business/inflation.html"
   );
-}
+});

@@ -49,4 +49,4 @@ test("NYT Article Search maps abstracts to snippet documents", async () => {
   );
   assert.match(requested[0], /api-key=test-key/);
   assert.match(requested[0], /begin_date=/);
-}
+});

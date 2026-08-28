@@ -21,4 +21,4 @@ test("GDELT queries append a domain allowlist", () => {
     "inflation sourcelang:english"
   );
   assert.match(buildGdeltQuery(), /domain:nytimes.com/);
-}
+});

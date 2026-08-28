@@ -48,4 +48,4 @@ test("falls back to a slug when no newspaper owner matches", () => {
     resolvePublisherOwner({ site: "Seeking Alpha", url: "https://seekingalpha.com/article/1" }),
     "seeking-alpha"
   );
-}
+});
