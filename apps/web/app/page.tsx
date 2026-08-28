@@ -13,6 +13,7 @@ export default async function HomePage() {
     );
     return {
       databaseConfigured: Boolean(process.env.DATABASE_URL),
+      degraded: true,
       totalTrendRows: 0,
       latestTrendDate: null,
       confirmedSevenDayThemes: [],
@@ -31,10 +32,16 @@ export default async function HomePage() {
       ? topSevenDayThemes.reduce((total, theme) => total + theme.zScore, 0) /
         topSevenDayThemes.length
       : 0;
-  const brief = buildDashboardBrief(
-    topSevenDayThemes,
-    dashboard.confirmedThirtyDayThemes
-  );
+  const brief = dashboard.degraded && !topTheme
+    ? {
+        headline: "Theme rankings are delayed.",
+        summary:
+          "The homepage could not finish reading theme_trends in time. Open Narrative Currents for the live board, then retry this page after the database is less busy."
+      }
+    : buildDashboardBrief(
+        topSevenDayThemes,
+        dashboard.confirmedThirtyDayThemes
+      );
 
   return (
     <div className="shell">
@@ -63,13 +70,20 @@ export default async function HomePage() {
         </div>
         <div className="panel">
           <p className="eyebrow">Today&apos;s highest priority</p>
-          <h2>{topTheme?.themeLabel ?? "No confirmed live themes yet"}</h2>
+          <h2>
+            {topTheme?.themeLabel ??
+              (dashboard.degraded
+                ? "Theme rankings are delayed"
+                : "No confirmed live themes yet")}
+          </h2>
           <p>
             {topTheme
               ? themeSummary(topTheme)
-              : dashboard.databaseConfigured
-                ? "Run extraction, theme normalization, and trend recompute to populate the live dashboard."
-                : "Set DATABASE_URL to connect the dashboard to live trend data."}
+              : dashboard.degraded
+                ? "The live dashboard query timed out on the database. Narrative Currents is still available."
+                : dashboard.databaseConfigured
+                  ? "Run extraction, theme normalization, and trend recompute to populate the live dashboard."
+                  : "Set DATABASE_URL to connect the dashboard to live trend data."}
           </p>
           <div className="metric-row">
             <div className="metric">
@@ -104,8 +118,15 @@ export default async function HomePage() {
         </div>
         <div className="panel">
           <span className="label">Latest trend date</span>
-          <h2>{dashboard.latestTrendDate ?? "None yet"}</h2>
-          <p>{dashboard.totalTrendRows} live trend rows currently stored.</p>
+          <h2>
+            {dashboard.latestTrendDate ??
+              (dashboard.degraded ? "Temporarily unavailable" : "None yet")}
+          </h2>
+          <p>
+            {dashboard.degraded
+              ? "Ranking query hit the dashboard timeout. Open Narrative Currents for live measurements."
+              : `${dashboard.totalTrendRows} live trend rows currently stored.`}
+          </p>
         </div>
       </section>
 
@@ -114,13 +135,18 @@ export default async function HomePage() {
         <div className="grid">
           {topSevenDayThemes.length === 0 ? (
             <div className="panel">
-              <h2>No ranked 7-day themes yet</h2>
+              <h2>
+                {dashboard.degraded
+                  ? "Live theme cards are delayed"
+                  : "No ranked 7-day themes yet"}
+              </h2>
               <p>
-                Run extraction, theme normalization, and trend recompute to populate
-                the live theme list.
+                {dashboard.degraded
+                  ? "The homepage ranking query did not finish in time. Narrative Currents still loads from a smaller table."
+                  : "Run extraction, theme normalization, and trend recompute to populate the live theme list."}
               </p>
               <Link className="pill" href="/trends">
-                Open trends
+                Open Narrative Currents
               </Link>
             </div>
           ) : (
