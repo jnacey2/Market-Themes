@@ -568,6 +568,18 @@ Render implementation notes:
 - Durable data should not be written to the local filesystem.
 - Logs should include source ID, retrieval method, document counts, Claude usage,
   scoring job IDs, and error context.
+- `themes-web` runs `npm run db:apply` on start and a best-effort
+  `npm run db:apply:predeploy` before deploy. Render's pre-deploy instance is
+  separate from the running service and often cannot resolve the internal
+  Postgres hostname (`dpg-…`, no `*.region-postgres.render.com` suffix). That
+  `getaddrinfo ENOTFOUND` failure is a DNS/network issue, not a need for a
+  larger database. Schema apply retries transient DNS errors; leftover
+  `ENOTFOUND` during pre-deploy is non-fatal so the web process can apply
+  schema on the private network. Render blueprints only inject the internal
+  URL via `fromDatabase.property: connectionString` (there is no
+  `externalConnectionString` property). To make pre-deploy use public DNS,
+  set `DATABASE_URL_EXTERNAL` in the Render dashboard to the database's
+  External connection string. Do not commit that value.
 
 ## Worker Jobs
 
