@@ -1,26 +1,30 @@
-import { getOperationsStatus } from "@market-themes/db";
+import { createDatabaseClient } from "@market-themes/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  try {
-    const operations = await getOperationsStatus();
-    const latest = operations.latestNarrativeTrendDate ?? operations.latestTrendDate;
-    const freshnessHours = latest
-      ? (Date.now() - new Date(latest).getTime()) / 3_600_000
-      : null;
-    const ready = operations.databaseConfigured;
-
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
     return Response.json(
-      {
-        ok: ready,
-        database: ready ? "connected" : "not_configured",
-        worker: operations.recentRuns[0]?.status ?? "no_runs",
-        latestTrendDate: latest,
-        trendFreshnessHours: freshnessHours
-      },
-      { status: ready ? 200 : 503 }
+      { ok: false, database: "not_configured" },
+      { status: 503 }
     );
+  }
+
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: 5_000,
+    statementTimeoutMs: 5_000
+  });
+
+  try {
+    await client.connect();
+    await client.query("select 1");
+
+    return Response.json({
+      ok: true,
+      database: "connected",
+      commit: process.env.RENDER_GIT_COMMIT ?? null
+    });
   } catch (error) {
     return Response.json(
       {
@@ -30,5 +34,7 @@ export async function GET() {
       },
       { status: 503 }
     );
+  } finally {
+    await client.end().catch(() => undefined);
   }
 }
