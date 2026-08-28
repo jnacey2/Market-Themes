@@ -110,8 +110,30 @@ export function SourceManager({
     }
   }
 
+  const substackFeeds = feeds.filter((feed) => feed.platform === "substack");
+
   return (
     <>
+      <section className="panel">
+        <div>
+          <p className="eyebrow">Substack Subscriber Session</p>
+          <h2>{substackSessionConfigured ? "Subscriber session configured." : "Capture your paid Substack session."}</h2>
+          <p>
+            Paid posts are scraped with the same account that holds the
+            subscriptions. Playwright only logs in; archive and post JSON
+            endpoints then download the bodies your session can read.
+            {substackFeeds.length > 0
+              ? ` ${substackFeeds.length} Substack publication${substackFeeds.length === 1 ? "" : "s"} registered.`
+              : " Register each Substack you subscribe to below."}
+          </p>
+          <p>
+            {substackSessionConfigured
+              ? "Paid subscriber posts can be stored as full text and later upgraded if an earlier poll only got a preview."
+              : "Run `npm run substack:capture-session`, confirm a paid article opens, then set SUBSTACK_STORAGE_STATE_B64 on web, worker, and poll-sources."}
+          </p>
+        </div>
+      </section>
+
       <section className="panel newspaper-presets">
         <div>
           <p className="eyebrow">Major Newspapers</p>
@@ -173,12 +195,12 @@ export function SourceManager({
       <form action={addFeed} className="panel source-form">
         <div>
           <p className="eyebrow">Add Publication</p>
-          <h2>Register a public feed</h2>
+          <h2>Register a Substack or RSS feed</h2>
           <p>
-            Substack uses its archive and post JSON APIs, not article HTML.
-            Paid posts are stored as full text when the captured subscriber
-            session can read them, otherwise as previews. Generic publications
-            use RSS or Atom.
+            Add each Substack you subscribe to by homepage URL, including custom
+            domains. Paid posts are stored as full text when the captured
+            subscriber session can read them, otherwise as previews. Generic
+            publications use RSS or Atom.
           </p>
         </div>
         <label>

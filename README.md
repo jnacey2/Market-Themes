@@ -222,22 +222,24 @@ allow full-text retention.
 
 ### Managed Publications
 
-Authenticated operators can add public Substack, RSS, and Atom publications at
-`/sources`. Managed feeds are stored in `publication_feeds`, loaded dynamically
-by `poll-sources`, and do not require a code deployment.
+Authenticated operators can add the Substacks they subscribe to, plus RSS and
+Atom publications, at `/sources`. Managed feeds are stored in
+`publication_feeds`, loaded dynamically by `poll-sources`, and do not require a
+code deployment.
 
 Substack ingestion uses the publication's archive and post JSON endpoints, not
-article HTML pages. Playwright is used only to capture a subscriber session.
+article HTML pages. Playwright is used only to capture the subscriber session
+for publications you already pay for.
 
 - Discovers posts newest-first from `{origin}/api/v1/archive` in pages of 25.
-- Downloads each post from `{origin}/api/v1/posts/{slug}`.
-- Public posts (`audience=everyone`) are always stored as full text when the
-  body is available.
-- Paid posts are classified with a 90% word-count preview check. An
-  authenticated subscriber session can receive the full body; truncated
-  responses are stored as previews and upgraded later.
-- Optional `SUBSTACK_STORAGE_STATE_B64` supplies Playwright cookies. Capture
-  one locally with `npm run substack:capture-session`.
+- Downloads each post from `{origin}/api/v1/posts/{slug}` with that session.
+- Public posts (`audience=everyone`) are stored as full text when the body is
+  available.
+- Paid subscriber posts are stored as full text when the session can read them.
+  Truncated responses are stored as previews and upgraded on the next
+  authenticated poll.
+- Capture the session locally with `npm run substack:capture-session`, confirm a
+  paid article opens, then set `SUBSTACK_STORAGE_STATE_B64`.
 - Incremental polls stop at each publication's `lastPublishedAt` watermark and
   advance that watermark only after documents persist.
 - Applies per-publication lookback, post-count, 1.5s default rate-limit,

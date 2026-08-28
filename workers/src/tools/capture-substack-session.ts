@@ -36,15 +36,27 @@ try {
   }
 
   const publicationUrls = await publicationHomepages(extraUrls);
+  if (publicationUrls.length === 0) {
+    console.log(
+      "No Substack homepages found. Pass them as arguments or set SUBSTACK_HOMEPAGES so custom-domain subscriptions can sync cookies."
+    );
+  }
   for (const homepage of publicationUrls) {
+    console.log(`Opening ${homepage} to sync subscriber cookies.`);
     await page.goto(homepage, { waitUntil: "domcontentloaded" });
+  }
+
+  if (prompt) {
+    await prompt.question(
+      "Open a paid post you subscribe to and confirm the full article loads, then press Enter."
+    );
   }
 
   const state = await context.storageState();
   const json = JSON.stringify(state);
   await writeFile(jsonPath, `${json}\n`, { mode: 0o600 });
   await writeFile(encodedPath, Buffer.from(json).toString("base64"), { mode: 0o600 });
-  console.log("Substack session captured.");
+  console.log("Substack subscriber session captured.");
   console.log(`Add the contents of ${encodedPath.pathname} to Render secret SUBSTACK_STORAGE_STATE_B64.`);
   console.log("Do not commit, paste into chat, or share either session file.");
   if (prompt) {
@@ -90,7 +102,11 @@ async function automateLogin(page: Page) {
 }
 
 async function publicationHomepages(explicit: string[]) {
-  const urls = [...explicit];
+  const fromEnv = (process.env.SUBSTACK_HOMEPAGES ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => /^https:\/\//i.test(value));
+  const urls = [...explicit, ...fromEnv];
   if (process.env.DATABASE_URL) {
     const feeds = await listPublicationFeeds({ enabledOnly: true });
     for (const feed of feeds.filter((item) => item.platform === "substack")) {

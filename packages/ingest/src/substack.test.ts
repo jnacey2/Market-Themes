@@ -13,6 +13,7 @@ import {
   isPreview,
   isValidSubstackSession,
   parseSubstackSession,
+  resolveSubstackSession,
   sanitizeSlug,
   stripSubstackChrome,
   SubstackAccessError,
@@ -337,6 +338,42 @@ test("writes raw JSON fields into processed document metadata and preview markdo
   assert.equal(documents[0].metadata?.substackSlug, "paid-preview");
   assert.match(documents[0].body, /truncated preview/);
   assert.equal(documents[0].body.includes("Subscribe"), false);
+});
+
+test("stores a paid subscriber post as full text when the session returns the complete body", async () => {
+  const body = `<p>${"Subscriber evidence about market conditions and corporate behavior. ".repeat(20)}</p>`;
+  const documents = await fetchSubstackPosts(feed(), {
+    fetchImpl: archiveFetch([], [
+      post("paid-full", {
+        audience: "only_paid",
+        subtitle: "A paid subscriber argument",
+        wordcount: 20,
+        bodyHtml: body
+      })
+    ]),
+    session: { cookies: [{ name: "substack.sid", value: "abc" }] },
+    now: () => Date.parse("2026-08-28T12:00:00.000Z"),
+    skipNetworkValidation: true,
+    requestDelayMs: 0,
+    sleep: async () => undefined
+  });
+  assert.equal(documents.length, 1);
+  assert.equal(documents[0].metadata?.content, "full");
+  assert.equal(documents[0].metadata?.audience, "only_paid");
+  assert.equal(documents[0].retrievalMethod, "credentialed");
+  assert.doesNotMatch(documents[0].body, /truncated preview/);
+});
+
+test("rejects a configured Substack session that has no subscriber cookie", () => {
+  assert.throws(
+    () =>
+      resolveSubstackSession({
+        SUBSTACK_STORAGE_STATE_B64: Buffer.from(
+          JSON.stringify({ cookies: [{ name: "other", value: "x" }], origins: [] })
+        ).toString("base64")
+      }),
+    /does not contain a Substack session cookie/
+  );
 });
 
 test("incremental refresh is idempotent once a watermark is stored", async () => {

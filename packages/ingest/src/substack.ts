@@ -87,7 +87,7 @@ export function createSubstackConnector(
     async poll() {
       return fetchSubstackPosts(feed, {
         ...options,
-        session: options.session === undefined ? loadSubstackSession() : options.session
+        session: options.session === undefined ? resolveSubstackSession() : options.session
       });
     }
   };
@@ -101,7 +101,7 @@ export async function fetchSubstackPosts(
   const now = options.now?.() ?? Date.now();
   const sleepImpl = options.sleep ?? sleepFn;
   const delayMs = options.requestDelayMs ?? feed.rateLimitMs;
-  const session = options.session === undefined ? loadSubstackSession() : options.session;
+  const session = options.session === undefined ? resolveSubstackSession() : options.session;
   const origin = options.skipNetworkValidation
     ? stripTrailingSlash(new URL(feed.homepageUrl).origin)
     : stripTrailingSlash((await assertPublicNetworkUrl(feed.homepageUrl)).origin);
@@ -274,6 +274,20 @@ export function loadSubstackSession(
   const encoded = env.SUBSTACK_STORAGE_STATE_B64?.trim();
   if (!encoded) return null;
   return parseSubstackSession(encoded);
+}
+
+export function resolveSubstackSession(
+  env: NodeJS.ProcessEnv = process.env
+): SubstackSession | null {
+  const encoded = env.SUBSTACK_STORAGE_STATE_B64?.trim();
+  if (!encoded) return null;
+  const session = parseSubstackSession(encoded);
+  if (!isValidSubstackSession(session)) {
+    throw new Error(
+      "SUBSTACK_STORAGE_STATE_B64 is present but does not contain a Substack session cookie. Recapture with npm run substack:capture-session."
+    );
+  }
+  return session;
 }
 
 export function parseSubstackSession(encoded: string): SubstackSession {

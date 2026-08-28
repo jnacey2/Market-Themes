@@ -39,12 +39,11 @@ export default async function SourcesPage() {
           <p className="eyebrow">Source Registry</p>
           <h1>Managed publications.</h1>
           <p className="lede">
-            Add public Substacks, blogs, and official newspaper RSS feeds without a
-            code deploy. Substack uses JSON archive and post endpoints. A captured
-            subscriber session upgrades paid previews; public posts work without it.
-            Headline feeds are snippet-only. Each source is deduplicated,
-            checkpointed, and routed through evidence review before it can affect
-            published narratives.
+            Add the Substacks you subscribe to, plus blogs and official newspaper
+            RSS, without a code deploy. A captured Substack subscriber session
+            downloads paid posts you already pay for. Headline feeds stay
+            snippet-only. Each source is deduplicated, checkpointed, and routed
+            through evidence review before it can affect published narratives.
           </p>
         </div>
         <div className="panel">
