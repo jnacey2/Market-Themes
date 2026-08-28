@@ -17,12 +17,15 @@ export default async function StoryboardPage({
     notFound();
   }
 
+  const hasCoverage = narrative.eligibleDocuments > 0;
   const direction = narrative.change > 0 ? "rising" : narrative.change < 0 ? "fading" : "steady";
   const breadth =
     narrative.publisherOwnerBreadth >= 3
       ? "across several independent publisher groups"
       : "with limited independent-source confirmation";
-  const whyUnusual = narrative.lowHistory
+  const whyUnusual = !hasCoverage
+    ? "No eligible documents were classified in the latest window, so movement and unusualness are not measured."
+    : narrative.lowHistory
     ? "The series does not yet have enough history for a reliable unusualness judgment."
     : `The current reading is in the ${narrative.percentileRank}th percentile of its own history with a z-score of ${narrative.zScore.toFixed(1)}.`;
 
@@ -41,9 +44,9 @@ export default async function StoryboardPage({
           <p className="eyebrow">Live Storyboard · {narrative.category}</p>
           <h1>{narrative.name}</h1>
           <p className="lede">
-            This narrative is {direction} {breadth}. Current normalized density is{" "}
-            {narrative.density.toFixed(1)}, a {signed(narrative.change)} change from
-            the prior seven-day window.
+            {hasCoverage
+              ? `This narrative is ${direction} ${breadth}. Current normalized density is ${narrative.density.toFixed(1)}, a ${signed(narrative.change)} change from the prior seven-day window.`
+              : "This narrative has no eligible recent-source coverage. Ingest and classify current documents before interpreting its movement."}
           </p>
           <p className="synthesis-disclosure">
             System synthesis derived from measured observations. Evidence and model
@@ -54,8 +57,8 @@ export default async function StoryboardPage({
           <p className="eyebrow">Why this is unusual</p>
           <p>{whyUnusual}</p>
           <div className="metric-row">
-            <Metric label="Z-score" value={narrative.zScore.toFixed(1)} />
-            <Metric label="Percentile" value={String(narrative.percentileRank)} />
+            <Metric label="Z-score" value={hasCoverage ? narrative.zScore.toFixed(1) : "—"} />
+            <Metric label="Percentile" value={hasCoverage ? String(narrative.percentileRank) : "—"} />
             <Metric label="Owners" value={String(narrative.publisherOwnerBreadth)} />
           </div>
         </div>

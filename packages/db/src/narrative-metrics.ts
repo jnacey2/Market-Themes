@@ -48,22 +48,36 @@ export function calculateNarrativeTrendSeries(
     const baselineValues: number[] = [];
 
     for (let end = windowDays - 1; end <= baselineEnd; end += 1) {
-      baselineValues.push(summarizeWindow(daily, end, windowDays).density);
+      const baseline = summarizeWindow(daily, end, windowDays);
+      if (baseline.eligibleDocuments > 0) {
+        baselineValues.push(baseline.density);
+      }
     }
 
     const baselineMean = average(baselineValues);
     const baselineStddev = Math.max(standardDeviation(baselineValues, baselineMean), 0.01);
-    const change = current.density - previous.density;
-    const previousChange = previous.density - prior.density;
+    const hasCoverage = current.eligibleDocuments > 0;
+    const hasMatch = current.matchedDocuments > 0;
+    const change =
+      hasCoverage && previous.eligibleDocuments > 0
+        ? current.density - previous.density
+        : 0;
+    const previousChange =
+      previous.eligibleDocuments > 0 && prior.eligibleDocuments > 0
+        ? previous.density - prior.density
+        : 0;
 
     return {
       date: dates[index],
       density: round(current.density),
       baselineMean: round(baselineMean),
       baselineStddev: round(baselineStddev),
-      zScore: round((current.density - baselineMean) / baselineStddev),
+      zScore:
+        hasCoverage && hasMatch
+          ? round((current.density - baselineMean) / baselineStddev)
+          : 0,
       percentileRank:
-        baselineValues.length === 0
+        !hasCoverage || !hasMatch || baselineValues.length === 0
           ? 0
           : Math.round(
               (baselineValues.filter((value) => value <= current.density).length /
@@ -71,7 +85,7 @@ export function calculateNarrativeTrendSeries(
                 100
             ),
       change: round(change),
-      acceleration: round(change - previousChange),
+      acceleration: hasCoverage ? round(change - previousChange) : 0,
       riskTone: round(current.riskTone),
       bullishTone: round(current.bullishTone),
       eligibleDocuments: current.eligibleDocuments,
@@ -80,7 +94,7 @@ export function calculateNarrativeTrendSeries(
       publisherOwnerBreadth: current.publisherOwnerBreadth,
       sourceClassBreadth: current.sourceClassBreadth,
       entityBreadth: current.entityBreadth,
-      lowHistory: baselineValues.length < lowHistoryDays
+      lowHistory: !hasCoverage || baselineValues.length < lowHistoryDays
     };
   });
 }

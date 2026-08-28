@@ -171,8 +171,14 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
           <h1>{narrative.name}</h1>
           <p className="lede">{narrative.proposition}</p>
           <div className="pill-row">
-            <span className="pill">{narrative.percentileRank}th percentile</span>
-            <span className="pill">z {narrative.zScore.toFixed(1)}</span>
+            <span className="pill">
+              {narrative.eligibleDocuments > 0
+                ? `${narrative.percentileRank}th percentile`
+                : "No recent coverage"}
+            </span>
+            {narrative.eligibleDocuments > 0 ? (
+              <span className="pill">z {narrative.zScore.toFixed(1)}</span>
+            ) : null}
             <span className="pill">{narrative.publisherOwnerBreadth} independent owners</span>
             {narrative.lowHistory ? <span className="pill warning-pill">Low history</span> : null}
           </div>
@@ -185,9 +191,18 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
         <div className="panel">
           <p className="eyebrow">Current signal</p>
           <div className="metric-row">
-            <Metric label="Density" value={narrative.density.toFixed(1)} />
-            <Metric label="7d change" value={signedMetric(narrative.change)} />
-            <Metric label="Acceleration" value={signedMetric(narrative.acceleration)} />
+            <Metric
+              label="Density"
+              value={narrative.eligibleDocuments > 0 ? narrative.density.toFixed(1) : "—"}
+            />
+            <Metric
+              label="7d change"
+              value={narrative.eligibleDocuments > 0 ? signedMetric(narrative.change) : "—"}
+            />
+            <Metric
+              label="Acceleration"
+              value={narrative.eligibleDocuments > 0 ? signedMetric(narrative.acceleration) : "—"}
+            />
           </div>
           <p>
             {narrative.matchedDocuments} matched documents from{" "}
