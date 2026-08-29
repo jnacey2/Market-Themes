@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { closeDatabaseClient, createDatabaseClient } from "./persistence";
-import type { ConnectorCheckpointSummary, OperationsStatus } from "./types";
+import {
+  DEFAULT_CANDIDATE_MIN_DOCUMENTS,
+  DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS
+} from "./narrative-candidates";
+import type {
+  ConnectorCheckpointSummary,
+  OperationsStatus,
+  SourceClass,
+  SourcePipelineTelemetry
+} from "./types";
 
 export async function startPipelineRun(stage: string, metadata: Record<string, unknown> = {}) {
   const client = createDatabaseClient();
@@ -170,7 +179,16 @@ export async function listConnectorCheckpoints(
 }
 
 export async function getOperationsStatus(
-  databaseUrl = process.env.DATABASE_URL
+  databaseUrl = process.env.DATABASE_URL,
+  overrides: {
+    analysisModel?: string;
+    analysisPromptVersion?: string;
+    classificationPromptVersion?: string;
+    discoveryPromptVersion?: string;
+    discoveryLookbackDays?: number;
+    discoveryMaxAttempts?: number;
+    analysisMaxAttempts?: number;
+  } = {}
 ): Promise<OperationsStatus> {
   if (!databaseUrl) {
     return emptyOperationsStatus();
@@ -179,33 +197,232 @@ export async function getOperationsStatus(
   const client = createDatabaseClient(databaseUrl);
   try {
     await client.connect();
+    const analysisModel =
+      overrides.analysisModel ??
+      process.env.ANTHROPIC_MODEL ??
+      "claude-sonnet-4-5-20250929";
+    const analysisPromptVersion =
+      overrides.analysisPromptVersion ??
+      process.env.CLAUDE_PROMPT_VERSION ??
+      "market_signal_extraction_v2";
+    const classificationPromptVersion =
+      overrides.classificationPromptVersion ??
+      process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+      "narrative_classification_v5";
+    const discoveryPromptVersion =
+      overrides.discoveryPromptVersion ??
+      process.env.NARRATIVE_DISCOVERY_PROMPT_VERSION ?? "narrative_discovery_v1";
+    const discoveryLookbackDays =
+      overrides.discoveryLookbackDays ??
+      Number(process.env.NARRATIVE_DISCOVERY_LOOKBACK_DAYS ?? 30);
+    const discoveryMaxAttempts =
+      overrides.discoveryMaxAttempts ??
+      Number(process.env.NARRATIVE_DISCOVERY_MAX_ATTEMPTS ?? 5);
+    const analysisMaxAttempts =
+      overrides.analysisMaxAttempts ??
+      Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5);
     const counts = await client.query<{
         latest_document_at: string | null;
         total_documents: string;
         analyzed_documents: string;
-        extraction_backlog: string;
         normalization_backlog: string;
+        narrative_review_pending_count: string;
+        narrative_candidate_pending_count: string;
+        narrative_candidate_qualified_count: string;
         latest_trend_date: string | null;
         latest_narrative_trend_date: string | null;
       }>(
         `select
           (select max(published_at)::text from documents) as latest_document_at,
           (select count(*)::text from documents) as total_documents,
-          (select count(distinct document_id)::text from document_analysis_runs where status = 'completed') as analyzed_documents,
-          (select count(*)::text from documents d
-             join document_texts dt on dt.document_id = d.id
-             where not exists (
-               select 1 from document_analysis_runs dar
-               where dar.document_id = d.id and dar.status = 'completed'
-             )) as extraction_backlog,
+          (select count(distinct document_id)::text
+             from document_analysis_runs
+             where analysis_type = 'market_signal_extraction'
+               and model = $1
+               and prompt_version = $2
+               and status = 'completed') as analyzed_documents,
           (select count(*)::text from themes t
              where t.theme_level = 'extracted'
                and not exists (
                  select 1 from theme_mappings tm where tm.extracted_theme_id = t.id
                )) as normalization_backlog,
+          (select count(*)::text
+             from narrative_observations
+             where matched
+               and review_status = 'pending'
+               and prompt_version = $3) as narrative_review_pending_count,
+          (select count(*)::text
+             from narrative_candidates
+             where status = 'pending'
+               and prompt_version = $4) as narrative_candidate_pending_count,
+          (select count(*)::text
+             from (
+               select nc.id
+               from narrative_candidates nc
+               join narrative_candidate_evidence ce on ce.candidate_id = nc.id
+               join documents d on d.id = ce.document_id
+               where nc.status = 'pending'
+                 and nc.prompt_version = $4
+               group by nc.id
+               having count(distinct ce.document_id) >= $5
+                  and count(distinct coalesce(
+                    nullif(d.publisher_owner, ''),
+                    nullif(d.publisher_id, ''),
+                    d.publisher
+                  )) >= $6
+             ) qualified) as narrative_candidate_qualified_count,
           (select max(date)::text from theme_trends) as latest_trend_date,
-          (select max(date)::text from narrative_trends) as latest_narrative_trend_date`
+          (select max(date)::text
+             from narrative_trends
+             where prompt_version = $3) as latest_narrative_trend_date`,
+        [
+          analysisModel,
+          analysisPromptVersion,
+          classificationPromptVersion,
+          discoveryPromptVersion,
+          DEFAULT_CANDIDATE_MIN_DOCUMENTS,
+          DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS
+        ]
       );
+    const sourceTelemetryRows = await client.query<{
+      source_id: string;
+      source_class: SourceClass | null;
+      label: string;
+      enabled: boolean | null;
+      document_count: string;
+      latest_document_at: string | null;
+      analyzed_documents: string;
+      extraction_backlog: string;
+      classification_backlog: string;
+      discovery_backlog: string;
+      matched_pending: string;
+      matched_approved: string;
+      matched_rejected: string;
+      last_attempt_at: string | null;
+      last_success_at: string | null;
+      last_error: string | null;
+    }>(
+      `with source_ids as (
+         select source_id from documents
+         union
+         select connector_id as source_id from connector_checkpoints
+         union
+         select id as source_id from publication_feeds
+       ),
+       document_stats as (
+         select source_id,
+                min(source_class) as source_class,
+                count(*) as document_count,
+                max(published_at) as latest_document_at
+         from documents
+         group by source_id
+       ),
+       extraction_stats as (
+         select d.source_id,
+                count(distinct d.id) filter (where ar.status = 'completed') as analyzed_documents,
+                count(distinct d.id) filter (
+                  where coalesce(ar.status, '') not in ('completed', 'running')
+                    and coalesce(ar.attempt_count, 0) < $7
+                )
+                  as extraction_backlog
+         from documents d
+         join document_texts dt on dt.document_id = d.id
+         left join document_analysis_runs ar
+           on ar.document_id = d.id
+          and ar.analysis_type = 'market_signal_extraction'
+          and ar.model = $1
+          and ar.prompt_version = $2
+         where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+           and not (
+             d.source_id = 'sec-filings'
+             and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
+           )
+         group by d.source_id
+       ),
+       classification_stats as (
+         select d.source_id, count(distinct d.id) as classification_backlog
+         from documents d
+         join document_texts dt on dt.document_id = d.id
+         where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+           and exists (
+             select 1
+             from narrative_definitions nd
+             where nd.status = 'active'
+               and not exists (
+                 select 1
+                 from narrative_observations no
+                 where no.narrative_definition_id = nd.id
+                   and no.document_id = d.id
+                   and no.model = $1
+                   and no.prompt_version = $3
+               )
+           )
+         group by d.source_id
+       ),
+       discovery_stats as (
+         select d.source_id,
+                count(distinct d.id) filter (
+                  where d.published_at >= now() - ($5::text || ' days')::interval
+                    and coalesce(ar.status, '') not in ('completed', 'running')
+                    and coalesce(ar.attempt_count, 0) < $6
+                ) as discovery_backlog
+         from documents d
+         join document_texts dt on dt.document_id = d.id
+         left join document_analysis_runs ar
+           on ar.document_id = d.id
+          and ar.analysis_type = 'narrative_candidate_discovery'
+          and ar.model = $1
+          and ar.prompt_version = $4
+         where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+         group by d.source_id
+       ),
+       match_stats as (
+         select d.source_id,
+                count(*) filter (where no.review_status = 'pending') as matched_pending,
+                count(*) filter (where no.review_status = 'approved') as matched_approved,
+                count(*) filter (where no.review_status = 'rejected') as matched_rejected
+         from narrative_observations no
+         join documents d on d.id = no.document_id
+         where no.matched
+           and no.model = $1
+           and no.prompt_version = $3
+         group by d.source_id
+       )
+       select s.source_id,
+              ds.source_class,
+              coalesce(pf.name, s.source_id) as label,
+              pf.enabled,
+              coalesce(ds.document_count, 0)::text as document_count,
+              ds.latest_document_at::text,
+              coalesce(es.analyzed_documents, 0)::text as analyzed_documents,
+              coalesce(es.extraction_backlog, 0)::text as extraction_backlog,
+              coalesce(cs.classification_backlog, 0)::text as classification_backlog,
+              coalesce(dis.discovery_backlog, 0)::text as discovery_backlog,
+              coalesce(ms.matched_pending, 0)::text as matched_pending,
+              coalesce(ms.matched_approved, 0)::text as matched_approved,
+              coalesce(ms.matched_rejected, 0)::text as matched_rejected,
+              cc.last_attempt_at::text,
+              cc.last_success_at::text,
+              cc.last_error
+       from source_ids s
+       left join document_stats ds on ds.source_id = s.source_id
+       left join extraction_stats es on es.source_id = s.source_id
+       left join classification_stats cs on cs.source_id = s.source_id
+       left join discovery_stats dis on dis.source_id = s.source_id
+       left join match_stats ms on ms.source_id = s.source_id
+       left join connector_checkpoints cc on cc.connector_id = s.source_id
+       left join publication_feeds pf on pf.id = s.source_id
+       order by coalesce(pf.name, s.source_id)`,
+      [
+        analysisModel,
+        analysisPromptVersion,
+        classificationPromptVersion,
+        discoveryPromptVersion,
+        discoveryLookbackDays,
+        discoveryMaxAttempts,
+        analysisMaxAttempts
+      ]
+    );
     const connectors = await client.query<{
         connector_id: string;
         last_attempt_at: string | null;
@@ -239,16 +456,35 @@ export async function getOperationsStatus(
       );
 
     const row = counts.rows[0];
+    const sourceTelemetry = sourceTelemetryRows.rows.map(mapSourceTelemetry);
     return {
       databaseConfigured: true,
       latestDocumentAt: row?.latest_document_at ?? null,
       totalDocuments: Number(row?.total_documents ?? 0),
       analyzedDocuments: Number(row?.analyzed_documents ?? 0),
-      extractionBacklog: Number(row?.extraction_backlog ?? 0),
+      extractionBacklog: sumTelemetry(sourceTelemetry, "extractionBacklog"),
       normalizationBacklog: Number(row?.normalization_backlog ?? 0),
+      narrativeClassificationBacklog: sumTelemetry(
+        sourceTelemetry,
+        "narrativeClassificationBacklog"
+      ),
+      narrativeDiscoveryBacklog: sumTelemetry(
+        sourceTelemetry,
+        "narrativeDiscoveryBacklog"
+      ),
+      narrativeReviewPendingCount: Number(
+        row?.narrative_review_pending_count ?? 0
+      ),
+      narrativeCandidatePendingCount: Number(
+        row?.narrative_candidate_pending_count ?? 0
+      ),
+      narrativeCandidateQualifiedCount: Number(
+        row?.narrative_candidate_qualified_count ?? 0
+      ),
       latestTrendDate: row?.latest_trend_date ?? null,
       latestNarrativeTrendDate: row?.latest_narrative_trend_date ?? null,
       connectors: connectors.rows.map(mapConnectorCheckpoint),
+      sourceTelemetry,
       recentRuns: runs.rows.map((run) => ({
         id: run.id,
         stage: run.stage,
@@ -294,6 +530,54 @@ function mapConnectorCheckpoint(connector: {
   };
 }
 
+function mapSourceTelemetry(row: {
+  source_id: string;
+  source_class: SourceClass | null;
+  label: string;
+  enabled: boolean | null;
+  document_count: string;
+  latest_document_at: string | null;
+  analyzed_documents: string;
+  extraction_backlog: string;
+  classification_backlog: string;
+  discovery_backlog: string;
+  matched_pending: string;
+  matched_approved: string;
+  matched_rejected: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+}): SourcePipelineTelemetry {
+  return {
+    sourceId: row.source_id,
+    sourceClass: row.source_class,
+    label: row.label,
+    enabled: row.enabled,
+    documentCount: Number(row.document_count),
+    latestDocumentAt: row.latest_document_at,
+    analyzedDocuments: Number(row.analyzed_documents),
+    extractionBacklog: Number(row.extraction_backlog),
+    narrativeClassificationBacklog: Number(row.classification_backlog),
+    narrativeDiscoveryBacklog: Number(row.discovery_backlog),
+    matchedPending: Number(row.matched_pending),
+    matchedApproved: Number(row.matched_approved),
+    matchedRejected: Number(row.matched_rejected),
+    lastIngestAttemptAt: row.last_attempt_at,
+    lastIngestSuccessAt: row.last_success_at,
+    lastIngestError: row.last_error
+  };
+}
+
+function sumTelemetry(
+  telemetry: SourcePipelineTelemetry[],
+  field:
+    | "extractionBacklog"
+    | "narrativeClassificationBacklog"
+    | "narrativeDiscoveryBacklog"
+) {
+  return telemetry.reduce((sum, row) => sum + row[field], 0);
+}
+
 function emptyOperationsStatus(): OperationsStatus {
   return {
     databaseConfigured: false,
@@ -302,9 +586,15 @@ function emptyOperationsStatus(): OperationsStatus {
     analyzedDocuments: 0,
     extractionBacklog: 0,
     normalizationBacklog: 0,
+    narrativeClassificationBacklog: 0,
+    narrativeDiscoveryBacklog: 0,
+    narrativeReviewPendingCount: 0,
+    narrativeCandidatePendingCount: 0,
+    narrativeCandidateQualifiedCount: 0,
     latestTrendDate: null,
     latestNarrativeTrendDate: null,
     connectors: [],
+    sourceTelemetry: [],
     recentRuns: []
   };
 }

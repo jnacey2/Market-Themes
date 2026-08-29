@@ -5,12 +5,14 @@ import {
 } from "./narrative-metrics";
 import type {
   AnalysisDocument,
+  NarrativeBacklogSummary,
   NarrativeBoardStatus,
   NarrativeDefinition,
   NarrativeObservationInput,
   NarrativeReviewQueue,
   NarrativeReviewStatus,
   NarrativeTrendSummary,
+  SourceClass,
   TrendWindow
 } from "./types";
 
@@ -48,7 +50,12 @@ export async function getActiveNarrativeDefinitions(
 }
 
 export async function selectDocumentsForNarrativeClassification(
-  options: { model: string; promptVersion: string; limit: number },
+  options: {
+    model: string;
+    promptVersion: string;
+    limit: number;
+    excludedDocumentIds?: string[];
+  },
   databaseUrl = process.env.DATABASE_URL
 ): Promise<AnalysisDocument[]> {
   const client = createDatabaseClient(databaseUrl);
@@ -68,28 +75,43 @@ export async function selectDocumentsForNarrativeClassification(
       content: string;
       text_hash: string;
     }>(
-      `select d.id, d.source_id, d.source_class, d.title, d.publisher, d.url,
-              d.published_at::text, d.tickers, d.summary, d.metadata,
-              dt.content, dt.content_hash as text_hash
-       from documents d
-       join document_texts dt on dt.document_id = d.id
-       where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-         and exists (
-           select 1
-           from narrative_definitions nd
-           where nd.status = 'active'
-             and not exists (
-               select 1
-               from narrative_observations no
-               where no.narrative_definition_id = nd.id
-                 and no.document_id = d.id
-                 and no.model = $1
-                 and no.prompt_version = $2
-             )
-         )
-       order by d.published_at desc
+      `with eligible as (
+         select d.id, d.source_id, d.source_class, d.title, d.publisher, d.url,
+                d.published_at, d.created_at, d.tickers, d.summary, d.metadata,
+                dt.content, dt.content_hash as text_hash,
+                row_number() over (
+                  partition by d.source_class
+                  order by d.published_at desc, d.created_at desc, d.id
+                ) as source_rank
+         from documents d
+         join document_texts dt on dt.document_id = d.id
+         where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+           and not (d.id = any($4::text[]))
+           and exists (
+             select 1
+             from narrative_definitions nd
+             where nd.status = 'active'
+               and not exists (
+                 select 1
+                 from narrative_observations no
+                 where no.narrative_definition_id = nd.id
+                   and no.document_id = d.id
+                   and no.model = $1
+                   and no.prompt_version = $2
+               )
+           )
+       )
+       select id, source_id, source_class, title, publisher, url,
+              published_at::text, tickers, summary, metadata, content, text_hash
+       from eligible
+       order by source_rank, published_at desc, source_class, id
        limit $3`,
-      [options.model, options.promptVersion, options.limit]
+      [
+        options.model,
+        options.promptVersion,
+        options.limit,
+        options.excludedDocumentIds ?? []
+      ]
     );
 
     return result.rows.map((row) => ({
@@ -106,6 +128,48 @@ export async function selectDocumentsForNarrativeClassification(
       text: row.content,
       textHash: row.text_hash
     }));
+  } finally {
+    await client.end();
+  }
+}
+
+export async function countNarrativeClassificationBacklog(
+  options: { model: string; promptVersion: string },
+  databaseUrl = process.env.DATABASE_URL
+): Promise<NarrativeBacklogSummary> {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<{ source_class: SourceClass; count: string }>(
+      `select d.source_class, count(*)::text as count
+       from documents d
+       join document_texts dt on dt.document_id = d.id
+       where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+         and exists (
+           select 1
+           from narrative_definitions nd
+           where nd.status = 'active'
+             and not exists (
+               select 1
+               from narrative_observations no
+               where no.narrative_definition_id = nd.id
+                 and no.document_id = d.id
+                 and no.model = $1
+                 and no.prompt_version = $2
+             )
+         )
+       group by d.source_class
+       order by d.source_class`,
+      [options.model, options.promptVersion]
+    );
+    const bySourceClass = result.rows.map((row) => ({
+      sourceClass: row.source_class,
+      count: Number(row.count)
+    }));
+    return {
+      total: bySourceClass.reduce((sum, row) => sum + row.count, 0),
+      bySourceClass
+    };
   } finally {
     await client.end();
   }
@@ -155,21 +219,10 @@ export async function persistNarrativeObservations(
            interpretation = excluded.interpretation,
            affected_entities = excluded.affected_entities,
            metadata = excluded.metadata,
-           review_status = case
-             when narrative_observations.review_status = 'pending'
-               then excluded.review_status
-             else narrative_observations.review_status
-           end,
-           reviewed_at = case
-             when narrative_observations.review_status = 'pending'
-               then excluded.reviewed_at
-             else narrative_observations.reviewed_at
-           end,
-           review_note = case
-             when narrative_observations.review_status = 'pending'
-               then excluded.review_note
-             else narrative_observations.review_note
-           end`,
+           review_status = excluded.review_status,
+           reviewed_at = excluded.reviewed_at,
+           review_note = excluded.review_note
+         where narrative_observations.review_status = 'pending'`,
         [
           observation.id,
           observation.narrativeDefinitionId,

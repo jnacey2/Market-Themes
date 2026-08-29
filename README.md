@@ -47,6 +47,10 @@ mix, and follow-up research questions for a market theme.
 - Analysis helpers for baseline-aware z-score scoring.
 - Ten versioned, curated narrative definitions with strict inclusion/exclusion guidance.
 - Corpus-normalized narrative observations and 7-day/30-day historical trend series.
+- Candidate narrative discovery for propositions outside the curated watchlist,
+  with exact-quote evidence, independent-publisher breadth gates, merge/reject
+  review, and promotion into versioned tracked narratives.
+- Per-source ingest, extraction, classification, discovery, and review telemetry.
 - Interactive Narrative Currents board, timeline drilldowns, and live storyboards.
 - Claude signal extraction for bounded SEC/FMP smoke runs.
 - Analysis inspection page for recent signals, evidence snippets, interpretations,
@@ -471,6 +475,7 @@ npm run claude:extract:backfill
 npm run themes:normalize
 npm run themes:normalize:backfill
 npm run narratives:classify
+npm run narratives:discover
 npm run narrative-trends:recompute
 npm run pipeline
 npm run brief:daily --workspace @market-themes/workers
@@ -542,6 +547,16 @@ short list of top 7-day overall market themes with breadth across at least two
 entities or two independent documents, nests sector sub-themes under their
 parent market theme, collapses supporting evidence, and moves company-specific
 or one-off themes into an emerging lane.
+
+Narrative classification drains readable documents fairly across source classes
+until the backlog is empty or the configured runtime limit is reached. Candidate
+discovery then looks for directional propositions not covered by active
+definitions. Open `/narrative-candidates` to review the resulting clusters. A
+candidate cannot be promoted until at least two documents from two independent
+publisher-owner groups support it. Promotion creates a versioned narrative
+definition and approved seed observations; the next narrative-trend recompute
+publishes its measured history. `/ingestion` shows the remaining classification
+and discovery backlog by source.
 
 ## Database Setup
 
@@ -703,6 +718,8 @@ clustering behavior.
   live storyboard routes use curated narrative observations and trends.
 - Narrative history is only meaningful after a representative historical
   document backfill and classification run.
+- Candidate clustering reuses stable model-generated cluster keys and provides a
+  manual merge action; semantically equivalent candidates can still require review.
 - GDELT is discovery metadata only and is excluded from full-text classification.
 - Public newspaper RSS presets store headlines and ledes, not paywalled full text.
 - Premium financial-news feeds require a separate license and credentials.

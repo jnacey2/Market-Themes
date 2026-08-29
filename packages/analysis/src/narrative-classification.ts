@@ -29,6 +29,7 @@ export async function classifyDocumentNarratives(
     model?: string;
     promptVersion?: string;
     maxDocumentChars?: number;
+    signal?: AbortSignal;
   } = {}
 ): Promise<NarrativeObservationInput[]> {
   const model = options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
@@ -38,11 +39,12 @@ export async function classifyDocumentNarratives(
     narrativeClassificationPromptVersion;
   const client = new Anthropic({ apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY });
   const sourceText = document.text.slice(0, options.maxDocumentChars ?? 120_000);
-  const message = await client.messages.create({
-    model,
-    max_tokens: 8_000,
-    temperature: 0,
-    system: `Classify a source document against stable market-narrative propositions.
+  const message = await client.messages.create(
+    {
+      model,
+      max_tokens: 8_000,
+      temperature: 0,
+      system: `Classify a source document against stable market-narrative propositions.
 Return only JSON with an "observations" array containing exactly one item per definition.
 Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.
 Set matched=true only when the exact quoted evidence directly entails the proposition.
@@ -60,45 +62,47 @@ For matched=false use matchScore 0-69 and empty evidenceSnippet.
 For matched=true use matchScore 70-100 and copy evidenceSnippet exactly from the source.
 When uncertain, return matched=false. Do not make trade recommendations.
 Stance is risk, bullish, mixed, or neutral.`,
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify({
-          document: {
-            id: document.id,
-            title: document.title,
-            publisher: document.publisher,
-            publishedAt: document.publishedAt,
-            text: sourceText
-          },
-          definitions: definitions.map((definition) => ({
-            id: definition.id,
-            name: definition.name,
-            proposition: definition.proposition,
-            inclusionGuidance: definition.inclusionGuidance,
-            exclusionGuidance: definition.exclusionGuidance,
-            positiveExamples: definition.positiveExamples,
-            negativeExamples: definition.negativeExamples
-          })),
-          outputShape: {
-            observations: [
-              {
-                narrativeDefinitionId: "string",
-                matched: true,
-                matchScore: 0,
-                stance: "risk | bullish | mixed | neutral",
-                riskTone: 0,
-                bullishTone: 0,
-                evidenceSnippet: "exact source quote or empty",
-                interpretation: "short sourced interpretation",
-                affectedEntities: ["string"]
-              }
-            ]
-          }
-        })
-      }
-    ]
-  });
+      messages: [
+        {
+          role: "user",
+          content: JSON.stringify({
+            document: {
+              id: document.id,
+              title: document.title,
+              publisher: document.publisher,
+              publishedAt: document.publishedAt,
+              text: sourceText
+            },
+            definitions: definitions.map((definition) => ({
+              id: definition.id,
+              name: definition.name,
+              proposition: definition.proposition,
+              inclusionGuidance: definition.inclusionGuidance,
+              exclusionGuidance: definition.exclusionGuidance,
+              positiveExamples: definition.positiveExamples,
+              negativeExamples: definition.negativeExamples
+            })),
+            outputShape: {
+              observations: [
+                {
+                  narrativeDefinitionId: "string",
+                  matched: true,
+                  matchScore: 0,
+                  stance: "risk | bullish | mixed | neutral",
+                  riskTone: 0,
+                  bullishTone: 0,
+                  evidenceSnippet: "exact source quote or empty",
+                  interpretation: "short sourced interpretation",
+                  affectedEntities: ["string"]
+                }
+              ]
+            }
+          })
+        }
+      ]
+    },
+    options.signal ? { signal: options.signal } : undefined
+  );
   const response = message.content
     .filter((block) => block.type === "text")
     .map((block) => block.text)

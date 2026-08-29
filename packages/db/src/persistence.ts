@@ -2572,9 +2572,9 @@ async function loadLatestMarketTrendRows(
       and coalesce(tt.source_mix->>'trendLevel', 'market') = 'market'
      order by
       tt.z_score desc,
+      tt.intensity desc,
       coalesce((tt.source_mix->>'evidenceCount')::numeric, 0) desc,
-      coalesce((tt.source_mix->>'entityBreadth')::numeric, 0) desc,
-      tt.intensity desc
+      coalesce((tt.source_mix->>'entityBreadth')::numeric, 0) desc
      limit $3`,
     [latestTrendDate, trendWindow, limit]
   );

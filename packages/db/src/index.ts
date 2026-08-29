@@ -1,4 +1,5 @@
 export * from "./mock-data";
+export * from "./narrative-candidates";
 export * from "./narrative-metrics";
 export * from "./narratives";
 export * from "./operations";
