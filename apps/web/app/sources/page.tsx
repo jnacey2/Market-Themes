@@ -34,6 +34,7 @@ export default async function SourcesPage() {
         <Link className="brand" href="/">Market Themes</Link>
         <div className="nav-links">
           <Link href="/trends">Narrative Currents</Link>
+          <Link href="/narrative-candidates">Candidates</Link>
           <Link href="/narrative-review">Evidence Review</Link>
           <Link href="/ingestion">Operations</Link>
         </div>

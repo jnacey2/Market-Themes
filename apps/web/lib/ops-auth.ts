@@ -24,6 +24,25 @@ export function isAuthorized(
   }
 }
 
+export function isSafeMutationRequest(request: Request) {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("application/json")) {
+    return false;
+  }
+  if (request.headers.get("sec-fetch-site") === "cross-site") {
+    return false;
+  }
+  const origin = request.headers.get("origin");
+  if (!origin) {
+    return true;
+  }
+  try {
+    return new URL(origin).origin === new URL(request.url).origin;
+  } catch {
+    return false;
+  }
+}
+
 function constantTimeEqual(left: string, right: string) {
   const encoder = new TextEncoder();
   const leftBytes = encoder.encode(left);

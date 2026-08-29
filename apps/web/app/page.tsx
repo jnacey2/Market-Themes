@@ -54,6 +54,7 @@ export default async function HomePage() {
           <Link href="/ingestion">Ingestion</Link>
           <Link href="/analysis">Analysis</Link>
           <Link href="/trends">Trends</Link>
+          <Link href="/narrative-candidates">Candidates</Link>
           <Link href="/theme-mappings">Theme Mappings</Link>
         </div>
       </nav>

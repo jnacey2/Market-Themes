@@ -3,8 +3,15 @@ import {
   reviewNarrativeObservation,
   type NarrativeReviewStatus
 } from "@market-themes/db";
+import { isSafeMutationRequest } from "../../../../lib/ops-auth";
 
 export async function POST(request: Request) {
+  if (!isSafeMutationRequest(request)) {
+    return NextResponse.json(
+      { error: "Cross-origin or non-JSON mutation rejected." },
+      { status: 403 }
+    );
+  }
   try {
     const body = (await request.json()) as {
       id?: unknown;

@@ -6,8 +6,10 @@ const PROTECTED_PATHS = [
   "/ingestion",
   "/theme-mappings",
   "/narrative-review",
+  "/narrative-candidates",
   "/sources",
   "/api/backfill",
+  "/api/narrative-candidates",
   "/api/narrative-observations",
   "/api/publication-feeds"
 ];
@@ -44,7 +46,9 @@ export const config = {
     "/ingestion/:path*",
     "/theme-mappings/:path*",
     "/narrative-review/:path*",
+    "/narrative-candidates/:path*",
     "/sources/:path*",
+    "/api/narrative-candidates/:path*",
     "/api/narrative-observations/:path*",
     "/api/publication-feeds/:path*",
     "/api/backfill/:path*"

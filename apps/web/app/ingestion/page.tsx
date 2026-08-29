@@ -19,6 +19,7 @@ export default async function IngestionPage() {
           <Link href="/">Dashboard</Link>
           <Link href="/analysis">Analysis</Link>
           <Link href="/trends">Trends</Link>
+          <Link href="/narrative-candidates">Candidates</Link>
           <Link href="/sources">Sources</Link>
           <Link href="/theme-mappings">Theme Mappings</Link>
         </div>
@@ -89,8 +90,67 @@ export default async function IngestionPage() {
           <OperationalMetric label="Analyzed" value={`${operations.analyzedDocuments}/${operations.totalDocuments}`} />
           <OperationalMetric label="Extraction backlog" value={String(operations.extractionBacklog)} />
           <OperationalMetric label="Normalization backlog" value={String(operations.normalizationBacklog)} />
+          <OperationalMetric label="Classification backlog" value={String(operations.narrativeClassificationBacklog)} />
+          <OperationalMetric label="Discovery backlog" value={String(operations.narrativeDiscoveryBacklog)} />
+          <OperationalMetric label="Evidence awaiting review" value={String(operations.narrativeReviewPendingCount)} />
+          <OperationalMetric label="Candidate narratives" value={`${operations.narrativeCandidateQualifiedCount}/${operations.narrativeCandidatePendingCount} ready`} />
           <OperationalMetric label="Latest trend" value={formatDate(operations.latestNarrativeTrendDate ?? operations.latestTrendDate)} />
         </div>
+      </section>
+
+      <section className="section">
+        <p className="eyebrow">Source Pipeline Telemetry</p>
+        {operations.sourceTelemetry.length === 0 ? (
+          <div className="panel">
+            <p>No source telemetry has been recorded yet.</p>
+          </div>
+        ) : (
+          <div className="currents-board source-telemetry-board">
+            <div className="currents-header" aria-hidden="true">
+              <span>Source</span>
+              <span>Ingested</span>
+              <span>Extract</span>
+              <span>Classify</span>
+              <span>Discover</span>
+              <span>Matches</span>
+            </div>
+            {operations.sourceTelemetry.map((source) => (
+              <div className="current-row" key={source.sourceId}>
+                <div className="current-name">
+                  <span className="label">
+                    {source.sourceClass?.replaceAll("_", " ") ?? "registered source"}
+                  </span>
+                  <strong>{source.label}</strong>
+                  <small>
+                    {source.lastIngestError
+                      ? `Error: ${source.lastIngestError}`
+                      : `Last success ${formatDate(source.lastIngestSuccessAt)}`}
+                  </small>
+                </div>
+                <TelemetryMetric
+                  primary={String(source.documentCount)}
+                  secondary={`latest ${formatDate(source.latestDocumentAt)}`}
+                />
+                <TelemetryMetric
+                  primary={String(source.extractionBacklog)}
+                  secondary={`${source.analyzedDocuments} complete`}
+                />
+                <TelemetryMetric
+                  primary={String(source.narrativeClassificationBacklog)}
+                  secondary="documents waiting"
+                />
+                <TelemetryMetric
+                  primary={String(source.narrativeDiscoveryBacklog)}
+                  secondary="documents waiting"
+                />
+                <TelemetryMetric
+                  primary={String(source.matchedPending)}
+                  secondary={`${source.matchedApproved} approved · ${source.matchedRejected} rejected`}
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="section grid two">
@@ -161,6 +221,21 @@ function OperationalMetric({ label, value }: { label: string; value: string }) {
     <div className="panel">
       <span className="label">{label}</span>
       <h2>{value}</h2>
+    </div>
+  );
+}
+
+function TelemetryMetric({
+  primary,
+  secondary
+}: {
+  primary: string;
+  secondary: string;
+}) {
+  return (
+    <div className="current-level">
+      <strong>{primary}</strong>
+      <span>{secondary}</span>
     </div>
   );
 }
