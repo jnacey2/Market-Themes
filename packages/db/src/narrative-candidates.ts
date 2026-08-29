@@ -110,8 +110,17 @@ export async function selectDocumentsForNarrativeDiscovery(
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
            and length(btrim(dt.content)) > 0
            and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
-           and coalesce(ar.status, '') not in ('completed', 'running')
-           and coalesce(ar.attempt_count, 0) < $6
+           and (
+             ar.id is null
+             or (
+               ar.metadata ? 'textHash'
+               and ar.metadata->>'textHash' is distinct from dt.content_hash
+             )
+             or (
+               coalesce(ar.status, '') not in ('completed', 'running')
+               and coalesce(ar.attempt_count, 0) < $6
+             )
+           )
            and not (d.id = any($7::text[]))
        )
        select id, source_id, source_class, title, publisher, url,
@@ -191,8 +200,17 @@ export async function claimDocumentsForNarrativeDiscovery(
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
            and length(btrim(dt.content)) > 0
            and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
-           and coalesce(ar.status, '') not in ('completed', 'running')
-           and coalesce(ar.attempt_count, 0) < $6
+           and (
+             ar.id is null
+             or (
+               ar.metadata ? 'textHash'
+               and ar.metadata->>'textHash' is distinct from dt.content_hash
+             )
+             or (
+               coalesce(ar.status, '') not in ('completed', 'running')
+               and coalesce(ar.attempt_count, 0) < $6
+             )
+           )
            and not (d.id = any($7::text[]))
        )
        select id, source_id, source_class, title, publisher, url,
@@ -218,8 +236,12 @@ export async function claimDocumentsForNarrativeDiscovery(
         [row.id]
       );
       if ((lock.rowCount ?? 0) === 0) continue;
-      const current = await client.query<{ status: string; attempt_count: number }>(
-        `select status, attempt_count
+      const current = await client.query<{
+        status: string;
+        attempt_count: number;
+        text_hash: string | null;
+      }>(
+        `select status, attempt_count, metadata->>'textHash' as text_hash
          from document_analysis_runs
          where document_id = $1
            and analysis_type = $2
@@ -228,9 +250,18 @@ export async function claimDocumentsForNarrativeDiscovery(
          for update`,
         [row.id, options.analysisType, options.model, options.promptVersion]
       );
+      const sameContent =
+        Boolean(current.rows[0]) &&
+        (
+          !current.rows[0].text_hash ||
+          current.rows[0].text_hash === row.text_hash
+        );
       if (
-        ["completed", "running"].includes(current.rows[0]?.status ?? "") ||
-        Number(current.rows[0]?.attempt_count ?? 0) >= (options.maxAttempts ?? 5)
+        sameContent &&
+        (
+          ["completed", "running"].includes(current.rows[0]?.status ?? "") ||
+          Number(current.rows[0]?.attempt_count ?? 0) >= (options.maxAttempts ?? 5)
+        )
       ) {
         continue;
       }
@@ -253,7 +284,12 @@ export async function claimDocumentsForNarrativeDiscovery(
          on conflict (document_id, analysis_type, model, prompt_version)
          do update set
            status = 'running',
-           attempt_count = document_analysis_runs.attempt_count + 1,
+           attempt_count = case
+             when document_analysis_runs.metadata->>'textHash'
+                    is distinct from excluded.metadata->>'textHash'
+               then 1
+             else document_analysis_runs.attempt_count + 1
+           end,
            error_message = null,
            started_at = now(),
            completed_at = null,
@@ -320,8 +356,17 @@ export async function countNarrativeDiscoveryBacklog(
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
          and length(btrim(dt.content)) > 0
          and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
-         and coalesce(ar.status, '') not in ('completed', 'running')
-         and coalesce(ar.attempt_count, 0) < $5
+         and (
+           ar.id is null
+           or (
+             ar.metadata ? 'textHash'
+             and ar.metadata->>'textHash' is distinct from dt.content_hash
+           )
+           or (
+             coalesce(ar.status, '') not in ('completed', 'running')
+             and coalesce(ar.attempt_count, 0) < $5
+           )
+         )
        group by d.source_class
        order by d.source_class`,
       [
@@ -388,10 +433,15 @@ export async function completeNarrativeDiscoveryRun(
       status: string;
       attempt_token: string | null;
       document_id: string;
+      text_hash: string | null;
+      current_text_hash: string;
     }>(
-      `select status, metadata->>'attemptToken' as attempt_token, document_id
-       from document_analysis_runs
-       where id = $1
+      `select ar.status, ar.metadata->>'attemptToken' as attempt_token,
+              ar.document_id, ar.metadata->>'textHash' as text_hash,
+              dt.content_hash as current_text_hash
+       from document_analysis_runs ar
+       join document_texts dt on dt.document_id = ar.document_id
+       where ar.id = $1
        for update`,
       [runId]
     );
@@ -414,6 +464,12 @@ export async function completeNarrativeDiscoveryRun(
       run.rows[0].attempt_token !== options.attemptToken
     ) {
       throw new Error("Narrative discovery attempt was superseded.");
+    }
+    if (
+      run.rows[0].text_hash &&
+      run.rows[0].text_hash !== run.rows[0].current_text_hash
+    ) {
+      throw new Error("Document text changed during narrative discovery.");
     }
 
     let insertedEvidence = 0;
@@ -457,17 +513,29 @@ export async function completeNarrativeDiscoveryRun(
       let candidateId =
         persisted.rows[0].merged_into_candidate_id ?? persisted.rows[0].id;
       let candidateStatus = persisted.rows[0].status;
-      if (persisted.rows[0].merged_into_candidate_id) {
+      let mergedIntoCandidateId = persisted.rows[0].merged_into_candidate_id;
+      for (
+        let mergeDepth = 0;
+        candidateStatus === "merged" && mergedIntoCandidateId && mergeDepth < 20;
+        mergeDepth += 1
+      ) {
         const mergeTarget = await client.query<{
           id: string;
           status: NarrativeCandidateStatus;
+          merged_into_candidate_id: string | null;
         }>(
-          `select id, status from narrative_candidates where id = $1`,
+          `select id, status, merged_into_candidate_id
+           from narrative_candidates
+           where id = $1`,
           [candidateId]
         );
-        if (!mergeTarget.rows[0]) continue;
+        if (!mergeTarget.rows[0]) break;
         candidateId = mergeTarget.rows[0].id;
         candidateStatus = mergeTarget.rows[0].status;
+        mergedIntoCandidateId = mergeTarget.rows[0].merged_into_candidate_id;
+        if (candidateStatus === "merged" && mergedIntoCandidateId) {
+          candidateId = mergedIntoCandidateId;
+        }
       }
       if (candidateStatus !== "pending") continue;
       touchedCandidateIds.add(candidateId);
@@ -618,19 +686,45 @@ export async function getNarrativeCandidateQueue(
       ]
     );
     const candidateResult = await client.query<CandidateRow>(
-      `select id, cluster_key, name, proposition, category,
-              inclusion_guidance, exclusion_guidance, status,
-              merged_into_candidate_id, promoted_definition_id,
-              model, prompt_version, review_note, reviewed_at::text,
-              created_at::text, updated_at::text
-       from narrative_candidates
-       where prompt_version = $1
-         and status in ('pending', 'approved')
+      `with recent_breadth as (
+         select ce.candidate_id,
+                count(distinct ce.document_id) as document_breadth,
+                count(distinct coalesce(
+                  nullif(d.publisher_owner, ''),
+                  nullif(d.publisher_id, ''),
+                  d.publisher
+                )) as publisher_owner_breadth
+         from narrative_candidate_evidence ce
+         join documents d on d.id = ce.document_id
+         where d.published_at >= now() - ($2::text || ' days')::interval
+         group by ce.candidate_id
+       )
+       select nc.id, nc.cluster_key, nc.name, nc.proposition, nc.category,
+              nc.inclusion_guidance, nc.exclusion_guidance, nc.status,
+              nc.merged_into_candidate_id, nc.promoted_definition_id,
+              nc.model, nc.prompt_version, nc.review_note, nc.reviewed_at::text,
+              nc.created_at::text, nc.updated_at::text
+       from narrative_candidates nc
+       left join recent_breadth rb on rb.candidate_id = nc.id
+       where nc.prompt_version = $1
+         and nc.status in ('pending', 'approved')
        order by
-         case status when 'pending' then 0 else 1 end,
-         coalesce(reviewed_at, updated_at) desc
-       limit $2`,
-      [promptVersion, options.limit ?? 250]
+         case nc.status when 'pending' then 0 else 1 end,
+         case
+           when coalesce(rb.document_breadth, 0) >= $3
+            and coalesce(rb.publisher_owner_breadth, 0) >= $4
+             then 0
+           else 1
+         end,
+         coalesce(nc.reviewed_at, nc.updated_at) desc
+       limit $5`,
+      [
+        promptVersion,
+        evidenceWindowDays,
+        minimumDocuments,
+        minimumPublisherOwners,
+        options.limit ?? 250
+      ]
     );
     const candidateIds = candidateResult.rows.map((row) => row.id);
     const evidenceResult = candidateIds.length === 0
@@ -765,6 +859,13 @@ export async function mergeNarrativeCandidate(
       `update narrative_candidate_evidence
        set candidate_id = $2
        where candidate_id = $1`,
+      [input.id, input.targetId]
+    );
+    await client.query(
+      `update narrative_candidates
+       set merged_into_candidate_id = $2,
+           updated_at = now()
+       where merged_into_candidate_id = $1`,
       [input.id, input.targetId]
     );
     await client.query(

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   claimDocumentsForNarrativeDiscovery,
@@ -176,15 +176,18 @@ test(
 );
 
 test(
-  "merges duplicate candidates and preserves independent evidence",
+  "flattens candidate merge chains and redirects future evidence",
   { skip: !process.env.DATABASE_URL },
   async (context) => {
     const suffix = randomUUID();
     context.after(() => cleanupCandidateFixtures(suffix));
     const targetId = `narrative:candidate:target:${suffix}`;
     const sourceId = `narrative:candidate:source:${suffix}`;
+    const finalId = `narrative:candidate:final:${suffix}`;
     const targetDocumentId = `candidate:merge:target:${suffix}`;
     const sourceDocumentId = `candidate:merge:source:${suffix}`;
+    const finalDocumentId = `candidate:merge:final:${suffix}`;
+    const followupDocumentId = `candidate:merge:followup:${suffix}`;
     await persistFixtureDocument({
       id: targetDocumentId,
       suffix,
@@ -202,6 +205,15 @@ test(
       publisher: "Merge Publisher B",
       publisherOwner: `merge-owner-b:${suffix}`,
       quote: "Technology leaders are reducing the number of software vendors they manage."
+    });
+    await persistFixtureDocument({
+      id: finalDocumentId,
+      suffix,
+      sourceId: `candidate-merge-c:${suffix}`,
+      sourceClass: "press_release",
+      publisher: "Merge Publisher C",
+      publisherOwner: `merge-owner-c:${suffix}`,
+      quote: "Procurement teams are retiring redundant applications in favor of strategic platforms."
     });
     await completeNarrativeDiscoveryRun(
       await startDiscoveryRun(targetDocumentId),
@@ -225,16 +237,48 @@ test(
         })
       ]
     );
+    await completeNarrativeDiscoveryRun(
+      await startDiscoveryRun(finalDocumentId),
+      [
+        candidateFixture({
+          candidateId: finalId,
+          clusterKey: `strategic-platform-consolidation-${suffix}`,
+          documentId: finalDocumentId,
+          quote: "Procurement teams are retiring redundant applications in favor of strategic platforms."
+        })
+      ]
+    );
 
     await mergeNarrativeCandidate({ id: sourceId, targetId });
+    await mergeNarrativeCandidate({ id: targetId, targetId: finalId });
+    await persistFixtureDocument({
+      id: followupDocumentId,
+      suffix,
+      sourceId: `candidate-merge-d:${suffix}`,
+      sourceClass: "government",
+      publisher: "Merge Publisher D",
+      publisherOwner: `merge-owner-d:${suffix}`,
+      quote: "Organizations reported moving overlapping technology contracts to fewer providers."
+    });
+    await completeNarrativeDiscoveryRun(
+      await startDiscoveryRun(followupDocumentId),
+      [
+        candidateFixture({
+          candidateId: sourceId,
+          clusterKey: `software-vendor-rationalization-${suffix}`,
+          documentId: followupDocumentId,
+          quote: "Organizations reported moving overlapping technology contracts to fewer providers."
+        })
+      ]
+    );
     const queue = await getNarrativeCandidateQueue(
       process.env.DATABASE_URL,
       discoveryPromptVersion
     );
-    const target = queue.candidates.find((candidate) => candidate.id === targetId);
-    assert.equal(target?.documentBreadth, 2);
+    const target = queue.candidates.find((candidate) => candidate.id === finalId);
+    assert.equal(target?.documentBreadth, 4);
     assert.equal(target?.qualified, true);
-    assert.equal(queue.mergedCount >= 1, true);
+    assert.equal(queue.mergedCount >= 2, true);
   }
 );
 
@@ -300,12 +344,85 @@ test(
   }
 );
 
+test(
+  "reclaims a completed discovery document when full text changes",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const suffix = randomUUID();
+    context.after(() => cleanupCandidateFixtures(suffix));
+    const documentId = `candidate:changed-text:${suffix}`;
+    await persistFixtureDocument({
+      id: documentId,
+      suffix,
+      sourceId: `changed-text:${suffix}`,
+      sourceClass: "manual",
+      publisher: "Changed Text Publisher",
+      publisherOwner: `changed-text-owner:${suffix}`,
+      quote: "The initial preview did not include the full market argument."
+    });
+    const promptVersion = `integration-changed-text-${suffix}`;
+    const claimOptions = {
+      analysisType: narrativeCandidateAnalysisType,
+      model,
+      promptVersion,
+      limit: 25,
+      lookbackDays: 30,
+      maxAttempts: 3
+    };
+    const initialClaims = await claimDocumentsForNarrativeDiscovery(claimOptions);
+    const initial = initialClaims.find((document) => document.id === documentId);
+    assert(initial);
+    await completeClaims(initialClaims);
+
+    const updatedText =
+      "The full article reports that enterprises are consolidating software vendors.";
+    const client = createDatabaseClient();
+    await client.connect();
+    try {
+      await client.query(
+        `update document_texts
+         set content = $2, content_hash = $3, updated_at = now()
+         where document_id = $1`,
+        [
+          documentId,
+          updatedText,
+          createHash("sha256").update(updatedText).digest("hex")
+        ]
+      );
+    } finally {
+      await client.end();
+    }
+
+    const refreshedClaims = await claimDocumentsForNarrativeDiscovery(claimOptions);
+    const refreshed = refreshedClaims.find((document) => document.id === documentId);
+    assert(refreshed);
+    assert.notEqual(refreshed.attemptToken, initial.attemptToken);
+    assert.equal(refreshed.text, updatedText);
+    await completeClaims(refreshedClaims);
+  }
+);
+
 async function startDiscoveryRun(documentId: string) {
   return startDocumentAnalysisRun(documentId, {
     analysisType: narrativeCandidateAnalysisType,
     model,
     promptVersion: discoveryPromptVersion
   });
+}
+
+async function completeClaims(
+  documents: Array<{
+    analysisRunId: string;
+    attemptToken: string;
+  }>
+) {
+  await Promise.all(
+    documents.map((document) =>
+      completeNarrativeDiscoveryRun(document.analysisRunId, [], {
+        attemptToken: document.attemptToken
+      })
+    )
+  );
 }
 
 function candidateFixture({

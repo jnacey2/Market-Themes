@@ -373,8 +373,17 @@ export async function getOperationsStatus(
          select d.source_id,
                 count(distinct d.id) filter (
                   where d.published_at >= now() - ($5::text || ' days')::interval
-                    and coalesce(ar.status, '') not in ('completed', 'running')
-                    and coalesce(ar.attempt_count, 0) < $6
+                    and (
+                      ar.id is null
+                      or (
+                        ar.metadata ? 'textHash'
+                        and ar.metadata->>'textHash' is distinct from dt.content_hash
+                      )
+                      or (
+                        coalesce(ar.status, '') not in ('completed', 'running')
+                        and coalesce(ar.attempt_count, 0) < $6
+                      )
+                    )
                 ) as discovery_backlog
          from documents d
          join document_texts dt on dt.document_id = d.id
@@ -384,6 +393,7 @@ export async function getOperationsStatus(
           and ar.model = $1
           and ar.prompt_version = $4
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+           and length(btrim(dt.content)) > 0
          group by d.source_id
        ),
        match_stats as (

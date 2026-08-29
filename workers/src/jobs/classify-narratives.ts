@@ -3,7 +3,9 @@ import {
   narrativeClassificationPromptVersion
 } from "@market-themes/analysis";
 import {
+  closeDatabaseClient,
   countNarrativeClassificationBacklog,
+  createDatabaseClient,
   getActiveNarrativeDefinitions,
   persistNarrativeObservations,
   selectDocumentsForNarrativeClassification,
@@ -12,18 +14,64 @@ import {
 } from "@market-themes/db";
 import { pathToFileURL } from "node:url";
 
-export async function classifyNarrativeBatches(options: {
+type ClassificationOptions = {
   batchSize?: number;
   maxDocuments?: number;
   maxBatches?: number;
   maxRuntimeMs?: number;
   concurrency?: number;
   documentTimeoutMs?: number;
-} = {}) {
+};
+
+export async function classifyNarrativeBatches(
+  options: ClassificationOptions = {}
+) {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY is required for narrative classification.");
   }
+  const lockClient = createDatabaseClient();
+  await lockClient.connect();
+  try {
+    const lock = await lockClient.query<{ acquired: boolean }>(
+      `select pg_try_advisory_lock(
+         hashtext('market_themes_narrative_classification')
+       ) as acquired`
+    );
+    if (!lock.rows[0]?.acquired) {
+      const model =
+        process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+      const promptVersion =
+        process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+        narrativeClassificationPromptVersion;
+      const backlog = await countNarrativeClassificationBacklog({
+        model,
+        promptVersion
+      });
+      return {
+        documentsSelected: 0,
+        documentsProcessed: 0,
+        observationsStored: 0,
+        matchedObservations: 0,
+        failedDocuments: 0,
+        remainingBacklog: backlog.total,
+        backlogBySourceClass: backlog.bySourceClass,
+        stopReason: "already_running" as const
+      };
+    }
+    return await runClassification(options);
+  } finally {
+    await lockClient
+      .query(
+        `select pg_advisory_unlock(
+           hashtext('market_themes_narrative_classification')
+         )`
+      )
+      .catch(() => undefined);
+    await closeDatabaseClient(lockClient);
+  }
+}
 
+async function runClassification(options: ClassificationOptions) {
   const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
   const promptVersion =
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
@@ -43,7 +91,6 @@ export async function classifyNarrativeBatches(options: {
   const documentTimeoutMs =
     options.documentTimeoutMs ??
     Number(process.env.NARRATIVE_CLASSIFICATION_DOCUMENT_TIMEOUT_MS ?? 600_000);
-  const definitions = await getActiveNarrativeDefinitions();
   let documentsProcessed = 0;
   let observationsStored = 0;
   let matchedObservations = 0;
@@ -55,9 +102,9 @@ export async function classifyNarrativeBatches(options: {
     | "backlog_empty"
     | "document_budget_reached"
     | "runtime_reached"
-    | "failed_documents_exhausted" = "backlog_empty";
+    | "failed_documents_exhausted";
 
-  while (definitions.length > 0) {
+  while (true) {
     if (Date.now() - startedAt >= maxRuntimeMs) {
       stopReason = "runtime_reached";
       break;
@@ -72,6 +119,11 @@ export async function classifyNarrativeBatches(options: {
           );
     if (remainingBudget <= 0) {
       stopReason = "document_budget_reached";
+      break;
+    }
+    const definitions = await getActiveNarrativeDefinitions();
+    if (definitions.length === 0) {
+      stopReason = "backlog_empty";
       break;
     }
     const documents = await selectDocumentsForNarrativeClassification({
