@@ -37,7 +37,21 @@ export function isSafeMutationRequest(request: Request) {
     return true;
   }
   try {
-    return new URL(origin).origin === new URL(request.url).origin;
+    const requestUrl = new URL(request.url);
+    const expectedOrigins = new Set([requestUrl.origin]);
+    const forwardedHost =
+      request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+      request.headers.get("host");
+    const forwardedProtocol =
+      request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
+      requestUrl.protocol.replace(":", "");
+    if (
+      forwardedHost &&
+      (forwardedProtocol === "http" || forwardedProtocol === "https")
+    ) {
+      expectedOrigins.add(`${forwardedProtocol}://${forwardedHost}`);
+    }
+    return expectedOrigins.has(new URL(origin).origin);
   } catch {
     return false;
   }

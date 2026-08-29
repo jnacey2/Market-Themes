@@ -56,7 +56,7 @@ export async function discoverNarrativeBatches(
     | "backlog_empty"
     | "document_budget_reached"
     | "runtime_reached"
-    | "failed_documents_exhausted" = "backlog_empty";
+    | "failed_documents_exhausted";
 
   while (true) {
     if (Date.now() - startedAt >= options.maxRuntimeMs) {

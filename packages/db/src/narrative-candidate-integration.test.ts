@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
+  claimDocumentsForNarrativeDiscovery,
   completeNarrativeDiscoveryRun,
   createDatabaseClient,
   getNarrativeBoardStatus,
@@ -237,6 +238,68 @@ test(
   }
 );
 
+test(
+  "claims discovery work fairly across source classes without duplicate work",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const suffix = randomUUID();
+    context.after(() => cleanupCandidateFixtures(suffix));
+    await Promise.all([
+      persistFixtureDocument({
+        id: `candidate:claim:news:${suffix}`,
+        suffix,
+        sourceId: `claim-news:${suffix}`,
+        sourceClass: "newspaper",
+        publisher: "Claim News",
+        publisherOwner: `claim-news-owner:${suffix}`,
+        quote: "Enterprise buyers are consolidating overlapping software subscriptions."
+      }),
+      persistFixtureDocument({
+        id: `candidate:claim:transcript:${suffix}`,
+        suffix,
+        sourceId: `claim-transcript:${suffix}`,
+        sourceClass: "transcript",
+        publisher: "Claim Transcript",
+        publisherOwner: `claim-transcript-owner:${suffix}`,
+        quote: "Management expects customers to standardize on fewer software platforms."
+      })
+    ]);
+    const promptVersion = `integration-claim-${suffix}`;
+    const claimed = await claimDocumentsForNarrativeDiscovery({
+      analysisType: narrativeCandidateAnalysisType,
+      model,
+      promptVersion,
+      limit: 2,
+      lookbackDays: 30,
+      maxAttempts: 3
+    });
+    assert.equal(claimed.length, 2);
+    assert.equal(new Set(claimed.map((document) => document.sourceClass)).size, 2);
+
+    const duplicateClaim = await claimDocumentsForNarrativeDiscovery({
+      analysisType: narrativeCandidateAnalysisType,
+      model,
+      promptVersion,
+      limit: 2,
+      lookbackDays: 30,
+      maxAttempts: 3
+    });
+    assert.equal(
+      duplicateClaim.some((document) =>
+        claimed.some((prior) => prior.id === document.id)
+      ),
+      false
+    );
+    await Promise.all(
+      [...claimed, ...duplicateClaim].map((document) =>
+        completeNarrativeDiscoveryRun(document.analysisRunId, [], {
+          attemptToken: document.attemptToken
+        })
+      )
+    );
+  }
+);
+
 async function startDiscoveryRun(documentId: string) {
   return startDocumentAnalysisRun(documentId, {
     analysisType: narrativeCandidateAnalysisType,
@@ -354,6 +417,10 @@ async function cleanupCandidateFixtures(suffix: string) {
         [definitionIds]
       );
     }
+    await client.query(
+      `delete from document_analysis_runs where prompt_version like $1`,
+      [`%${suffix}%`]
+    );
     await client.query(`delete from documents where id like $1`, [`%${suffix}`]);
     await client.query(`delete from sources where id like $1`, [`%${suffix}`]);
     await client.query("commit");

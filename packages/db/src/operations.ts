@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { closeDatabaseClient, createDatabaseClient } from "./persistence";
 import {
+  DEFAULT_CANDIDATE_EVIDENCE_WINDOW_DAYS,
   DEFAULT_CANDIDATE_MIN_DOCUMENTS,
   DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS
 } from "./narrative-candidates";
@@ -188,6 +189,7 @@ export async function getOperationsStatus(
     discoveryLookbackDays?: number;
     discoveryMaxAttempts?: number;
     analysisMaxAttempts?: number;
+    candidateEvidenceWindowDays?: number;
   } = {}
 ): Promise<OperationsStatus> {
   if (!databaseUrl) {
@@ -221,6 +223,12 @@ export async function getOperationsStatus(
     const analysisMaxAttempts =
       overrides.analysisMaxAttempts ??
       Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5);
+    const candidateEvidenceWindowDays =
+      overrides.candidateEvidenceWindowDays ??
+      Number(
+        process.env.NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS ??
+          DEFAULT_CANDIDATE_EVIDENCE_WINDOW_DAYS
+      );
     const counts = await client.query<{
         latest_document_at: string | null;
         total_documents: string;
@@ -263,6 +271,7 @@ export async function getOperationsStatus(
                join documents d on d.id = ce.document_id
                where nc.status = 'pending'
                  and nc.prompt_version = $4
+                 and d.published_at >= now() - ($7::text || ' days')::interval
                group by nc.id
                having count(distinct ce.document_id) >= $5
                   and count(distinct coalesce(
@@ -281,7 +290,8 @@ export async function getOperationsStatus(
           classificationPromptVersion,
           discoveryPromptVersion,
           DEFAULT_CANDIDATE_MIN_DOCUMENTS,
-          DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS
+          DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS,
+          candidateEvidenceWindowDays
         ]
       );
     const sourceTelemetryRows = await client.query<{

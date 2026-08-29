@@ -15,6 +15,7 @@ import type {
 
 export const DEFAULT_CANDIDATE_MIN_DOCUMENTS = 2;
 export const DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS = 2;
+export const DEFAULT_CANDIDATE_EVIDENCE_WINDOW_DAYS = 30;
 
 type DiscoverySelectionOptions = {
   analysisType: string;
@@ -566,6 +567,7 @@ export async function getNarrativeCandidateQueue(
     limit?: number;
     minimumDocuments?: number;
     minimumPublisherOwners?: number;
+    evidenceWindowDays?: number;
   } = {}
 ): Promise<NarrativeCandidateQueue> {
   const promptVersion = configuredPromptVersion ?? "narrative_discovery_v1";
@@ -585,6 +587,12 @@ export async function getNarrativeCandidateQueue(
       options.minimumDocuments ?? DEFAULT_CANDIDATE_MIN_DOCUMENTS;
     const minimumPublisherOwners =
       options.minimumPublisherOwners ?? DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS;
+    const evidenceWindowDays =
+      options.evidenceWindowDays ??
+      Number(
+        process.env.NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS ??
+          DEFAULT_CANDIDATE_EVIDENCE_WINDOW_DAYS
+      );
     const qualifiedCount = await client.query<{ count: string }>(
       `select count(*)::text as count
        from (
@@ -593,6 +601,7 @@ export async function getNarrativeCandidateQueue(
          join narrative_candidate_evidence ce on ce.candidate_id = nc.id
          join documents d on d.id = ce.document_id
          where nc.prompt_version = $1 and nc.status = 'pending'
+           and d.published_at >= now() - ($4::text || ' days')::interval
          group by nc.id
          having count(distinct ce.document_id) >= $2
             and count(distinct coalesce(
@@ -601,7 +610,12 @@ export async function getNarrativeCandidateQueue(
               d.publisher
             )) >= $3
        ) qualified`,
-      [promptVersion, minimumDocuments, minimumPublisherOwners]
+      [
+        promptVersion,
+        minimumDocuments,
+        minimumPublisherOwners,
+        evidenceWindowDays
+      ]
     );
     const candidateResult = await client.query<CandidateRow>(
       `select id, cluster_key, name, proposition, category,
@@ -651,7 +665,8 @@ export async function getNarrativeCandidateQueue(
         row,
         evidenceByCandidate.get(row.id) ?? [],
         minimumDocuments,
-        minimumPublisherOwners
+        minimumPublisherOwners,
+        evidenceWindowDays
       )
     ).sort(
       (left, right) =>
@@ -784,6 +799,7 @@ export async function promoteNarrativeCandidate(
     classificationPromptVersion?: string;
     minimumDocuments?: number;
     minimumPublisherOwners?: number;
+    evidenceWindowDays?: number;
   },
   databaseUrl = process.env.DATABASE_URL
 ) {
@@ -834,7 +850,15 @@ export async function promoteNarrativeCandidate(
       [candidate.id]
     );
     const evidence = evidenceResult.rows.map(mapEvidence);
-    const qualification = candidateBreadth(evidence);
+    const evidenceWindowDays =
+      input.evidenceWindowDays ??
+      Number(
+        process.env.NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS ??
+          DEFAULT_CANDIDATE_EVIDENCE_WINDOW_DAYS
+      );
+    const qualification = candidateBreadth(
+      recentCandidateEvidence(evidence, evidenceWindowDays)
+    );
     const minimumDocuments = input.minimumDocuments ?? DEFAULT_CANDIDATE_MIN_DOCUMENTS;
     const minimumPublisherOwners =
       input.minimumPublisherOwners ?? DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS;
@@ -1006,9 +1030,12 @@ function mapCandidate(
   row: CandidateRow,
   evidence: NarrativeCandidateEvidence[],
   minimumDocuments: number,
-  minimumPublisherOwners: number
+  minimumPublisherOwners: number,
+  evidenceWindowDays: number
 ): NarrativeCandidateSummary {
-  const breadth = candidateBreadth(evidence);
+  const breadth = candidateBreadth(
+    recentCandidateEvidence(evidence, evidenceWindowDays)
+  );
   return {
     id: row.id,
     clusterKey: row.cluster_key,
@@ -1044,6 +1071,16 @@ function candidateBreadth(evidence: NarrativeCandidateEvidence[]) {
     sourceClassBreadth: new Set(evidence.map((item) => item.sourceClass)).size,
     entityBreadth: new Set(evidence.flatMap((item) => item.affectedEntities)).size
   };
+}
+
+function recentCandidateEvidence(
+  evidence: NarrativeCandidateEvidence[],
+  windowDays: number
+) {
+  const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1_000;
+  return evidence.filter(
+    (item) => new Date(item.publishedAt).getTime() >= cutoff
+  );
 }
 
 function candidateEvidenceId(candidateId: string, documentId: string) {

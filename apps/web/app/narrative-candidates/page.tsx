@@ -116,7 +116,7 @@ function CandidateCard({
         <h2>{candidate.name}</h2>
         <p className="candidate-proposition">{candidate.proposition}</p>
         <div className="candidate-breadth">
-          <Metric label="Documents" value={candidate.documentBreadth} compact />
+          <Metric label="Recent documents" value={candidate.documentBreadth} compact />
           <Metric label="Publisher groups" value={candidate.publisherOwnerBreadth} compact />
           <Metric label="Source classes" value={candidate.sourceClassBreadth} compact />
           <Metric label="Entities" value={candidate.entityBreadth} compact />

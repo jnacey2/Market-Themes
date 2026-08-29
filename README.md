@@ -553,7 +553,8 @@ until the backlog is empty or the configured runtime limit is reached. Candidate
 discovery then looks for directional propositions not covered by active
 definitions. Open `/narrative-candidates` to review the resulting clusters. A
 candidate cannot be promoted until at least two documents from two independent
-publisher-owner groups support it. Promotion creates a versioned narrative
+publisher-owner groups support it within the configured 30-day evidence window.
+Promotion creates a versioned narrative
 definition and approved seed observations; the next narrative-trend recompute
 publishes its measured history. `/ingestion` shows the remaining classification
 and discovery backlog by source.

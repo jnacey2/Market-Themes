@@ -28,6 +28,19 @@ test("accepts same-origin JSON mutations and rejects cross-site requests", () =>
   );
   assert.equal(
     isSafeMutationRequest(
+      new Request("http://0.0.0.0:3100/api/review", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          host: "127.0.0.1:3100",
+          origin: "http://127.0.0.1:3100"
+        }
+      })
+    ),
+    true
+  );
+  assert.equal(
+    isSafeMutationRequest(
       new Request("https://themes.example/api/review", {
         method: "POST",
         headers: {

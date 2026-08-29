@@ -57,6 +57,8 @@ services:
         value: narrative_classification_v5
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
         value: narrative_discovery_v1
+      - key: NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS
+        value: "30"
       - key: NARRATIVE_TREND_LOOKBACK_DAYS
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
@@ -407,6 +409,8 @@ services:
         value: "5"
       - key: NARRATIVE_DISCOVERY_STALE_MINUTES
         value: "90"
+      - key: NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS
+        value: "30"
       - key: NARRATIVE_TREND_LOOKBACK_DAYS
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
