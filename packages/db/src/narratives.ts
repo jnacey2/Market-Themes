@@ -184,11 +184,23 @@ export async function persistNarrativeObservations(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
+    await client.query("begin");
     let inserted = 0;
     for (const observation of observations) {
-      const result = await client.query(
+      const result = await client.query<{
+        id: string;
+        review_status: NarrativeReviewStatus;
+        metadata: Record<string, unknown>;
+      }>(
         `with prior_review as (
-           select review_status, reviewed_at, review_note
+           select id, review_status, reviewed_at, review_note,
+                  coalesce(
+                    metadata->'reviewProvenance',
+                    jsonb_build_object(
+                      'actorType', 'human',
+                      'reviewedAt', reviewed_at
+                    )
+                  ) as review_provenance
            from narrative_observations
            where $4::boolean
              and narrative_definition_id = $2
@@ -209,7 +221,20 @@ export async function persistNarrativeObservations(
            review_status, reviewed_at, review_note
          )
          select
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+           $14::jsonb || coalesce(
+             (
+               select jsonb_build_object(
+                 'reviewProvenance',
+                 review_provenance || jsonb_build_object(
+                   'inheritedFromObservationId', id,
+                   'inheritedAt', now()
+                 )
+               )
+               from prior_review
+             ),
+             '{}'::jsonb
+           ),
            coalesce((select review_status from prior_review), 'pending'),
            (select reviewed_at from prior_review),
            (select review_note from prior_review)
@@ -223,7 +248,26 @@ export async function persistNarrativeObservations(
            evidence_snippet = excluded.evidence_snippet,
            interpretation = excluded.interpretation,
            affected_entities = excluded.affected_entities,
-           metadata = excluded.metadata,
+           metadata = excluded.metadata ||
+             case
+               when coalesce(
+                 narrative_observations.metadata->'reviewProvenance'->>'actorType',
+                 case
+                   when narrative_observations.metadata ? 'autoReview'
+                     then 'automatic'
+                   else 'human'
+                 end
+               ) = 'automatic'
+                 then jsonb_build_object(
+                   '_automaticReviewReset',
+                   coalesce(
+                     narrative_observations.metadata->'reviewProvenance',
+                     narrative_observations.metadata->'autoReview',
+                     '{}'::jsonb
+                   )
+                 )
+               else '{}'::jsonb
+             end,
            review_status = excluded.review_status,
            reviewed_at = excluded.reviewed_at,
            review_note = excluded.review_note
@@ -235,7 +279,8 @@ export async function persistNarrativeObservations(
                   then 'automatic'
                 else 'human'
               end
-            ) = 'automatic'`,
+            ) = 'automatic'
+         returning id, review_status, metadata`,
         [
           observation.id,
           observation.narrativeDefinitionId,
@@ -254,8 +299,54 @@ export async function persistNarrativeObservations(
         ]
       );
       inserted += result.rowCount ?? 0;
+      const persisted = result.rows[0];
+      if (!persisted) continue;
+      const automaticReset = persisted.metadata._automaticReviewReset;
+      if (persisted.review_status !== "pending") {
+        await client.query(
+          `insert into narrative_review_events (
+             id, observation_id, observation_key, previous_status, new_status,
+             actor_type, review_note, metadata
+           ) values ($1, $2, $2, $3, $4, 'human_inherited', $5, $6::jsonb)`,
+          [
+            `narrative:review-event:${randomUUID()}`,
+            persisted.id,
+            automaticReset ? "approved" : "pending",
+            persisted.review_status,
+            "Inherited a prior human review for identical evidence.",
+            JSON.stringify({
+              reviewProvenance: persisted.metadata.reviewProvenance
+            })
+          ]
+        );
+      } else if (automaticReset) {
+        await client.query(
+          `insert into narrative_review_events (
+             id, observation_id, observation_key, previous_status, new_status,
+             actor_type, review_note, metadata
+           ) values ($1, $2, $2, 'approved', 'pending', 'system', $3, $4::jsonb)`,
+          [
+            `narrative:review-event:${randomUUID()}`,
+            persisted.id,
+            "Automatic approval reset so the latest classification must satisfy policy again.",
+            JSON.stringify({ priorReviewProvenance: automaticReset })
+          ]
+        );
+      }
+      if (automaticReset) {
+        await client.query(
+          `update narrative_observations
+           set metadata = metadata - '_automaticReviewReset'
+           where id = $1`,
+          [persisted.id]
+        );
+      }
     }
+    await client.query("commit");
     return { inserted };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
   } finally {
     await client.end();
   }
@@ -314,9 +405,9 @@ export async function reviewNarrativeObservation(
     );
     await client.query(
       `insert into narrative_review_events (
-         id, observation_id, previous_status, new_status,
+         id, observation_id, observation_key, previous_status, new_status,
          actor_type, review_note, metadata
-       ) values ($1, $2, $3, $4, 'human', nullif($5, ''), $6::jsonb)`,
+       ) values ($1, $2, $2, $3, $4, 'human', nullif($5, ''), $6::jsonb)`,
       [
         `narrative:review-event:${randomUUID()}`,
         input.id,
@@ -386,7 +477,7 @@ export async function autoApproveNarrativeObservations(
     options.excludedPublisherOwners ??
     parseCsv(
       process.env.NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS ??
-        "youtube,youtube-com,youtube.com"
+        "youtube,youtube-com,youtube.com,youtu.be"
     )
   ).map((value) => value.toLowerCase());
   const reviewNote =
@@ -420,7 +511,7 @@ export async function autoApproveNarrativeObservations(
            and no.evidence_snippet <> ''
            and d.published_at >= now() - ($4::text || ' days')::interval
            and d.published_at <= now()
-           and coalesce(d.metadata->>'content', '') <> 'preview'
+           and lower(coalesce(d.metadata->>'content', '')) <> 'preview'
            and not exists (
              select 1
              from unnest($5::text[]) blocked(value)
@@ -433,6 +524,8 @@ export async function autoApproveNarrativeObservations(
                 or lower(coalesce(d.metadata->>'platform', '')) = blocked.value
                 or lower(d.url) like '%//' || blocked.value || '/%'
                 or lower(d.url) like '%.' || blocked.value || '/%'
+                or lower(d.url) like '%//' || blocked.value || ':%/%'
+                or lower(d.url) like '%.' || blocked.value || ':%/%'
            )
        ),
        qualified as (
@@ -467,12 +560,13 @@ export async function autoApproveNarrativeObservations(
        ),
        review_events as (
          insert into narrative_review_events (
-           id, observation_id, previous_status, new_status,
+           id, observation_id, observation_key, previous_status, new_status,
            actor_type, review_note, metadata
          )
          select
            'narrative:review-event:auto:' ||
              md5(u.id || clock_timestamp()::text || random()::text),
+           u.id,
            u.id,
            'pending',
            'approved',
@@ -510,7 +604,8 @@ export async function autoApproveNarrativeObservations(
             minimumMatchScore,
             minimumDocuments,
             minimumPublisherOwners,
-            lookbackDays
+            lookbackDays,
+            excludedPublisherOwners
           }
         })
       ]

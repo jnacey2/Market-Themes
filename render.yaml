@@ -482,7 +482,7 @@ services:
       - key: NARRATIVE_AUTO_REVIEW_LOOKBACK_DAYS
         value: "7"
       - key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS
-        value: youtube,youtube-com,youtube.com
+        value: youtube,youtube-com,youtube.com,youtu.be
 
   - type: cron
     name: recompute-narrative-trends

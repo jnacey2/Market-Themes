@@ -37,10 +37,10 @@ test(
       fixture("pricing-b", "Publisher B", `owner-b:${suffix}`, 92, pricingPower.id),
       fixture("pricing-low", "Publisher C", `owner-c:${suffix}`, 89, pricingPower.id),
       fixture("pricing-youtube", "YouTube Channel", `channel:${suffix}`, 99, pricingPower.id, {
-        metadata: { platform: "youtube" }
+        url: "https://youtu.be/example-auto-review-video"
       }),
       fixture("pricing-preview", "Publisher F", `owner-f:${suffix}`, 99, pricingPower.id, {
-        metadata: { content: "preview" }
+        metadata: { content: "Preview" }
       }),
       fixture("pricing-future", "Publisher G", `owner-g:${suffix}`, 99, pricingPower.id, {
         publishedAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString()
@@ -61,7 +61,9 @@ test(
           publisher: item.publisher,
           publisherId: item.publisher.toLowerCase().replaceAll(" ", "-"),
           publisherOwner: item.publisherOwner,
-          url: `https://example.com/auto-review/${item.key}/${suffix}`,
+          url:
+            item.url ??
+            `https://example.com/auto-review/${item.key}/${suffix}`,
           publishedAt: item.publishedAt,
           tickers: [],
           summary: "Automatic narrative review integration evidence.",
@@ -98,7 +100,7 @@ test(
       minimumDocuments: 2,
       minimumPublisherOwners: 2,
       lookbackDays: 7,
-      excludedPublisherOwners: ["youtube", "youtube-com"]
+      excludedPublisherOwners: ["youtube", "youtube-com", "youtu.be"]
     });
     assert.equal(result.approvedObservations, 2);
     assert.equal(result.narrativesTouched, 1);
@@ -229,7 +231,7 @@ test(
       minimumDocuments: 2,
       minimumPublisherOwners: 2,
       lookbackDays: 7,
-      excludedPublisherOwners: ["youtube", "youtube-com"]
+      excludedPublisherOwners: ["youtube", "youtube-com", "youtu.be"]
     });
     assert.equal(rerun.approvedObservations, 0);
 
@@ -256,6 +258,26 @@ test(
     const eventClient = createDatabaseClient();
     await eventClient.connect();
     try {
+      const inheritedProvenance = await eventClient.query<{
+        metadata: Record<string, {
+          actorType?: string;
+          inheritedFromObservationId?: string;
+        }>;
+      }>(
+        `select metadata
+         from narrative_observations
+         where id = $1`,
+        [`auto-review-observation:pricing-a:v2:${suffix}`]
+      );
+      assert.equal(
+        inheritedProvenance.rows[0].metadata.reviewProvenance?.actorType,
+        "human"
+      );
+      assert.equal(
+        inheritedProvenance.rows[0].metadata.reviewProvenance
+          ?.inheritedFromObservationId,
+        `auto-review-observation:pricing-a:${suffix}`
+      );
       const events = await eventClient.query<{
         actor_type: string;
         count: string;
@@ -274,6 +296,43 @@ test(
         Number(events.rows.find((row) => row.actor_type === "human")?.count),
         1
       );
+      assert.equal(
+        Number(
+          events.rows.find((row) => row.actor_type === "human_inherited")?.count
+        ),
+        1
+      );
+      assert.equal(
+        Number(events.rows.find((row) => row.actor_type === "system")?.count),
+        1
+      );
+      await assert.rejects(
+        () =>
+          eventClient.query(
+            `update narrative_review_events
+             set review_note = 'mutated'
+             where observation_id = $1`,
+            [`auto-review-observation:pricing-a:${suffix}`]
+          ),
+        /append-only/
+      );
+      await eventClient.query(`delete from documents where id = $1`, [
+        `pricing-a:${suffix}`
+      ]);
+      const retainedEvents = await eventClient.query<{
+        observation_id: string | null;
+        observation_key: string;
+      }>(
+        `select observation_id, observation_key
+         from narrative_review_events
+         where observation_key = $1`,
+        [`auto-review-observation:pricing-a:${suffix}`]
+      );
+      assert.equal(retainedEvents.rows.length, 2);
+      assert.equal(
+        retainedEvents.rows.every((row) => row.observation_id === null),
+        true
+      );
     } finally {
       await eventClient.end();
     }
@@ -289,6 +348,7 @@ function fixture(
   options: {
     metadata?: Record<string, unknown>;
     publishedAt?: string;
+    url?: string;
   } = {}
 ) {
   return {
@@ -299,7 +359,8 @@ function fixture(
     definitionId,
     quote: `Exact automatic review evidence for ${key}.`,
     metadata: options.metadata ?? {},
-    publishedAt: options.publishedAt ?? new Date().toISOString()
+    publishedAt: options.publishedAt ?? new Date().toISOString(),
+    url: options.url
   };
 }
 

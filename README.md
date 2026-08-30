@@ -570,7 +570,9 @@ Automatic review is deliberately stricter than the manual queue. Production
 requires a classifier score of at least 90 plus corroboration by two documents
 from two independent publisher-owner groups within seven days. Preview content
 and configured low-trust owners are excluded. Every automatic decision receives
-an audit note and can still be rejected by a human. Lower-confidence matches
+an audit note plus an append-only review event and can still be rejected by a
+human. Automatic decisions do not inherit across classifier versions; human
+decisions do. Lower-confidence matches
 remain pending, and promotion of newly discovered narrative candidates remains
 manual during the initial evaluation period.
 

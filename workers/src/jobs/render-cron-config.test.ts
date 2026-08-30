@@ -57,7 +57,7 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
   );
   assert.match(
     review,
-    /key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS\s+value: youtube,youtube-com,youtube\.com/
+    /key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS\s+value: youtube,youtube-com,youtube\.com,youtu\.be/
   );
   assert.doesNotMatch(review, /ANTHROPIC_API_KEY/);
 });
