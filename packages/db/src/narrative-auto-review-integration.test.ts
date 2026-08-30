@@ -4,11 +4,13 @@ import test from "node:test";
 import {
   autoApproveNarrativeObservations,
   createDatabaseClient,
+  finishPipelineRun,
   getActiveNarrativeDefinitions,
   getNarrativeReviewQueue,
   persistDocuments,
   persistNarrativeObservations,
   reviewNarrativeObservation,
+  startPipelineRun,
   type NarrativeObservationInput
 } from "./index";
 
@@ -34,7 +36,18 @@ test(
       fixture("pricing-a", "Publisher A", `owner-a:${suffix}`, 95, pricingPower.id),
       fixture("pricing-b", "Publisher B", `owner-b:${suffix}`, 92, pricingPower.id),
       fixture("pricing-low", "Publisher C", `owner-c:${suffix}`, 89, pricingPower.id),
-      fixture("pricing-youtube", "YouTube", "youtube-com", 99, pricingPower.id),
+      fixture("pricing-youtube", "YouTube Channel", `channel:${suffix}`, 99, pricingPower.id, {
+        metadata: { platform: "youtube" }
+      }),
+      fixture("pricing-preview", "Publisher F", `owner-f:${suffix}`, 99, pricingPower.id, {
+        metadata: { content: "preview" }
+      }),
+      fixture("pricing-future", "Publisher G", `owner-g:${suffix}`, 99, pricingPower.id, {
+        publishedAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString()
+      }),
+      fixture("pricing-stale", "Publisher H", `owner-h:${suffix}`, 99, pricingPower.id, {
+        publishedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000).toISOString()
+      }),
       fixture("ai-same-a", "Publisher D", `same-owner:${suffix}`, 96, aiCapex.id),
       fixture("ai-same-b", "Publisher E", `same-owner:${suffix}`, 94, aiCapex.id)
     ];
@@ -49,12 +62,13 @@ test(
           publisherId: item.publisher.toLowerCase().replaceAll(" ", "-"),
           publisherOwner: item.publisherOwner,
           url: `https://example.com/auto-review/${item.key}/${suffix}`,
-          publishedAt: new Date().toISOString(),
+          publishedAt: item.publishedAt,
           tickers: [],
           summary: "Automatic narrative review integration evidence.",
           body: item.quote,
           retrievalMethod: "api",
-          retentionPolicy: "full_text"
+          retentionPolicy: "full_text",
+          metadata: item.metadata
         }
       ]);
       assert.equal(persisted.insertedDocuments, 1);
@@ -84,7 +98,7 @@ test(
       minimumDocuments: 2,
       minimumPublisherOwners: 2,
       lookbackDays: 7,
-      excludedPublisherOwners: ["youtube-com"]
+      excludedPublisherOwners: ["youtube", "youtube-com"]
     });
     assert.equal(result.approvedObservations, 2);
     assert.equal(result.narrativesTouched, 1);
@@ -100,8 +114,46 @@ test(
       status(queue, `auto-review-observation:pricing-youtube:${suffix}`),
       "pending"
     );
+    assert.equal(
+      status(queue, `auto-review-observation:pricing-preview:${suffix}`),
+      "pending"
+    );
+    assert.equal(
+      status(queue, `auto-review-observation:pricing-future:${suffix}`),
+      "pending"
+    );
+    assert.equal(
+      status(queue, `auto-review-observation:pricing-stale:${suffix}`),
+      "pending"
+    );
     assert.equal(status(queue, `auto-review-observation:ai-same-a:${suffix}`), "pending");
     assert.equal(status(queue, `auto-review-observation:ai-same-b:${suffix}`), "pending");
+
+    const secondPromptVersion = `${promptVersion}:v2`;
+    const automaticObservation = observations.find(
+      (observation) =>
+        observation.id === `auto-review-observation:pricing-b:${suffix}`
+    );
+    assert(automaticObservation);
+    await persistNarrativeObservations([
+      {
+        ...automaticObservation,
+        id: `auto-review-observation:pricing-b:v2:${suffix}`,
+        matchScore: 70,
+        promptVersion: secondPromptVersion
+      }
+    ]);
+    const automaticNotInherited = await getNarrativeReviewQueue(
+      process.env.DATABASE_URL,
+      secondPromptVersion
+    );
+    assert.equal(
+      status(
+        automaticNotInherited,
+        `auto-review-observation:pricing-b:v2:${suffix}`
+      ),
+      "pending"
+    );
 
     const client = createDatabaseClient();
     await client.connect();
@@ -121,11 +173,39 @@ test(
       await client.end();
     }
 
+    await persistNarrativeObservations([
+      {
+        ...automaticObservation,
+        id: `auto-review-observation:pricing-b:reclassified:${suffix}`,
+        matchScore: 70
+      }
+    ]);
+    const reclassified = await getNarrativeReviewQueue(
+      process.env.DATABASE_URL,
+      promptVersion
+    );
+    assert.equal(
+      status(reclassified, `auto-review-observation:pricing-b:${suffix}`),
+      "pending"
+    );
+
     await reviewNarrativeObservation({
       id: `auto-review-observation:pricing-a:${suffix}`,
       status: "rejected",
       note: "Human override after automatic review."
     });
+    const humanObservation = observations.find(
+      (observation) =>
+        observation.id === `auto-review-observation:pricing-a:${suffix}`
+    );
+    assert(humanObservation);
+    await persistNarrativeObservations([
+      {
+        ...humanObservation,
+        id: `auto-review-observation:pricing-a:v2:${suffix}`,
+        promptVersion: secondPromptVersion
+      }
+    ]);
     const overridden = await getNarrativeReviewQueue(
       process.env.DATABASE_URL,
       promptVersion
@@ -134,6 +214,69 @@ test(
       status(overridden, `auto-review-observation:pricing-a:${suffix}`),
       "rejected"
     );
+    const humanInherited = await getNarrativeReviewQueue(
+      process.env.DATABASE_URL,
+      secondPromptVersion
+    );
+    assert.equal(
+      status(humanInherited, `auto-review-observation:pricing-a:v2:${suffix}`),
+      "rejected"
+    );
+    const rerun = await autoApproveNarrativeObservations({
+      model,
+      promptVersion,
+      minimumMatchScore: 90,
+      minimumDocuments: 2,
+      minimumPublisherOwners: 2,
+      lookbackDays: 7,
+      excludedPublisherOwners: ["youtube", "youtube-com"]
+    });
+    assert.equal(rerun.approvedObservations, 0);
+
+    const concurrentStage = `auto-review-concurrency:${suffix}`;
+    const firstRun = await startPipelineRun(concurrentStage);
+    const secondRun = await startPipelineRun(concurrentStage);
+    const runClient = createDatabaseClient();
+    await runClient.connect();
+    try {
+      const statuses = await runClient.query<{ id: string; status: string }>(
+        `select id, status from pipeline_runs where id = any($1::text[])`,
+        [[firstRun, secondRun]]
+      );
+      assert.equal(
+        statuses.rows.filter((row) => row.status === "running").length,
+        2
+      );
+    } finally {
+      await runClient.end();
+    }
+    await finishPipelineRun(firstRun, { status: "completed" });
+    await finishPipelineRun(secondRun, { status: "completed" });
+
+    const eventClient = createDatabaseClient();
+    await eventClient.connect();
+    try {
+      const events = await eventClient.query<{
+        actor_type: string;
+        count: string;
+      }>(
+        `select actor_type, count(*)::text as count
+         from narrative_review_events
+         where observation_id like $1
+         group by actor_type`,
+        [`auto-review-observation:%:${suffix}`]
+      );
+      assert.equal(
+        Number(events.rows.find((row) => row.actor_type === "automatic")?.count),
+        2
+      );
+      assert.equal(
+        Number(events.rows.find((row) => row.actor_type === "human")?.count),
+        1
+      );
+    } finally {
+      await eventClient.end();
+    }
   }
 );
 
@@ -142,7 +285,11 @@ function fixture(
   publisher: string,
   publisherOwner: string,
   score: number,
-  definitionId: string
+  definitionId: string,
+  options: {
+    metadata?: Record<string, unknown>;
+    publishedAt?: string;
+  } = {}
 ) {
   return {
     key,
@@ -150,7 +297,9 @@ function fixture(
     publisherOwner,
     score,
     definitionId,
-    quote: `Exact automatic review evidence for ${key}.`
+    quote: `Exact automatic review evidence for ${key}.`,
+    metadata: options.metadata ?? {},
+    publishedAt: options.publishedAt ?? new Date().toISOString()
   };
 }
 
@@ -168,6 +317,9 @@ async function cleanup(suffix: string) {
     await client.query("begin");
     await client.query(`delete from documents where id like $1`, [`%${suffix}`]);
     await client.query(`delete from sources where id like $1`, [`%${suffix}`]);
+    await client.query(`delete from pipeline_runs where stage like $1`, [
+      `%${suffix}`
+    ]);
     await client.query("commit");
   } catch (error) {
     await client.query("rollback");

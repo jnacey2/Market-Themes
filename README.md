@@ -619,6 +619,9 @@ Deployment steps:
    - `APP_BASE_URL`
    - `FMP_API_KEY`
    - source credentials in `SOURCE_CONFIG_JSON` or separate env vars
+   - For Blueprint updates, set `ANTHROPIC_API_KEY` separately on the new
+     `classify-narratives` and `discover-narratives` services, or attach both to
+     an existing Render environment group that provides the key.
 5. Keep `SCRAPING_ENABLED=false` until each source has explicit configuration.
 6. Apply the SQL from `npm run db:schema` to the Render Postgres database.
 7. Deploy `themes-web`.

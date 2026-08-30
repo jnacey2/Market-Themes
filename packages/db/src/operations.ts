@@ -15,6 +15,9 @@ import type {
 export async function startPipelineRun(stage: string, metadata: Record<string, unknown> = {}) {
   const client = createDatabaseClient();
   const id = `pipeline:${stage}:${randomUUID()}`;
+  const staleAfterMinutes = Number(
+    process.env.PIPELINE_STALE_RUN_MINUTES ?? 90
+  );
   await client.connect();
 
   try {
@@ -22,9 +25,11 @@ export async function startPipelineRun(stage: string, metadata: Record<string, u
       `update pipeline_runs
        set status = 'failed',
            completed_at = now(),
-           error_message = 'Superseded by a new pipeline run after the prior process stopped.'
-       where stage = $1 and status = 'running'`,
-      [stage]
+           error_message = 'Marked failed after the prior pipeline run became stale.'
+       where stage = $1
+         and status = 'running'
+         and started_at < now() - ($2::text || ' minutes')::interval`,
+      [stage, staleAfterMinutes]
     );
     await client.query(
       `insert into pipeline_runs (id, stage, status, metadata)
