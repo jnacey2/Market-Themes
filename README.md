@@ -559,6 +559,11 @@ definition and approved seed observations; the next narrative-trend recompute
 publishes its measured history. `/ingestion` shows the remaining classification
 and discovery backlog by source.
 
+On Render these steps are intentionally independent: classification runs at
+minute 5 each hour, candidate discovery at minute 10, and narrative trends at
+minutes 25 and 55. This keeps reviewed evidence publishing even while model work
+continues. The four-hour theme pipeline skips all three narrative-owned stages.
+
 ## Database Setup
 
 Print the SQL schema:
@@ -589,6 +594,9 @@ The blueprint defines:
 - `poll-fmp-transcripts`: daily cron job for FMP transcript polling.
 - `generate-daily-brief`: cron job for daily brief generation.
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
+- `classify-narratives`: hourly existing-narrative evidence classification.
+- `discover-narratives`: hourly new-proposition candidate discovery.
+- `recompute-narrative-trends`: twice-hourly publication of approved evidence.
 
 Deployment steps:
 
@@ -642,6 +650,9 @@ npm run fmp:backfill
 npm run fmp:poll
 npm run claude:extract:smoke
 npm run themes:normalize
+npm run narratives:classify
+npm run narratives:discover
+npm run narrative-trends:recompute
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```
