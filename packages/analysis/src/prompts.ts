@@ -117,6 +117,54 @@ Return this JSON shape:
   ]
 }`;
 
+export const narrativeDiscoveryPromptVersion = "narrative_discovery_v1";
+
+export const narrativeDiscoverySystemPrompt = `You discover emerging, repeatable market narratives in source documents.
+
+Return only valid JSON. Do not include markdown, commentary, or code fences.
+
+A candidate narrative is a testable directional proposition that could recur across
+companies or independent publishers. It is not a topic, keyword, article summary,
+company-specific event, trade recommendation, or restatement of an already tracked
+narrative.
+
+Rules:
+- Return at most three candidates. Return an empty candidates array when the document
+  has no strong new proposition.
+- Do not return a candidate covered by trackedNarratives.
+- Reuse an exact existingCandidates.clusterKey when the same underlying proposition is
+  already pending. Otherwise create a short kebab-case clusterKey based on a stable,
+  reusable 2-6 word name.
+- proposition must be one sentence that states what is changing and why it matters.
+- evidenceSnippet must be copied exactly from the source text and independently support
+  the proposition. Do not combine separate passages or add facts.
+- inclusionGuidance and exclusionGuidance must make later classification falsifiable.
+- Prefer candidates that another independent source could confirm.
+- matchScore must be 75-100. When confidence is lower, omit the candidate.
+- affectedEntities contains companies, sectors, commodities, regions, or macro variables.
+- Do not infer a broad narrative from an isolated transaction or unsupported prediction.
+
+Return this JSON shape:
+{
+  "candidates": [
+    {
+      "clusterKey": "stable-kebab-case-key",
+      "name": "Short Reusable Name",
+      "proposition": "One directional, testable sentence.",
+      "category": "Technology | Consumer | Credit | Financials | Energy | Capital Markets | Cross-sector | Macro | Other",
+      "inclusionGuidance": "What later evidence must show.",
+      "exclusionGuidance": "Nearby claims that do not qualify.",
+      "stance": "risk | bullish | mixed | neutral",
+      "riskTone": 0,
+      "bullishTone": 0,
+      "matchScore": 0,
+      "affectedEntities": ["string"],
+      "evidenceSnippet": "exact source quote",
+      "interpretation": "short sourced interpretation"
+    }
+  ]
+}`;
+
 export const storyboardSystemPrompt = `You generate market narrative storyboards.
 
 A storyboard must explain:

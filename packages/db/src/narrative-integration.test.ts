@@ -93,6 +93,33 @@ test(
     );
     await persistNarrativeObservations([
       {
+        id: `integration:observation:reclassified:${suffix}`,
+        narrativeDefinitionId: definition.id,
+        documentId,
+        matched: false,
+        matchScore: 0,
+        stance: "neutral",
+        riskTone: 0,
+        bullishTone: 0,
+        evidenceSnippet: "",
+        interpretation: "",
+        affectedEntities: [],
+        model: "integration-fixture",
+        promptVersion: "integration-v1"
+      }
+    ]);
+    const preservedReview = await getNarrativeReviewQueue(
+      process.env.DATABASE_URL,
+      "integration-v1"
+    );
+    assert.equal(
+      preservedReview.items.find(
+        (item) => item.id === `integration:observation:${suffix}`
+      )?.reviewStatus,
+      "approved"
+    );
+    await persistNarrativeObservations([
+      {
         id: `integration:observation:v2:${suffix}`,
         narrativeDefinitionId: definition.id,
         documentId,

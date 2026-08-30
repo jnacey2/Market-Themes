@@ -407,6 +407,33 @@ export type PipelineRunSummary = {
   errorMessage: string | null;
 };
 
+export type SourcePipelineTelemetry = {
+  sourceId: string;
+  sourceClass: SourceClass | null;
+  label: string;
+  enabled: boolean | null;
+  documentCount: number;
+  latestDocumentAt: string | null;
+  analyzedDocuments: number;
+  extractionBacklog: number;
+  narrativeClassificationBacklog: number;
+  narrativeDiscoveryBacklog: number;
+  matchedPending: number;
+  matchedApproved: number;
+  matchedRejected: number;
+  lastIngestAttemptAt: string | null;
+  lastIngestSuccessAt: string | null;
+  lastIngestError: string | null;
+};
+
+export type NarrativeBacklogSummary = {
+  total: number;
+  bySourceClass: Array<{
+    sourceClass: SourceClass;
+    count: number;
+  }>;
+};
+
 export type OperationsStatus = {
   databaseConfigured: boolean;
   latestDocumentAt: string | null;
@@ -414,9 +441,15 @@ export type OperationsStatus = {
   analyzedDocuments: number;
   extractionBacklog: number;
   normalizationBacklog: number;
+  narrativeClassificationBacklog: number;
+  narrativeDiscoveryBacklog: number;
+  narrativeReviewPendingCount: number;
+  narrativeCandidatePendingCount: number;
+  narrativeCandidateQualifiedCount: number;
   latestTrendDate: string | null;
   latestNarrativeTrendDate: string | null;
   connectors: ConnectorCheckpointSummary[];
+  sourceTelemetry: SourcePipelineTelemetry[];
   recentRuns: PipelineRunSummary[];
 };
 
@@ -432,6 +465,103 @@ export type NarrativeDefinition = {
   positiveExamples: string[];
   negativeExamples: string[];
   status: string;
+};
+
+export type NarrativeCandidateStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "merged";
+
+export type NarrativeCandidateEvidenceInput = {
+  id: string;
+  documentId: string;
+  evidenceSnippet: string;
+  interpretation: string;
+  stance: ToneDirection;
+  riskTone: number;
+  bullishTone: number;
+  affectedEntities: string[];
+  matchScore: number;
+  model: string;
+  promptVersion: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type NarrativeCandidateInput = {
+  id: string;
+  clusterKey: string;
+  name: string;
+  proposition: string;
+  category: string;
+  inclusionGuidance: string;
+  exclusionGuidance: string;
+  model: string;
+  promptVersion: string;
+  evidence: NarrativeCandidateEvidenceInput[];
+  metadata?: Record<string, unknown>;
+};
+
+export type NarrativeCandidateContext = {
+  clusterKey: string;
+  name: string;
+  proposition: string;
+};
+
+export type NarrativeCandidateEvidence = {
+  id: string;
+  documentId: string;
+  title: string;
+  publisher: string;
+  publisherId: string;
+  publisherOwner: string;
+  sourceClass: SourceClass;
+  publishedAt: string;
+  url: string;
+  evidenceSnippet: string;
+  interpretation: string;
+  stance: ToneDirection;
+  riskTone: number;
+  bullishTone: number;
+  affectedEntities: string[];
+  matchScore: number;
+};
+
+export type NarrativeCandidateSummary = {
+  id: string;
+  clusterKey: string;
+  name: string;
+  proposition: string;
+  category: string;
+  inclusionGuidance: string;
+  exclusionGuidance: string;
+  status: NarrativeCandidateStatus;
+  mergedIntoCandidateId: string | null;
+  promotedDefinitionId: string | null;
+  model: string;
+  promptVersion: string;
+  reviewNote: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  documentBreadth: number;
+  publisherBreadth: number;
+  publisherOwnerBreadth: number;
+  sourceClassBreadth: number;
+  entityBreadth: number;
+  qualified: boolean;
+  evidence: NarrativeCandidateEvidence[];
+};
+
+export type NarrativeCandidateQueue = {
+  databaseConfigured: boolean;
+  promptVersion: string;
+  pendingCount: number;
+  qualifiedCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  mergedCount: number;
+  candidates: NarrativeCandidateSummary[];
 };
 
 export type NarrativeObservationInput = {

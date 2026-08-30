@@ -24,6 +24,39 @@ export function isAuthorized(
   }
 }
 
+export function isSafeMutationRequest(request: Request) {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("application/json")) {
+    return false;
+  }
+  if (request.headers.get("sec-fetch-site") === "cross-site") {
+    return false;
+  }
+  const origin = request.headers.get("origin");
+  if (!origin) {
+    return true;
+  }
+  try {
+    const requestUrl = new URL(request.url);
+    const expectedOrigins = new Set([requestUrl.origin]);
+    const forwardedHost =
+      request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+      request.headers.get("host");
+    const forwardedProtocol =
+      request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
+      requestUrl.protocol.replace(":", "");
+    if (
+      forwardedHost &&
+      (forwardedProtocol === "http" || forwardedProtocol === "https")
+    ) {
+      expectedOrigins.add(`${forwardedProtocol}://${forwardedHost}`);
+    }
+    return expectedOrigins.has(new URL(origin).origin);
+  } catch {
+    return false;
+  }
+}
+
 function constantTimeEqual(left: string, right: string) {
   const encoder = new TextEncoder();
   const leftBytes = encoder.encode(left);

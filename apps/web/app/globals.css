@@ -696,6 +696,107 @@ h3 {
   margin-bottom: 8px;
 }
 
+.button.secondary {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.warning-text {
+  color: var(--warning) !important;
+}
+
+.candidate-queue {
+  display: grid;
+  gap: 18px;
+}
+
+.candidate-card {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.34fr);
+}
+
+.candidate-card .eyebrow {
+  margin-top: 18px;
+}
+
+.candidate-proposition {
+  color: var(--text) !important;
+  font-size: 18px;
+}
+
+.candidate-breadth {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.compact-metric {
+  padding: 12px;
+}
+
+.compact-metric h2 {
+  margin: 7px 0 0;
+}
+
+.candidate-evidence {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.candidate-evidence blockquote {
+  border-left: 2px solid var(--accent);
+  color: var(--text);
+  line-height: 1.6;
+  margin-left: 0;
+  padding-left: 14px;
+}
+
+.candidate-actions {
+  border-left: 1px solid var(--line);
+  padding-left: 24px;
+}
+
+.candidate-actions label {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.candidate-actions textarea,
+.candidate-actions select {
+  background: #080d1b;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 12px;
+}
+
+.candidate-merge {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 20px;
+}
+
+.source-telemetry-board .currents-header,
+.source-telemetry-board .current-row {
+  grid-template-columns: minmax(210px, 1.4fr) repeat(5, minmax(105px, 0.8fr));
+}
+
+.source-telemetry-board .current-row {
+  cursor: default;
+}
+
+.source-telemetry-board .current-row:hover {
+  transform: none;
+}
+
 @media (max-width: 840px) {
   .hero,
   .grid.two,
@@ -713,21 +814,28 @@ h3 {
     grid-template-columns: 1fr 1fr;
   }
 
+  .source-telemetry-board .current-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .current-name,
   .sparkline {
     grid-column: 1 / -1;
   }
 
-  .review-card {
+  .review-card,
+  .candidate-card {
     grid-template-columns: 1fr;
   }
 
   .source-form,
-  .managed-source {
+  .managed-source,
+  .candidate-breadth {
     grid-template-columns: 1fr;
   }
 
-  .review-controls {
+  .review-controls,
+  .candidate-actions {
     border-left: 0;
     border-top: 1px solid var(--line);
     padding-left: 0;

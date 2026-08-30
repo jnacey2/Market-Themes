@@ -17,6 +17,7 @@
     "claude:extract:smoke": "node --import tsx src/jobs/claude-extract-smoke.ts",
     "claude:extract:backfill": "node --import tsx src/jobs/claude-extract-backfill.ts",
     "narratives:classify": "node --import tsx src/jobs/classify-narratives.ts",
+    "narratives:discover": "node --import tsx src/jobs/discover-narratives.ts",
     "repair:document-texts": "node --import tsx src/jobs/repair-document-texts.ts",
     "themes:normalize": "node --import tsx src/jobs/normalize-themes.ts",
     "themes:normalize:backfill": "node --import tsx src/jobs/normalize-themes-backfill.ts",

@@ -183,7 +183,8 @@ export function parseSubstackPublicationsYaml(text: string): SubstackPublication
 
 export function findRepoRoot(start = process.cwd()): string {
   try {
-    const fromModule = fileURLToPath(new URL("../../..", import.meta.url));
+    const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+    const fromModule = path.resolve(moduleDirectory, "../../..");
     if (isRepoRoot(fromModule)) return fromModule;
   } catch {
     // ignore non-file module URLs

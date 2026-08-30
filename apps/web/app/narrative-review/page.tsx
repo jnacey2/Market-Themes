@@ -13,6 +13,7 @@ export default async function NarrativeReviewPage() {
         <Link className="brand" href="/">Market Themes</Link>
         <div className="nav-links">
           <Link href="/trends">Narrative Currents</Link>
+          <Link href="/narrative-candidates">Candidates</Link>
           <Link href="/analysis">Analysis</Link>
           <Link href="/ingestion">Operations</Link>
         </div>
@@ -44,7 +45,7 @@ export default async function NarrativeReviewPage() {
       <section className="section review-queue">
         {queue.items.length === 0 ? (
           <div className="panel">
-            <h2>No v3 matches awaiting review</h2>
+            <h2>No {queue.promptVersion} matches awaiting review</h2>
             <p>Run classification against current documents to populate this queue.</p>
           </div>
         ) : queue.items.map((item) => (
