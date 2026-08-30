@@ -343,6 +343,12 @@ services:
         value: "250"
       - key: PIPELINE_SKIP_INGEST
         value: "true"
+      - key: PIPELINE_SKIP_CLASSIFICATION
+        value: "true"
+      - key: PIPELINE_SKIP_DISCOVERY
+        value: "true"
+      - key: PIPELINE_SKIP_NARRATIVE_TRENDS
+        value: "true"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: DB_QUERY_TIMEOUT_MS
@@ -377,6 +383,26 @@ services:
         value: "25"
       - key: THEME_NORMALIZATION_MAX_BATCHES
         value: "20"
+
+  - type: cron
+    name: classify-narratives
+    runtime: node
+    schedule: "5 * * * *"
+    buildCommand: npm install
+    startCommand: npm run narratives:classify --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-5-20250929
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
         value: narrative_classification_v5
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
@@ -389,8 +415,26 @@ services:
         value: "2"
       - key: NARRATIVE_CLASSIFICATION_DOCUMENT_TIMEOUT_MS
         value: "600000"
-      - key: NARRATIVE_DISCOVERY_ENABLED
-        value: "true"
+
+  - type: cron
+    name: discover-narratives
+    runtime: node
+    schedule: "10 * * * *"
+    buildCommand: npm install
+    startCommand: npm run narratives:discover --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-5-20250929
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
         value: narrative_discovery_v1
       - key: NARRATIVE_DISCOVERY_BATCH_SIZE
@@ -411,6 +455,52 @@ services:
         value: "90"
       - key: NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS
         value: "30"
+
+  - type: cron
+    name: auto-review-narratives
+    runtime: node
+    schedule: "15,45 * * * *"
+    buildCommand: npm install
+    startCommand: npm run narratives:auto-review --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-5-20250929
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v5
+      - key: NARRATIVE_AUTO_REVIEW_ENABLED
+        value: "true"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_SCORE
+        value: "90"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_DOCUMENTS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_PUBLISHER_OWNERS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_LOOKBACK_DAYS
+        value: "7"
+      - key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS
+        value: youtube,youtube-com,youtube.com,youtu.be
+
+  - type: cron
+    name: recompute-narrative-trends
+    runtime: node
+    schedule: "25,55 * * * *"
+    buildCommand: npm install
+    startCommand: npm run narrative-trends:recompute --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v5
       - key: NARRATIVE_TREND_LOOKBACK_DAYS
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS

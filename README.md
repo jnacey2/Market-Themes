@@ -476,6 +476,7 @@ npm run themes:normalize
 npm run themes:normalize:backfill
 npm run narratives:classify
 npm run narratives:discover
+npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run pipeline
 npm run brief:daily --workspace @market-themes/workers
@@ -559,6 +560,22 @@ definition and approved seed observations; the next narrative-trend recompute
 publishes its measured history. `/ingestion` shows the remaining classification
 and discovery backlog by source.
 
+On Render these steps are intentionally independent: classification runs at
+minute 5 each hour, candidate discovery at minute 10, conservative automatic
+evidence review at minutes 15 and 45, and narrative trends at minutes 25 and 55.
+This keeps approved evidence publishing even while model work continues. The
+four-hour theme pipeline skips all narrative-owned stages.
+
+Automatic review is deliberately stricter than the manual queue. Production
+requires a classifier score of at least 90 plus corroboration by two documents
+from two independent publisher-owner groups within seven days. Preview content
+and configured low-trust owners are excluded. Every automatic decision receives
+an audit note plus an append-only review event and can still be rejected by a
+human. Automatic decisions do not inherit across classifier versions; human
+decisions do. Lower-confidence matches
+remain pending, and promotion of newly discovered narrative candidates remains
+manual during the initial evaluation period.
+
 ## Database Setup
 
 Print the SQL schema:
@@ -589,6 +606,10 @@ The blueprint defines:
 - `poll-fmp-transcripts`: daily cron job for FMP transcript polling.
 - `generate-daily-brief`: cron job for daily brief generation.
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
+- `classify-narratives`: hourly existing-narrative evidence classification.
+- `discover-narratives`: hourly new-proposition candidate discovery.
+- `auto-review-narratives`: twice-hourly conservative evidence approval.
+- `recompute-narrative-trends`: twice-hourly publication of approved evidence.
 
 Deployment steps:
 
@@ -600,6 +621,9 @@ Deployment steps:
    - `APP_BASE_URL`
    - `FMP_API_KEY`
    - source credentials in `SOURCE_CONFIG_JSON` or separate env vars
+   - For Blueprint updates, set `ANTHROPIC_API_KEY` separately on the new
+     `classify-narratives` and `discover-narratives` services, or attach both to
+     an existing Render environment group that provides the key.
 5. Keep `SCRAPING_ENABLED=false` until each source has explicit configuration.
 6. Apply the SQL from `npm run db:schema` to the Render Postgres database.
 7. Deploy `themes-web`.
@@ -642,6 +666,10 @@ npm run fmp:backfill
 npm run fmp:poll
 npm run claude:extract:smoke
 npm run themes:normalize
+npm run narratives:classify
+npm run narratives:discover
+npm run narratives:auto-review
+npm run narrative-trends:recompute
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers
 ```

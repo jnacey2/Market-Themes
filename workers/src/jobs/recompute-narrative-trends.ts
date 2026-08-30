@@ -1,10 +1,21 @@
+import { pathToFileURL } from "node:url";
 import { recomputeNarrativeTrends } from "@market-themes/db";
+import { runRecordedJob } from "./recorded-job";
 
-const result = await recomputeNarrativeTrends({
-  asOfDate: process.env.TREND_AS_OF_DATE || undefined,
-  lookbackDays: Number(process.env.NARRATIVE_TREND_LOOKBACK_DAYS ?? 365),
-  lowHistoryDays: Number(process.env.NARRATIVE_TREND_LOW_HISTORY_DAYS ?? 30),
-  windows: ["7d", "30d"]
-});
+export async function recomputeScheduledNarrativeTrends() {
+  return recomputeNarrativeTrends({
+    asOfDate: process.env.TREND_AS_OF_DATE || undefined,
+    lookbackDays: Number(process.env.NARRATIVE_TREND_LOOKBACK_DAYS ?? 365),
+    lowHistoryDays: Number(process.env.NARRATIVE_TREND_LOW_HISTORY_DAYS ?? 30),
+    windows: ["7d", "30d"]
+  });
+}
 
-console.log(`[recompute-narrative-trends] ${JSON.stringify(result)}`);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const result = await runRecordedJob(
+    "narrative_trends",
+    () => recomputeScheduledNarrativeTrends(),
+    (value) => value.definitionsProcessed
+  );
+  console.log(`[recompute-narrative-trends] ${JSON.stringify(result)}`);
+}

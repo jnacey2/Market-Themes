@@ -13,6 +13,7 @@ import {
   type NarrativeDefinition
 } from "@market-themes/db";
 import { pathToFileURL } from "node:url";
+import { runRecordedJob } from "./recorded-job";
 
 type ClassificationOptions = {
   batchSize?: number;
@@ -267,6 +268,10 @@ function withTimeout<T>(
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const result = await classifyNarrativeBatches();
+  const result = await runRecordedJob(
+    "narrative_classification",
+    () => classifyNarrativeBatches(),
+    (value) => value.documentsProcessed
+  );
   console.log(`[classify-narratives] ${JSON.stringify(result)}`);
 }

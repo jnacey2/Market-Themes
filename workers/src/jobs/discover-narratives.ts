@@ -17,6 +17,7 @@ import {
   type NarrativeCandidateContext,
   type NarrativeDefinition
 } from "@market-themes/db";
+import { runRecordedJob } from "./recorded-job";
 
 type DiscoveryOptions = {
   batchSize: number;
@@ -271,6 +272,10 @@ function defaultOptions(): DiscoveryOptions {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const result = await discoverNarrativeBatches();
+  const result = await runRecordedJob(
+    "narrative_discovery",
+    () => discoverNarrativeBatches(),
+    (value) => value.documentsProcessed
+  );
   console.log(`[discover-narratives] ${JSON.stringify(result)}`);
 }

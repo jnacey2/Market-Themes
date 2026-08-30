@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createDatabaseClient } from "./persistence";
 import {
   calculateNarrativeTrendSeries,
@@ -183,17 +184,33 @@ export async function persistNarrativeObservations(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
+    await client.query("begin");
     let inserted = 0;
     for (const observation of observations) {
-      const result = await client.query(
+      const result = await client.query<{
+        id: string;
+        review_status: NarrativeReviewStatus;
+        metadata: Record<string, unknown>;
+      }>(
         `with prior_review as (
-           select review_status, reviewed_at, review_note
+           select id, review_status, reviewed_at, review_note,
+                  coalesce(
+                    metadata->'reviewProvenance',
+                    jsonb_build_object(
+                      'actorType', 'human',
+                      'reviewedAt', reviewed_at
+                    )
+                  ) as review_provenance
            from narrative_observations
            where $4::boolean
              and narrative_definition_id = $2
              and document_id = $3
              and evidence_snippet = $9
              and review_status in ('approved', 'rejected')
+             and coalesce(
+               metadata->'reviewProvenance'->>'actorType',
+               case when metadata ? 'autoReview' then 'automatic' else 'human' end
+             ) = 'human'
            order by reviewed_at desc
            limit 1
          )
@@ -204,7 +221,20 @@ export async function persistNarrativeObservations(
            review_status, reviewed_at, review_note
          )
          select
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+           $14::jsonb || coalesce(
+             (
+               select jsonb_build_object(
+                 'reviewProvenance',
+                 review_provenance || jsonb_build_object(
+                   'inheritedFromObservationId', id,
+                   'inheritedAt', now()
+                 )
+               )
+               from prior_review
+             ),
+             '{}'::jsonb
+           ),
            coalesce((select review_status from prior_review), 'pending'),
            (select reviewed_at from prior_review),
            (select review_note from prior_review)
@@ -218,11 +248,39 @@ export async function persistNarrativeObservations(
            evidence_snippet = excluded.evidence_snippet,
            interpretation = excluded.interpretation,
            affected_entities = excluded.affected_entities,
-           metadata = excluded.metadata,
+           metadata = excluded.metadata ||
+             case
+               when coalesce(
+                 narrative_observations.metadata->'reviewProvenance'->>'actorType',
+                 case
+                   when narrative_observations.metadata ? 'autoReview'
+                     then 'automatic'
+                   else 'human'
+                 end
+               ) = 'automatic'
+                 then jsonb_build_object(
+                   '_automaticReviewReset',
+                   coalesce(
+                     narrative_observations.metadata->'reviewProvenance',
+                     narrative_observations.metadata->'autoReview',
+                     '{}'::jsonb
+                   )
+                 )
+               else '{}'::jsonb
+             end,
            review_status = excluded.review_status,
            reviewed_at = excluded.reviewed_at,
            review_note = excluded.review_note
-         where narrative_observations.review_status = 'pending'`,
+         where narrative_observations.review_status = 'pending'
+            or coalesce(
+              narrative_observations.metadata->'reviewProvenance'->>'actorType',
+              case
+                when narrative_observations.metadata ? 'autoReview'
+                  then 'automatic'
+                else 'human'
+              end
+            ) = 'automatic'
+         returning id, review_status, metadata`,
         [
           observation.id,
           observation.narrativeDefinitionId,
@@ -241,8 +299,54 @@ export async function persistNarrativeObservations(
         ]
       );
       inserted += result.rowCount ?? 0;
+      const persisted = result.rows[0];
+      if (!persisted) continue;
+      const automaticReset = persisted.metadata._automaticReviewReset;
+      if (persisted.review_status !== "pending") {
+        await client.query(
+          `insert into narrative_review_events (
+             id, observation_id, observation_key, previous_status, new_status,
+             actor_type, review_note, metadata
+           ) values ($1, $2, $2, $3, $4, 'human_inherited', $5, $6::jsonb)`,
+          [
+            `narrative:review-event:${randomUUID()}`,
+            persisted.id,
+            automaticReset ? "approved" : "pending",
+            persisted.review_status,
+            "Inherited a prior human review for identical evidence.",
+            JSON.stringify({
+              reviewProvenance: persisted.metadata.reviewProvenance
+            })
+          ]
+        );
+      } else if (automaticReset) {
+        await client.query(
+          `insert into narrative_review_events (
+             id, observation_id, observation_key, previous_status, new_status,
+             actor_type, review_note, metadata
+           ) values ($1, $2, $2, 'approved', 'pending', 'system', $3, $4::jsonb)`,
+          [
+            `narrative:review-event:${randomUUID()}`,
+            persisted.id,
+            "Automatic approval reset so the latest classification must satisfy policy again.",
+            JSON.stringify({ priorReviewProvenance: automaticReset })
+          ]
+        );
+      }
+      if (automaticReset) {
+        await client.query(
+          `update narrative_observations
+           set metadata = metadata - '_automaticReviewReset'
+           where id = $1`,
+          [persisted.id]
+        );
+      }
     }
+    await client.query("commit");
     return { inserted };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
   } finally {
     await client.end();
   }
@@ -259,6 +363,27 @@ export async function reviewNarrativeObservation(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
+    await client.query("begin");
+    const previous = await client.query<{
+      id: string;
+      review_status: NarrativeReviewStatus;
+      metadata: Record<string, unknown>;
+    }>(
+      `select id, review_status, metadata
+       from narrative_observations
+       where id = $1 and matched
+       for update`,
+      [input.id]
+    );
+    if (!previous.rows[0]) {
+      throw new Error("Matched narrative observation not found.");
+    }
+    const provenance = {
+      reviewProvenance: {
+        actorType: "human",
+        reviewedAt: new Date().toISOString()
+      }
+    };
     const result = await client.query<{
       id: string;
       review_status: NarrativeReviewStatus;
@@ -267,18 +392,229 @@ export async function reviewNarrativeObservation(
       `update narrative_observations
        set review_status = $2,
            review_note = nullif($3, ''),
-           reviewed_at = now()
+           reviewed_at = now(),
+           metadata = (metadata - 'autoReview') || $4::jsonb
        where id = $1 and matched
        returning id, review_status, reviewed_at::text`,
-      [input.id, input.status, input.note?.trim() ?? ""]
+      [
+        input.id,
+        input.status,
+        input.note?.trim() ?? "",
+        JSON.stringify(provenance)
+      ]
     );
-    if (!result.rows[0]) {
-      throw new Error("Matched narrative observation not found.");
-    }
+    await client.query(
+      `insert into narrative_review_events (
+         id, observation_id, observation_key, previous_status, new_status,
+         actor_type, review_note, metadata
+       ) values ($1, $2, $2, $3, $4, 'human', nullif($5, ''), $6::jsonb)`,
+      [
+        `narrative:review-event:${randomUUID()}`,
+        input.id,
+        previous.rows[0].review_status,
+        input.status,
+        input.note?.trim() ?? "",
+        JSON.stringify({
+          overrodeAutomaticReview:
+            previous.rows[0].metadata.autoReview !== undefined ||
+            (
+              previous.rows[0].metadata.reviewProvenance as
+                | { actorType?: unknown }
+                | undefined
+            )?.actorType === "automatic"
+        })
+      ]
+    );
+    await client.query("commit");
     return {
       id: result.rows[0].id,
       reviewStatus: result.rows[0].review_status,
       reviewedAt: result.rows[0].reviewed_at
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
+export type NarrativeAutoReviewOptions = {
+  model?: string;
+  promptVersion?: string;
+  minimumMatchScore?: number;
+  minimumDocuments?: number;
+  minimumPublisherOwners?: number;
+  lookbackDays?: number;
+  excludedPublisherOwners?: string[];
+};
+
+export async function autoApproveNarrativeObservations(
+  options: NarrativeAutoReviewOptions = {},
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const model =
+    options.model ??
+    process.env.ANTHROPIC_MODEL ??
+    "claude-sonnet-4-5-20250929";
+  const promptVersion =
+    options.promptVersion ??
+    process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+    "narrative_classification_v5";
+  const minimumMatchScore =
+    options.minimumMatchScore ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_SCORE ?? 90);
+  const minimumDocuments =
+    options.minimumDocuments ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_DOCUMENTS ?? 2);
+  const minimumPublisherOwners =
+    options.minimumPublisherOwners ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_PUBLISHER_OWNERS ?? 2);
+  const lookbackDays =
+    options.lookbackDays ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_LOOKBACK_DAYS ?? 7);
+  const excludedPublisherOwners = (
+    options.excludedPublisherOwners ??
+    parseCsv(
+      process.env.NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS ??
+        "youtube,youtube-com,youtube.com,youtu.be"
+    )
+  ).map((value) => value.toLowerCase());
+  const reviewNote =
+    `Auto-approved: score >= ${minimumMatchScore}; corroborated by >= ` +
+    `${minimumDocuments} documents from >= ${minimumPublisherOwners} independent ` +
+    `publisher groups within ${lookbackDays} days.`;
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<{
+      approved_count: string;
+      narratives_touched: string;
+      observation_ids: string[];
+    }>(
+      `with corroborating as (
+         select no.id, no.narrative_definition_id, no.document_id,
+                lower(coalesce(
+                  nullif(d.publisher_owner, ''),
+                  nullif(d.publisher_id, ''),
+                  d.publisher
+                )) as publisher_owner
+         from narrative_observations no
+         join documents d on d.id = no.document_id
+         join narrative_definitions nd on nd.id = no.narrative_definition_id
+         where no.matched
+           and nd.status = 'active'
+           and no.review_status in ('pending', 'approved')
+           and no.model = $1
+           and no.prompt_version = $2
+           and no.match_score >= $3
+           and no.evidence_snippet <> ''
+           and d.published_at >= now() - ($4::text || ' days')::interval
+           and d.published_at <= now()
+           and lower(coalesce(d.metadata->>'content', '')) <> 'preview'
+           and not exists (
+             select 1
+             from unnest($5::text[]) blocked(value)
+             where lower(coalesce(
+                     nullif(d.publisher_owner, ''),
+                     nullif(d.publisher_id, ''),
+                     d.publisher
+                   )) = blocked.value
+                or lower(d.publisher) = blocked.value
+                or lower(coalesce(d.metadata->>'platform', '')) = blocked.value
+                or lower(d.url) like '%//' || blocked.value || '/%'
+                or lower(d.url) like '%.' || blocked.value || '/%'
+                or lower(d.url) like '%//' || blocked.value || ':%/%'
+                or lower(d.url) like '%.' || blocked.value || ':%/%'
+           )
+       ),
+       qualified as (
+         select narrative_definition_id,
+                array_agg(id order by id) as corroborating_observation_ids
+         from corroborating
+         group by narrative_definition_id
+         having count(distinct document_id) >= $6
+            and count(distinct publisher_owner) >= $7
+       ),
+       updated as (
+         update narrative_observations no
+         set review_status = 'approved',
+             reviewed_at = now(),
+             review_note = $8,
+             metadata = (no.metadata - 'reviewProvenance') ||
+               jsonb_build_object(
+                 'autoReview', $9::jsonb,
+                 'reviewProvenance', jsonb_build_object(
+                   'actorType', 'automatic',
+                   'reviewedAt', now(),
+                   'policy', $9::jsonb,
+                   'corroboratingObservationIds', q.corroborating_observation_ids
+                 )
+               )
+         from corroborating c
+         join qualified q
+           on q.narrative_definition_id = c.narrative_definition_id
+         where no.id = c.id
+           and no.review_status = 'pending'
+         returning no.id, no.narrative_definition_id
+       ),
+       review_events as (
+         insert into narrative_review_events (
+           id, observation_id, observation_key, previous_status, new_status,
+           actor_type, review_note, metadata
+         )
+         select
+           'narrative:review-event:auto:' ||
+             md5(u.id || clock_timestamp()::text || random()::text),
+           u.id,
+           u.id,
+           'pending',
+           'approved',
+           'automatic',
+           $8,
+           jsonb_build_object(
+             'policy', $9::jsonb,
+             'corroboratingObservationIds', q.corroborating_observation_ids
+           )
+         from updated u
+         join qualified q
+           on q.narrative_definition_id = u.narrative_definition_id
+         returning observation_id
+       )
+       select count(*)::text as approved_count,
+              count(distinct narrative_definition_id)::text as narratives_touched,
+              coalesce(array_agg(id), '{}') as observation_ids
+       from updated
+       where exists (
+         select 1 from review_events where review_events.observation_id = updated.id
+       )`,
+      [
+        model,
+        promptVersion,
+        minimumMatchScore,
+        lookbackDays,
+        excludedPublisherOwners,
+        minimumDocuments,
+        minimumPublisherOwners,
+        reviewNote,
+        JSON.stringify({
+          autoReview: {
+            model,
+            promptVersion,
+            minimumMatchScore,
+            minimumDocuments,
+            minimumPublisherOwners,
+            lookbackDays,
+            excludedPublisherOwners
+          }
+        })
+      ]
+    );
+    return {
+      approvedObservations: Number(result.rows[0]?.approved_count ?? 0),
+      narrativesTouched: Number(result.rows[0]?.narratives_touched ?? 0),
+      observationIds: result.rows[0]?.observation_ids ?? [],
+      reviewNote
     };
   } finally {
     await client.end();
@@ -741,4 +1077,11 @@ function enumerateDates(start: string, end: string) {
     dates.push(date);
   }
   return dates;
+}
+
+function parseCsv(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
