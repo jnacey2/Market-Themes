@@ -39,6 +39,25 @@ test("publishes narrative trends twice hourly without waiting on model work", ()
   assert.match(trends, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
 });
 
+test("auto-reviews only explicitly enabled corroborated matches", () => {
+  const review = serviceBlock("auto-review-narratives");
+  assert.match(review, /schedule: "15,45 \* \* \* \*"/);
+  assert.match(
+    review,
+    /startCommand: npm run narratives:auto-review --workspace @market-themes\/workers/
+  );
+  assert.match(
+    review,
+    /key: NARRATIVE_AUTO_REVIEW_ENABLED\s+value: "true"/
+  );
+  assert.match(review, /key: NARRATIVE_AUTO_REVIEW_MIN_SCORE\s+value: "90"/);
+  assert.match(
+    review,
+    /key: NARRATIVE_AUTO_REVIEW_MIN_PUBLISHER_OWNERS\s+value: "2"/
+  );
+  assert.doesNotMatch(review, /ANTHROPIC_API_KEY/);
+});
+
 test("the theme pipeline skips work owned by narrative crons", () => {
   const themes = serviceBlock("recompute-theme-trends");
   assert.match(themes, /key: PIPELINE_SKIP_CLASSIFICATION\s+value: "true"/);

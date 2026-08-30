@@ -285,6 +285,142 @@ export async function reviewNarrativeObservation(
   }
 }
 
+export type NarrativeAutoReviewOptions = {
+  model?: string;
+  promptVersion?: string;
+  minimumMatchScore?: number;
+  minimumDocuments?: number;
+  minimumPublisherOwners?: number;
+  lookbackDays?: number;
+  excludedPublisherOwners?: string[];
+};
+
+export async function autoApproveNarrativeObservations(
+  options: NarrativeAutoReviewOptions = {},
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const model =
+    options.model ??
+    process.env.ANTHROPIC_MODEL ??
+    "claude-sonnet-4-5-20250929";
+  const promptVersion =
+    options.promptVersion ??
+    process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+    "narrative_classification_v5";
+  const minimumMatchScore =
+    options.minimumMatchScore ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_SCORE ?? 90);
+  const minimumDocuments =
+    options.minimumDocuments ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_DOCUMENTS ?? 2);
+  const minimumPublisherOwners =
+    options.minimumPublisherOwners ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_PUBLISHER_OWNERS ?? 2);
+  const lookbackDays =
+    options.lookbackDays ??
+    Number(process.env.NARRATIVE_AUTO_REVIEW_LOOKBACK_DAYS ?? 7);
+  const excludedPublisherOwners = (
+    options.excludedPublisherOwners ??
+    parseCsv(
+      process.env.NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS ??
+        "youtube-com,youtube.com"
+    )
+  ).map((value) => value.toLowerCase());
+  const reviewNote =
+    `Auto-approved: score >= ${minimumMatchScore}; corroborated by >= ` +
+    `${minimumDocuments} documents from >= ${minimumPublisherOwners} independent ` +
+    `publisher groups within ${lookbackDays} days.`;
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<{
+      approved_count: string;
+      narratives_touched: string;
+      observation_ids: string[];
+    }>(
+      `with corroborating as (
+         select no.id, no.narrative_definition_id, no.document_id,
+                lower(coalesce(
+                  nullif(d.publisher_owner, ''),
+                  nullif(d.publisher_id, ''),
+                  d.publisher
+                )) as publisher_owner
+         from narrative_observations no
+         join documents d on d.id = no.document_id
+         join narrative_definitions nd on nd.id = no.narrative_definition_id
+         where no.matched
+           and nd.status = 'active'
+           and no.review_status in ('pending', 'approved')
+           and no.model = $1
+           and no.prompt_version = $2
+           and no.match_score >= $3
+           and no.evidence_snippet <> ''
+           and d.published_at >= now() - ($4::text || ' days')::interval
+           and coalesce(d.metadata->>'content', '') <> 'preview'
+           and not (
+             lower(coalesce(
+               nullif(d.publisher_owner, ''),
+               nullif(d.publisher_id, ''),
+               d.publisher
+             )) = any($5::text[])
+           )
+       ),
+       qualified as (
+         select narrative_definition_id
+         from corroborating
+         group by narrative_definition_id
+         having count(distinct document_id) >= $6
+            and count(distinct publisher_owner) >= $7
+       ),
+       updated as (
+         update narrative_observations no
+         set review_status = 'approved',
+             reviewed_at = now(),
+             review_note = $8,
+             metadata = no.metadata || $9::jsonb
+         from corroborating c
+         join qualified q
+           on q.narrative_definition_id = c.narrative_definition_id
+         where no.id = c.id
+           and no.review_status = 'pending'
+         returning no.id, no.narrative_definition_id
+       )
+       select count(*)::text as approved_count,
+              count(distinct narrative_definition_id)::text as narratives_touched,
+              coalesce(array_agg(id), '{}') as observation_ids
+       from updated`,
+      [
+        model,
+        promptVersion,
+        minimumMatchScore,
+        lookbackDays,
+        excludedPublisherOwners,
+        minimumDocuments,
+        minimumPublisherOwners,
+        reviewNote,
+        JSON.stringify({
+          autoReview: {
+            model,
+            promptVersion,
+            minimumMatchScore,
+            minimumDocuments,
+            minimumPublisherOwners,
+            lookbackDays
+          }
+        })
+      ]
+    );
+    return {
+      approvedObservations: Number(result.rows[0]?.approved_count ?? 0),
+      narrativesTouched: Number(result.rows[0]?.narratives_touched ?? 0),
+      observationIds: result.rows[0]?.observation_ids ?? [],
+      reviewNote
+    };
+  } finally {
+    await client.end();
+  }
+}
+
 export async function getNarrativeReviewQueue(
   databaseUrl = process.env.DATABASE_URL,
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
@@ -741,4 +877,11 @@ function enumerateDates(start: string, end: string) {
     dates.push(date);
   }
   return dates;
+}
+
+function parseCsv(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

@@ -476,6 +476,7 @@ npm run themes:normalize
 npm run themes:normalize:backfill
 npm run narratives:classify
 npm run narratives:discover
+npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run pipeline
 npm run brief:daily --workspace @market-themes/workers
@@ -560,9 +561,18 @@ publishes its measured history. `/ingestion` shows the remaining classification
 and discovery backlog by source.
 
 On Render these steps are intentionally independent: classification runs at
-minute 5 each hour, candidate discovery at minute 10, and narrative trends at
-minutes 25 and 55. This keeps reviewed evidence publishing even while model work
-continues. The four-hour theme pipeline skips all three narrative-owned stages.
+minute 5 each hour, candidate discovery at minute 10, conservative automatic
+evidence review at minutes 15 and 45, and narrative trends at minutes 25 and 55.
+This keeps approved evidence publishing even while model work continues. The
+four-hour theme pipeline skips all narrative-owned stages.
+
+Automatic review is deliberately stricter than the manual queue. Production
+requires a classifier score of at least 90 plus corroboration by two documents
+from two independent publisher-owner groups within seven days. Preview content
+and configured low-trust owners are excluded. Every automatic decision receives
+an audit note and can still be rejected by a human. Lower-confidence matches
+remain pending, and promotion of newly discovered narrative candidates remains
+manual during the initial evaluation period.
 
 ## Database Setup
 
@@ -596,6 +606,7 @@ The blueprint defines:
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
 - `classify-narratives`: hourly existing-narrative evidence classification.
 - `discover-narratives`: hourly new-proposition candidate discovery.
+- `auto-review-narratives`: twice-hourly conservative evidence approval.
 - `recompute-narrative-trends`: twice-hourly publication of approved evidence.
 
 Deployment steps:
@@ -652,6 +663,7 @@ npm run claude:extract:smoke
 npm run themes:normalize
 npm run narratives:classify
 npm run narratives:discover
+npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run brief:daily --workspace @market-themes/workers
 npm run trends:recompute --workspace @market-themes/workers

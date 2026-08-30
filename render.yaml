@@ -457,6 +457,34 @@ services:
         value: "30"
 
   - type: cron
+    name: auto-review-narratives
+    runtime: node
+    schedule: "15,45 * * * *"
+    buildCommand: npm install
+    startCommand: npm run narratives:auto-review --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-5-20250929
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v5
+      - key: NARRATIVE_AUTO_REVIEW_ENABLED
+        value: "true"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_SCORE
+        value: "90"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_DOCUMENTS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_PUBLISHER_OWNERS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_LOOKBACK_DAYS
+        value: "7"
+      - key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS
+        value: youtube-com,youtube.com
+
+  - type: cron
     name: recompute-narrative-trends
     runtime: node
     schedule: "25,55 * * * *"
