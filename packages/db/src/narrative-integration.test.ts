@@ -5,6 +5,7 @@ import {
   createDatabaseClient,
   getActiveNarrativeDefinitions,
   getNarrativeBoardStatus,
+  getNarrativeHomepageStatus,
   getNarrativeReviewQueue,
   createPublicationFeed,
   listPublicationFeeds,
@@ -93,6 +94,49 @@ test(
       },
       process.env.DATABASE_URL
     );
+    const oldDocumentId = `integration:document:old:${suffix}`;
+    const oldEvidence =
+      "AI infrastructure demand increased in an older reporting period.";
+    await persistDocuments([
+      {
+        id: oldDocumentId,
+        sourceId: "integration-news",
+        sourceClass: "newspaper",
+        title: `Old integration market report ${suffix}`,
+        publisher: "Integration Publisher",
+        publisherId: "integration-publisher",
+        publisherOwner: "integration-owner",
+        url: `https://example.com/integration/old/${suffix}`,
+        publishedAt: "2026-08-01T12:00:00.000Z",
+        tickers: ["TEST"],
+        summary: "Out-of-window integration fixture",
+        body: `${oldEvidence} ${suffix}`,
+        retrievalMethod: "api",
+        retentionPolicy: "full_text"
+      }
+    ]);
+    await persistNarrativeObservations([
+      {
+        id: `integration:observation:old:${suffix}`,
+        narrativeDefinitionId: definition.id,
+        documentId: oldDocumentId,
+        matched: true,
+        matchScore: 99,
+        stance: "bullish",
+        riskTone: 0,
+        bullishTone: 90,
+        evidenceSnippet: oldEvidence,
+        interpretation: "Older evidence must not appear in a current preview.",
+        affectedEntities: ["OLD"],
+        model: "integration-fixture",
+        promptVersion: "integration-v1"
+      }
+    ]);
+    await reviewNarrativeObservation({
+      id: `integration:observation:old:${suffix}`,
+      status: "approved",
+      note: "Approved historical fixture."
+    });
     await persistNarrativeObservations([
       {
         id: `integration:observation:reclassified:${suffix}`,
@@ -164,6 +208,37 @@ test(
     assert(narrative);
     assert(narrative.matchedDocuments >= 1);
     assert(narrative.evidence.length >= 1);
+
+    await recomputeNarrativeTrends({
+      asOfDate: "2026-08-28",
+      lookbackDays: 10,
+      lowHistoryDays: 2,
+      promptVersion: "integration-v1",
+      windows: ["30d"]
+    });
+    const homepage = await getNarrativeHomepageStatus(
+      process.env.DATABASE_URL,
+      "integration-v1"
+    );
+    assert.equal(homepage.degraded, false);
+    assert.equal(homepage.latestDate, "2026-08-27");
+    assert.equal(homepage.trackedNarrativeCount, definitions.length);
+    assert(
+      homepage.narratives.some(
+        (item) =>
+          item.id === definition.id &&
+          item.matchedDocuments >= 1 &&
+          item.evidencePreview.length >= 1
+      )
+    );
+    assert.equal(
+      homepage.narratives.some((item) =>
+        item.evidencePreview.some(
+          (evidence) => evidence.id === `integration:observation:old:${suffix}`
+        )
+      ),
+      false
+    );
   }
 );
 
@@ -176,8 +251,11 @@ async function cleanupNarrativeFixture(suffix: string) {
       `delete from narrative_review_events where observation_key like $1`,
       [`%${suffix}`]
     );
-    await client.query(`delete from documents where id = $1`, [
-      `integration:document:${suffix}`
+    await client.query(`delete from documents where id = any($1::text[])`, [
+      [
+        `integration:document:${suffix}`,
+        `integration:document:old:${suffix}`
+      ]
     ]);
     await client.query(
       `delete from narrative_trends

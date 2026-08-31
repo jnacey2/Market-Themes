@@ -1,53 +1,31 @@
 import Link from "next/link";
 import {
-  getLiveDashboardStatus,
-  type TrendSummary
+  getNarrativeHomepageStatus,
+  type NarrativeHomepageItem
 } from "@market-themes/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const dashboard = await getLiveDashboardStatus().catch((error) => {
-    console.warn(
-      `[web] live dashboard failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-    return {
-      databaseConfigured: Boolean(process.env.DATABASE_URL),
-      degraded: true,
-      totalTrendRows: 0,
-      latestTrendDate: null,
-      confirmedSevenDayThemes: [],
-      emergingSevenDayThemes: [],
-      confirmedThirtyDayThemes: []
-    };
-  });
-  const topSevenDayThemes = topDashboardThemes(
-    dashboard.confirmedSevenDayThemes,
-    dashboard.emergingSevenDayThemes,
-    5
-  );
-  const topTheme = topSevenDayThemes[0] ?? dashboard.confirmedThirtyDayThemes[0];
-  const averageZScore =
-    topSevenDayThemes.length > 0
-      ? topSevenDayThemes.reduce((total, theme) => total + theme.zScore, 0) /
-        topSevenDayThemes.length
-      : 0;
-  const brief = dashboard.degraded && !topTheme
-    ? {
-        headline: "Theme rankings are delayed.",
-        summary:
-          "The homepage could not finish reading theme_trends in time. Open Narrative Currents for the live board, then retry this page after the database is less busy."
-      }
-    : buildDashboardBrief(
-        topSevenDayThemes,
-        dashboard.confirmedThirtyDayThemes
-      );
+  const dashboard = await getNarrativeHomepageStatus();
+  const leadNarrative = dashboard.narratives[0];
+  const summaryUnavailable =
+    !dashboard.databaseConfigured ||
+    (dashboard.degraded && dashboard.narratives.length === 0);
+  const brief =
+    summaryUnavailable
+      ? {
+          headline: "Live narrative summary is temporarily unavailable.",
+          summary:
+            "Open Narrative Currents for the full board while the homepage summary recovers."
+        }
+      : buildNarrativeBrief(dashboard.narratives);
 
   return (
     <div className="shell">
       <nav className="page-jump-nav" aria-label="On this page">
         <span>On this page</span>
-        <a href="#themes">Themes</a>
+        <a href="#narratives">Narratives</a>
         <a href="#brief">Daily Brief</a>
         <a href="#copilot">Copilot</a>
       </nav>
@@ -65,32 +43,34 @@ export default async function HomePage() {
         <div className="panel">
           <p className="eyebrow">Today&apos;s highest priority</p>
           <h2>
-            {topTheme?.themeLabel ??
-              (dashboard.degraded
-                ? "Theme rankings are delayed"
-                : "No confirmed live themes yet")}
+            {leadNarrative?.name ??
+              (!dashboard.databaseConfigured
+                ? "Narrative database is unavailable"
+                : dashboard.degraded
+                ? "Narrative summary is delayed"
+                : "Awaiting a published 7-day signal")}
           </h2>
           <p>
-            {topTheme
-              ? themeSummary(topTheme)
-              : dashboard.degraded
-                ? "The live dashboard query timed out on the database. Narrative Currents is still available."
-                : dashboard.databaseConfigured
-                  ? "Run extraction, theme normalization, and trend recompute to populate the live dashboard."
-                  : "Set DATABASE_URL to connect the dashboard to live trend data."}
+            {leadNarrative
+              ? leadNarrative.proposition
+              : !dashboard.databaseConfigured
+                ? "Connect the research database to load reviewed narratives."
+                : dashboard.degraded
+                ? "The lightweight narrative summary could not finish. Open Narrative Currents for the full live board."
+                : "Reviewed evidence may exist historically or await the next narrative trend publication."}
           </p>
           <div className="metric-row">
             <div className="metric">
-              <span>Z-score</span>
-              <strong>{topTheme?.zScore.toFixed(1) ?? "0.0"}</strong>
+              <span>Reviewed documents</span>
+              <strong>{leadNarrative?.matchedDocuments ?? "—"}</strong>
             </div>
             <div className="metric">
-              <span>Evidence</span>
-              <strong>{topTheme?.evidenceCount ?? 0}</strong>
+              <span>Publisher groups</span>
+              <strong>{leadNarrative?.publisherOwnerBreadth ?? "—"}</strong>
             </div>
             <div className="metric">
-              <span>Entities</span>
-              <strong>{topTheme?.entityBreadth ?? 0}</strong>
+              <span>Source classes</span>
+              <strong>{leadNarrative?.sourceClassBreadth ?? "—"}</strong>
             </div>
           </div>
         </div>
@@ -98,54 +78,72 @@ export default async function HomePage() {
 
       <section className="grid three">
         <div className="panel">
-          <span className="label">Coverage</span>
-          <h2>S&P 500 + Nasdaq-100</h2>
-          <p>Initial scope targets US equities plus macro themes.</p>
+          <span className="label">Tracked narratives</span>
+          <h2>
+            {summaryUnavailable
+              ? "Unavailable"
+              : dashboard.trackedNarrativeCount}
+          </h2>
+          <p>Versioned propositions measured from reviewed source evidence.</p>
         </div>
         <div className="panel">
-          <span className="label">Signal</span>
-          <h2>{averageZScore.toFixed(1)} avg z-score</h2>
+          <span className="label">Homepage focus</span>
+          <h2>
+            {summaryUnavailable
+              ? "Unavailable"
+              : `${dashboard.narratives.length} active signals`}
+          </h2>
           <p>
-            Showing the top {topSevenDayThemes.length} ranked 7-day market themes,
-            including {dashboard.confirmedSevenDayThemes.length} confirmed by the breadth gate.
+            Ranked by independent publisher breadth and reviewed document count,
+            not immature z-scores.
           </p>
         </div>
         <div className="panel">
-          <span className="label">Latest trend date</span>
+          <span className="label">Latest measurement</span>
           <h2>
-            {dashboard.latestTrendDate ??
+            {dashboard.latestDate ??
               (dashboard.degraded ? "Temporarily unavailable" : "None yet")}
           </h2>
           <p>
-            {dashboard.degraded
-              ? "Ranking query hit the dashboard timeout. Open Narrative Currents for live measurements."
-              : `${dashboard.totalTrendRows} live trend rows currently stored.`}
+            {!dashboard.databaseConfigured
+              ? "Connect the research database to measure current narratives."
+              : dashboard.degraded
+              ? "Some live summary data is temporarily unavailable; displayed zeroes should not be treated as measurements."
+              : "Approved evidence only. Pending and rejected matches are excluded."}
           </p>
         </div>
       </section>
 
-      <section className="section" id="themes">
-        <p className="eyebrow">Top Market Themes</p>
+      <section className="section" id="narratives">
+        <p className="eyebrow">Leading Market Narratives</p>
         <div className="grid">
-          {topSevenDayThemes.length === 0 ? (
+          {dashboard.narratives.length === 0 ? (
             <div className="panel">
               <h2>
                 {dashboard.degraded
-                  ? "Live theme cards are delayed"
-                  : "No ranked 7-day themes yet"}
+                  ? "Live narrative cards are delayed"
+                  : !dashboard.databaseConfigured
+                    ? "Narrative database is unavailable"
+                    : "No published 7-day narrative signals yet"}
               </h2>
               <p>
                 {dashboard.degraded
-                  ? "The homepage ranking query did not finish in time. Narrative Currents still loads from a smaller table."
-                  : "Run extraction, theme normalization, and trend recompute to populate the live theme list."}
+                  ? "Open Narrative Currents for the complete live board."
+                  : !dashboard.databaseConfigured
+                    ? "Connect DATABASE_URL to load the live narrative board."
+                    : "Reviewed evidence may be historical or awaiting the next scheduled narrative trend publication."}
               </p>
               <Link className="pill" href="/trends">
                 Open Narrative Currents
               </Link>
             </div>
           ) : (
-            topSevenDayThemes.map((theme) => (
-              <ThemeCard key={theme.id} theme={theme} />
+            dashboard.narratives.map((narrative) => (
+              <NarrativeCard
+                evidenceDegraded={dashboard.degraded}
+                key={narrative.id}
+                narrative={narrative}
+              />
             ))
           )}
         </div>
@@ -174,97 +172,79 @@ export default async function HomePage() {
   );
 }
 
-function topDashboardThemes(
-  confirmedThemes: TrendSummary[],
-  emergingThemes: TrendSummary[],
-  limit: number
-) {
-  const themes = new Map<string, TrendSummary>();
-
-  for (const theme of [...confirmedThemes, ...emergingThemes]) {
-    if (!themes.has(theme.themeId)) {
-      themes.set(theme.themeId, theme);
-    }
-  }
-
-  return Array.from(themes.values()).slice(0, limit);
-}
-
-function ThemeCard({ theme }: { theme: TrendSummary }) {
+function NarrativeCard({
+  evidenceDegraded,
+  narrative
+}: {
+  evidenceDegraded: boolean;
+  narrative: NarrativeHomepageItem;
+}) {
   return (
     <article className="storyboard-card">
       <div>
         <div className="pill-row">
-          <span className="pill">{theme.trendWindow}</span>
-          <span className="pill">z {theme.zScore.toFixed(1)}</span>
-          <span className="pill">{theme.percentileRank}th pctile</span>
-          <span className="pill">{theme.evidenceCount} evidence</span>
-          <span className="pill">{independentDocumentCount(theme)} docs</span>
-          <span className="pill">{theme.entityBreadth} entities</span>
+          <span className="pill">{narrative.category}</span>
+          <span className="pill">{narrative.trendWindow}</span>
+          <span className="pill">{narrative.matchedDocuments} reviewed docs</span>
+          <span className="pill">
+            {narrative.publisherOwnerBreadth} publisher groups
+          </span>
+          <span className="pill">{narrative.entityBreadth} entities</span>
+          {narrative.lowHistory ? (
+            <span className="pill warning-pill">building baseline</span>
+          ) : null}
         </div>
-        <h2>{theme.themeLabel}</h2>
-        <p>{themeDescription(theme)}</p>
-        <p>{themeSummary(theme)}</p>
-        {theme.affectedEntities.length > 0 ? (
-          <div className="pill-row">
-            {theme.affectedEntities.slice(0, 6).map((entity) => (
-              <span className="pill" key={entity}>
-                {entity}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <h2>{narrative.name}</h2>
+        <p>{narrative.proposition}</p>
+        <p>{narrativeSummary(narrative)}</p>
         <details className="detail-block">
-          <summary>Drill down: companies and citations</summary>
+          <summary>Reviewed evidence</summary>
           <div className="grid">
-            <div className="panel">
-              <span className="label">Affected companies and entities</span>
-              {theme.affectedEntities.length === 0 ? (
-                <p>No affected entities were extracted for this theme yet.</p>
-              ) : (
-                <div className="pill-row">
-                  {theme.affectedEntities.map((entity) => (
-                    <span className="pill" key={entity}>
-                      {entity}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            {theme.recentEvidence.length === 0 ? (
+            {narrative.evidencePreview.length === 0 ? (
               <div className="evidence-card">
-                <p>No citation snippets available for this theme yet.</p>
+                <p>
+                  {evidenceDegraded
+                    ? "Evidence preview is temporarily unavailable."
+                    : "No current seven-day citation preview is available."}
+                </p>
               </div>
             ) : (
-              theme.recentEvidence.map((evidence) => (
+              narrative.evidencePreview.map((evidence) => (
                 <div className="evidence-card" key={evidence.id}>
                   <span className="label">
-                    {evidence.publisher} · {evidence.sourceClass.replace("_", " ")}
+                    {evidence.publisher} ·{" "}
+                    {evidence.sourceClass.replaceAll("_", " ")}
                   </span>
                   <h3>{evidence.title}</h3>
-                  <p>{evidence.snippet}</p>
+                  <blockquote>{evidence.evidenceSnippet}</blockquote>
                 </div>
               ))
             )}
             <Link className="pill" href="/trends">
               Open full trend view
             </Link>
-            <Link className="pill" href={`/themes/${encodeURIComponent(theme.themeId)}`}>
-              Open theme detail
+            <Link
+              className="pill"
+              href={`/storyboards/${encodeURIComponent(narrative.slug)}`}
+            >
+              Open live storyboard
             </Link>
           </div>
         </details>
       </div>
       <div className="score-stack">
         <div className="score">
-          <span className="label">Z-score</span>
-          <strong>{theme.zScore.toFixed(1)}</strong>
+          <span className="label">Density</span>
+          <strong>{narrative.density.toFixed(1)}</strong>
         </div>
         <div className="score">
-          <span className="label">Intensity</span>
-          <strong>{theme.intensity.toFixed(1)}</strong>
+          <span className="label">Publisher groups</span>
+          <strong>{narrative.publisherOwnerBreadth}</strong>
         </div>
-        <Link className="pill" href={`/themes/${encodeURIComponent(theme.themeId)}`}>
+        <Link
+          className="pill"
+          href={`/themes/${encodeURIComponent(narrative.id)}`}
+        >
           Details
         </Link>
       </div>
@@ -272,49 +252,34 @@ function ThemeCard({ theme }: { theme: TrendSummary }) {
   );
 }
 
-function buildDashboardBrief(sevenDayThemes: TrendSummary[], thirtyDayThemes: TrendSummary[]) {
-  const lead = sevenDayThemes[0] ?? thirtyDayThemes[0];
-  const context = thirtyDayThemes.find((theme) => theme.themeId !== lead?.themeId);
-
+function buildNarrativeBrief(narratives: NarrativeHomepageItem[]) {
+  const lead = narratives[0];
+  const context = narratives[1];
   if (!lead) {
     return {
-      headline: "No confirmed live market themes yet.",
+      headline: "No published 7-day narrative signal yet.",
       summary:
-        "Run ingestion, Claude extraction, theme normalization, and trend recompute to populate the live daily brief."
+        "Reviewed evidence may be historical or awaiting the next scheduled narrative trend publication."
     };
   }
 
   return {
-    headline: `${lead.themeLabel} is the top confirmed live theme.`,
+    headline: `${lead.name} has the broadest reviewed evidence.`,
     summary: [
-      `${lead.themeLabel} leads the 7-day digest with ${lead.evidenceCount} evidence items across ${independentDocumentCount(
-        lead
-      )} documents and ${lead.entityBreadth} entities.`,
+      `${lead.name} appears in ${lead.matchedDocuments} reviewed documents across ${lead.publisherOwnerBreadth} independent publisher groups.`,
       context
-        ? `${context.themeLabel} is the main 30-day context theme, with a z-score of ${context.zScore.toFixed(
-            1
-          )}.`
-        : "No separate 30-day context theme currently clears the breadth gate."
+        ? `${context.name} is the next-broadest current narrative with ${context.publisherOwnerBreadth} publisher groups.`
+        : "No second narrative currently has reviewed evidence."
     ].join(" ")
   };
 }
 
-function themeSummary(theme: TrendSummary) {
-  return `Intensity ${theme.intensity.toFixed(1)} vs baseline ${theme.baselineMean.toFixed(
-    1
-  )}, with ${theme.evidenceCount} evidence items across ${independentDocumentCount(
-    theme
-  )} documents and ${theme.entityBreadth} entities.`;
-}
-
-function themeDescription(theme: TrendSummary) {
-  if (theme.themeDescription.trim()) {
-    return theme.themeDescription;
-  }
-
-  return "A normalized market narrative assembled from extracted filing and transcript evidence.";
-}
-
-function independentDocumentCount(theme: TrendSummary) {
-  return theme.documentBreadth > 0 ? theme.documentBreadth : theme.evidenceCount;
+function narrativeSummary(narrative: NarrativeHomepageItem) {
+  return [
+    `Seven-day attention density is ${narrative.density.toFixed(1)}%.`,
+    `${narrative.matchedDocuments} reviewed documents span ${narrative.publisherOwnerBreadth} independent publisher groups and ${narrative.sourceClassBreadth} source classes.`,
+    narrative.lowHistory
+      ? "The historical baseline is still building."
+      : "Evidence breadth, rather than the immature z-score, determines homepage priority."
+  ].join(" ");
 }

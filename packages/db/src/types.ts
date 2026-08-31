@@ -658,6 +658,21 @@ export type NarrativeBoardStatus = {
   narratives: NarrativeTrendSummary[];
 };
 
+export type NarrativeHomepageItem = Omit<
+  NarrativeTrendSummary,
+  "history" | "evidence"
+> & {
+  evidencePreview: NarrativeEvidence[];
+};
+
+export type NarrativeHomepageStatus = {
+  databaseConfigured: boolean;
+  degraded: boolean;
+  latestDate: string | null;
+  trackedNarrativeCount: number;
+  narratives: NarrativeHomepageItem[];
+};
+
 export type EvidenceCard = {
   id: string;
   documentId: string;
