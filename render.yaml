@@ -373,7 +373,7 @@ services:
     runtime: node
     schedule: "15 */4 * * *"
     buildCommand: npm install
-    startCommand: npm run pipeline --workspace @market-themes/workers
+    startCommand: npm run themes:normalize:backfill --workspace @market-themes/workers && npm run trends:recompute --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -387,18 +387,6 @@ services:
         value: "90"
       - key: TREND_INSERT_BATCH_SIZE
         value: "250"
-      - key: PIPELINE_SKIP_INGEST
-        value: "true"
-      - key: PIPELINE_START_AT
-        value: normalize
-      - key: PIPELINE_SKIP_EXTRACTION
-        value: "true"
-      - key: PIPELINE_SKIP_CLASSIFICATION
-        value: "true"
-      - key: PIPELINE_SKIP_DISCOVERY
-        value: "true"
-      - key: PIPELINE_SKIP_NARRATIVE_TRENDS
-        value: "true"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: DB_QUERY_TIMEOUT_MS
@@ -409,24 +397,6 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-5-20250929
-      - key: CLAUDE_PROMPT_VERSION
-        value: market_signal_extraction_v2
-      - key: CLAUDE_EXTRACTION_BATCH_SIZE
-        value: "25"
-      - key: CLAUDE_EXTRACTION_MAX_BATCHES
-        value: "4"
-      - key: CLAUDE_EXTRACTION_CONCURRENCY
-        value: "2"
-      - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
-        value: "600000"
-      - key: CLAUDE_STALE_RUN_MINUTES
-        value: "90"
-      - key: CLAUDE_ANALYSIS_MAX_ATTEMPTS
-        value: "5"
-      - key: CLAUDE_MAX_EVIDENCE_CHARS
-        value: "800"
-      - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
-        value: capital_markets
       - key: THEME_NORMALIZATION_PROMPT_VERSION
         value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE

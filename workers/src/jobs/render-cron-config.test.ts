@@ -109,13 +109,15 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
   assert.doesNotMatch(review, /ANTHROPIC_API_KEY/);
 });
 
-test("the theme pipeline skips work owned by narrative crons", () => {
+test("the theme cron runs normalization and trends without stage selectors", () => {
   const themes = serviceBlock("recompute-theme-trends");
-  assert.match(themes, /key: PIPELINE_START_AT\s+value: normalize/);
-  assert.match(themes, /key: PIPELINE_SKIP_EXTRACTION\s+value: "true"/);
-  assert.match(themes, /key: PIPELINE_SKIP_CLASSIFICATION\s+value: "true"/);
-  assert.match(themes, /key: PIPELINE_SKIP_DISCOVERY\s+value: "true"/);
-  assert.match(themes, /key: PIPELINE_SKIP_NARRATIVE_TRENDS\s+value: "true"/);
+  assert.match(
+    themes,
+    /startCommand: npm run themes:normalize:backfill --workspace @market-themes\/workers && npm run trends:recompute --workspace @market-themes\/workers/
+  );
+  assert.doesNotMatch(themes, /startCommand: npm run pipeline/);
+  assert.doesNotMatch(themes, /PIPELINE_START_AT/);
+  assert.doesNotMatch(themes, /PIPELINE_SKIP_/);
   assert.doesNotMatch(themes, /key: NARRATIVE_DISCOVERY_PROMPT_VERSION/);
   assert.doesNotMatch(themes, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
 });
