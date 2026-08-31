@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { listConnectorCheckpoints, listPublicationFeeds } from "@market-themes/db";
 import {
   isSubstackSessionConfigured,
@@ -30,16 +29,6 @@ export default async function SourcesPage() {
 
   return (
     <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">Market Themes</Link>
-        <div className="nav-links">
-          <Link href="/trends">Narrative Currents</Link>
-          <Link href="/narrative-candidates">Candidates</Link>
-          <Link href="/narrative-review">Evidence Review</Link>
-          <Link href="/ingestion">Operations</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Source Registry</p>

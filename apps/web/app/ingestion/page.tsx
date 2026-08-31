@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getIngestionStatus, getOperationsStatus } from "@market-themes/db";
 
 export const dynamic = "force-dynamic";
@@ -11,20 +10,6 @@ export default async function IngestionPage() {
 
   return (
     <div className="shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <div className="nav-links">
-          <Link href="/">Dashboard</Link>
-          <Link href="/analysis">Analysis</Link>
-          <Link href="/trends">Trends</Link>
-          <Link href="/narrative-candidates">Candidates</Link>
-          <Link href="/sources">Sources</Link>
-          <Link href="/theme-mappings">Theme Mappings</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Ingestion Status</p>

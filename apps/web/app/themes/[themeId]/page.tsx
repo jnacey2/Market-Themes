@@ -36,17 +36,6 @@ export default async function ThemeDetailPage({ params }: ThemePageProps) {
 
   return (
     <div className="shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <div className="nav-links">
-          <Link href="/">Dashboard</Link>
-          <Link href="/trends">Trends</Link>
-          <Link href="/theme-mappings">Theme Mappings</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Theme Detail</p>
@@ -157,14 +146,6 @@ export default async function ThemeDetailPage({ params }: ThemePageProps) {
 function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }) {
   return (
     <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">Market Themes</Link>
-        <div className="nav-links">
-          <Link href="/trends">Narrative Currents</Link>
-          <Link href="/ingestion">Operations</Link>
-        </div>
-      </nav>
-
       <section className="hero narrative-detail-hero">
         <div>
           <p className="eyebrow">{narrative.category} · Version {narrative.version}</p>

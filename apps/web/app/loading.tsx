@@ -1,22 +1,19 @@
 export default function Loading() {
   return (
     <div className="shell">
-      <nav className="nav">
-        <div className="brand">Market Themes</div>
-      </nav>
       <section className="hero">
         <div>
-          <p className="eyebrow">Narrative Intelligence</p>
-          <h1>Loading live themes…</h1>
+          <p className="eyebrow">Market Themes</p>
+          <h1>Loading workspace…</h1>
           <p className="lede">
-            Fetching ranking data from the research database. This should only
-            take a few seconds.
+            Fetching the latest research data from the market intelligence
+            database.
           </p>
         </div>
         <div className="panel">
-          <p className="eyebrow">Today&apos;s highest priority</p>
+          <p className="eyebrow">Live data</p>
           <h2>Loading</h2>
-          <p>Waiting on the latest theme ranking query.</p>
+          <p>The requested page will appear when its latest data is ready.</p>
         </div>
       </section>
     </div>
