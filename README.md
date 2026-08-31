@@ -567,12 +567,12 @@ On Render these steps are intentionally independent: classification runs at
 minute 5 each hour, candidate discovery at minute 10, conservative automatic
 evidence review at minutes 15 and 45, and narrative trends at minutes 25 and 55.
 This keeps approved evidence publishing even while model work continues. The
-four-hour theme pipeline skips all narrative-owned stages.
+four-hour theme cron invokes only normalization and theme-trend recomputation
+directly; it does not use the multi-stage pipeline selector.
 
 Recent signal extraction runs independently at minute 35 each hour. It processes
 at most 100 unread documents from the latest 30 days at concurrency 2. The
-four-hour theme pipeline skips extraction and focuses on normalization and theme
-trend publication.
+four-hour theme cron therefore cannot duplicate extraction.
 
 Automatic review is deliberately stricter than the manual queue. Production
 requires a classifier score of at least 90 plus corroboration by two documents
