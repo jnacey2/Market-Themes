@@ -6,8 +6,11 @@ const stringArray = {
   items: { type: "string" }
 } as const;
 
-export function requireStructuredOutput<T>(
-  message: { parsed_output: T | null; stop_reason: string | null },
+export function parseStructuredOutput<T>(
+  message: {
+    content: Array<{ type: string; text?: string }>;
+    stop_reason: string | null;
+  },
   operation: string
 ) {
   if (message.stop_reason !== "end_turn") {
@@ -17,10 +20,23 @@ export function requireStructuredOutput<T>(
       }.`
     );
   }
-  if (!message.parsed_output) {
+  const response = message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text ?? "")
+    .join("\n")
+    .trim();
+  if (!response) {
     throw new Error(`${operation} returned no structured output.`);
   }
-  return message.parsed_output;
+  try {
+    return JSON.parse(response) as T;
+  } catch (error) {
+    throw new Error(
+      `${operation} returned invalid structured output: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
 }
 
 export const signalExtractionOutputFormat = jsonSchemaOutputFormat({

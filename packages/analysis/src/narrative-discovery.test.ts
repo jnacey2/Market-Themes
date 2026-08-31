@@ -114,3 +114,14 @@ test("candidate keys are stable, short kebab-case identifiers", () => {
     "software-and-vendor-consolidation"
   );
 });
+
+test("unknown discovery categories fail closed to Other", () => {
+  const [candidate] = normalizeNarrativeDiscoveryResponse(
+    { candidates: [{ ...rawCandidate, category: "Invented Sector" }] },
+    document,
+    tracked,
+    [],
+    { model: "test-model", promptVersion: "discovery-v1" }
+  );
+  assert.equal(candidate.category, "Other");
+});

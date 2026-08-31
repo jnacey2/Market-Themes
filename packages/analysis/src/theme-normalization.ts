@@ -6,7 +6,7 @@ import {
   themeNormalizationSystemPrompt
 } from "./prompts";
 import {
-  requireStructuredOutput,
+  parseStructuredOutput,
   themeNormalizationOutputFormat
 } from "./structured-output";
 
@@ -30,7 +30,7 @@ export async function normalizeThemeGroups(
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.parse({
+  const message = await client.messages.create({
     model,
     max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
     system: themeNormalizationSystemPrompt,
@@ -43,7 +43,7 @@ export async function normalizeThemeGroups(
     ]
   });
   return validateMappings(
-    requireStructuredOutput(message, "Theme normalization"),
+    parseStructuredOutput(message, "Theme normalization"),
     {
     model,
     promptVersion,

@@ -8,7 +8,7 @@ import type {
 } from "@market-themes/db";
 import {
   narrativeClassificationOutputFormat,
-  requireStructuredOutput
+  parseStructuredOutput
 } from "./structured-output";
 
 export const narrativeClassificationPromptVersion = "narrative_classification_v5";
@@ -43,7 +43,7 @@ export async function classifyDocumentNarratives(
     narrativeClassificationPromptVersion;
   const client = new Anthropic({ apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY });
   const sourceText = document.text.slice(0, options.maxDocumentChars ?? 120_000);
-  const message = await client.messages.parse(
+  const message = await client.messages.create(
     {
       model,
       max_tokens: 8_000,
@@ -107,7 +107,10 @@ Stance is risk, bullish, mixed, or neutral.`,
     },
     options.signal ? { signal: options.signal } : undefined
   );
-  const parsed = requireStructuredOutput(message, "Narrative classification");
+  const parsed = parseStructuredOutput<{ observations: RawObservation[] }>(
+    message,
+    "Narrative classification"
+  );
   const byDefinition = new Map(
     (parsed.observations as RawObservation[]).map((observation) => [
       observation.narrativeDefinitionId,

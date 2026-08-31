@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   narrativeClassificationOutputFormat,
   narrativeDiscoveryOutputFormat,
-  requireStructuredOutput,
+  parseStructuredOutput,
   signalExtractionOutputFormat,
   themeNormalizationOutputFormat
 } from "./structured-output";
@@ -32,31 +32,68 @@ test("all analysis outputs use strict top-level JSON schemas", () => {
       "object",
       name
     );
+    const collection = schema.properties?.[requiredProperty] as
+      | { items?: { additionalProperties?: unknown; required?: unknown } }
+      | undefined;
+    assert.equal(collection?.items?.additionalProperties, false, name);
+    assert.ok(
+      Array.isArray(collection?.items?.required) &&
+        collection.items.required.length > 0,
+      name
+    );
   }
 });
 
 test("structured output rejects refusals, truncation, and absent payloads", () => {
   assert.deepEqual(
-    requireStructuredOutput(
-      { parsed_output: { signals: [] }, stop_reason: "end_turn" },
+    parseStructuredOutput(
+      {
+        content: [{ type: "text", text: '{"signals":[]}' }],
+        stop_reason: "end_turn"
+      },
       "test extraction"
     ),
     { signals: [] }
   );
   assert.throws(
     () =>
-      requireStructuredOutput(
-        { parsed_output: { signals: [] }, stop_reason: "max_tokens" },
+      parseStructuredOutput(
+        {
+          content: [{ type: "text", text: '{"signals":[' }],
+          stop_reason: "max_tokens"
+        },
         "test extraction"
       ),
     /max_tokens/
   );
   assert.throws(
     () =>
-      requireStructuredOutput(
-        { parsed_output: null, stop_reason: "end_turn" },
+      parseStructuredOutput(
+        { content: [], stop_reason: "end_turn" },
         "test extraction"
       ),
     /no structured output/
+  );
+  assert.throws(
+    () =>
+      parseStructuredOutput(
+        {
+          content: [{ type: "text", text: "I cannot comply." }],
+          stop_reason: "refusal"
+        },
+        "test extraction"
+      ),
+    /refusal/
+  );
+  assert.throws(
+    () =>
+      parseStructuredOutput(
+        {
+          content: [{ type: "text", text: '{"signals":[}' }],
+          stop_reason: "end_turn"
+        },
+        "test extraction"
+      ),
+    /invalid structured output/
   );
 });

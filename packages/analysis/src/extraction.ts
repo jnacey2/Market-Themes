@@ -6,7 +6,7 @@ import {
   signalExtractionSystemPrompt
 } from "./prompts";
 import {
-  requireStructuredOutput,
+  parseStructuredOutput,
   signalExtractionOutputFormat
 } from "./structured-output";
 
@@ -72,7 +72,7 @@ async function extractSignalsFromText(
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.parse(
+  const message = await client.messages.create(
     {
       model: options.model,
       max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -87,7 +87,7 @@ async function extractSignalsFromText(
     },
     options.signal ? { signal: options.signal } : undefined
   );
-  const parsed = requireStructuredOutput(message, "Claude extraction");
+  const parsed = parseStructuredOutput(message, "Claude extraction");
   const maxEvidenceChars = options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS;
 
   return validateSignals(parsed, document, section, {

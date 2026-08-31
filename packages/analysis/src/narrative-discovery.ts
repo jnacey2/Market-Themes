@@ -13,7 +13,7 @@ import {
 } from "./prompts";
 import {
   narrativeDiscoveryOutputFormat,
-  requireStructuredOutput
+  parseStructuredOutput
 } from "./structured-output";
 
 export const narrativeCandidateAnalysisType = "narrative_candidate_discovery";
@@ -62,7 +62,7 @@ export async function discoverNarrativeCandidates(
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.parse(
+  const message = await client.messages.create(
     {
       model,
       max_tokens: options.maxTokens ?? 4_000,
@@ -95,7 +95,7 @@ export async function discoverNarrativeCandidates(
     options.signal ? { signal: options.signal } : undefined
   );
   return normalizeNarrativeDiscoveryResponse(
-    requireStructuredOutput(message, "Narrative discovery"),
+    parseStructuredOutput(message, "Narrative discovery"),
     document,
     trackedNarratives,
     existingCandidates,
