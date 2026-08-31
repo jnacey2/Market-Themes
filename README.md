@@ -40,7 +40,8 @@ mix, and follow-up research questions for a market theme.
 ## What Exists Now
 
 - Render-friendly npm workspace monorepo.
-- Next.js dashboard with storyboard cards and detail pages.
+- Next.js dashboard ranked from reviewed narrative trends, with storyboard cards
+  and detail pages.
 - Mock data shaped like production objects.
 - Postgres schema for sources, documents, chunks, entities, themes, signals,
   trends, storyboards, briefs, and alerts.

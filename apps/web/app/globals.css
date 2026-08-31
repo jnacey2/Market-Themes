@@ -910,6 +910,7 @@ h3 {
   .grid.two,
   .grid.three,
   .grid.four,
+  .metric-row,
   .storyboard-card {
     grid-template-columns: 1fr;
   }
