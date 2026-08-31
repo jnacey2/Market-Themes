@@ -810,21 +810,6 @@ async function startDiscoveryRun(documentId: string) {
   });
 }
 
-async function completeClaims(
-  documents: Array<{
-    analysisRunId: string;
-    attemptToken: string;
-  }>
-) {
-  await Promise.all(
-    documents.map((document) =>
-      completeNarrativeDiscoveryRun(document.analysisRunId, [], {
-        attemptToken: document.attemptToken
-      })
-    )
-  );
-}
-
 function candidateFixture({
   candidateId,
   clusterKey,
