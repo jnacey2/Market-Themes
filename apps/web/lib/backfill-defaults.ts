@@ -8,16 +8,21 @@ export const CONTROLLED_BACKFILL_DEFAULTS = {
 } as const;
 
 export function controlledBackfillOptions(body: Record<string, unknown>) {
+  const batchSize = boundedPositiveInteger(
+    body.batchSize,
+    CONTROLLED_BACKFILL_DEFAULTS.batchSize,
+    25
+  );
+  const requestedBatches = boundedPositiveInteger(
+    body.maxBatches,
+    CONTROLLED_BACKFILL_DEFAULTS.maxBatches,
+    40
+  );
   return {
-    batchSize: boundedPositiveInteger(
-      body.batchSize,
-      CONTROLLED_BACKFILL_DEFAULTS.batchSize,
-      25
-    ),
-    maxBatches: boundedPositiveInteger(
-      body.maxBatches,
-      CONTROLLED_BACKFILL_DEFAULTS.maxBatches,
-      40
+    batchSize,
+    maxBatches: Math.min(
+      requestedBatches,
+      Math.max(1, Math.floor(100 / batchSize))
     ),
     concurrency: boundedPositiveInteger(
       body.concurrency,

@@ -47,22 +47,24 @@ test("explicit positive backfill limits remain supported", () => {
 });
 
 test("backfill API limits cannot exceed operational safety ceilings", () => {
-  assert.deepEqual(
-    controlledBackfillOptions({
+  const options = controlledBackfillOptions({
       batchSize: 10_000,
       maxBatches: 10_000,
       concurrency: 100,
       documentTimeoutMs: 9_000_000,
       staleAfterMinutes: 10_000,
       lookbackDays: 10_000
-    }),
+    });
+  assert.deepEqual(
+    options,
     {
       batchSize: 25,
-      maxBatches: 40,
+      maxBatches: 4,
       concurrency: 4,
       documentTimeoutMs: 600_000,
       staleAfterMinutes: 240,
       lookbackDays: 365
     }
   );
+  assert.ok(options.batchSize * options.maxBatches <= 100);
 });

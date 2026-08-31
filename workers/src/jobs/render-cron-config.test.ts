@@ -50,6 +50,10 @@ test("extracts a bounded recent-document batch every hour", () => {
   );
   assert.match(
     extraction,
+    /key: CLAUDE_EXTRACTION_MAX_DOCUMENTS\s+value: "100"/
+  );
+  assert.match(
+    extraction,
     /key: CLAUDE_EXTRACTION_CONCURRENCY\s+value: "2"/
   );
   assert.match(

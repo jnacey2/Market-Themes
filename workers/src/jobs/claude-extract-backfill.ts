@@ -22,6 +22,7 @@ import { runRecordedJob } from "./recorded-job";
 type ClaudeBackfillOptions = {
   batchSize: number;
   maxBatches: number;
+  maxDocuments?: number;
   concurrency: number;
   documentTimeoutMs: number;
   maxRuntimeMs: number;
@@ -45,6 +46,10 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
     const result = await runClaudeExtractionBackfill({
       batchSize: job.batchSize,
       maxBatches: job.maxBatches,
+      maxDocuments: Math.max(
+        0,
+        job.batchSize * job.maxBatches - job.selectedDocuments
+      ),
       concurrency: job.concurrency,
       documentTimeoutMs: job.documentTimeoutMs,
       maxRuntimeMs: Number(
@@ -69,6 +74,15 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
         status: "queued",
         currentDocumentIds: [],
         lastMessage: "Another extraction run is active; this job will retry."
+      });
+      return;
+    }
+    if (result.stopReason === "runtime_reached") {
+      await updateBackfillJobProgress(job.id, {
+        status: "queued",
+        currentDocumentIds: [],
+        lastMessage:
+          "Runtime budget reached; queued to continue the remaining document limit."
       });
       return;
     }
@@ -174,7 +188,13 @@ async function executeClaudeExtractionBackfill(options: ClaudeBackfillOptions) {
   let stopRequested = false;
   const startedAt = Date.now();
   const selectedDocumentIds = new Set<string>();
-  const documentBudget = options.batchSize * options.maxBatches;
+  const documentBudget = Math.max(
+    0,
+    Math.min(
+      options.batchSize * options.maxBatches,
+      options.maxDocuments ?? options.batchSize * options.maxBatches
+    )
+  );
   let selectionRound = 0;
   let stopReason:
     | "backlog_empty"
@@ -462,6 +482,7 @@ function defaultBackfillOptions(): ClaudeBackfillOptions {
     promptVersion: process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion,
     batchSize: Number(process.env.CLAUDE_EXTRACTION_BATCH_SIZE ?? 25),
     maxBatches: Number(process.env.CLAUDE_EXTRACTION_MAX_BATCHES ?? 1),
+    maxDocuments: Number(process.env.CLAUDE_EXTRACTION_MAX_DOCUMENTS ?? 100),
     concurrency: Number(process.env.CLAUDE_EXTRACTION_CONCURRENCY ?? 2),
     documentTimeoutMs: Number(process.env.CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS ?? 600_000),
     maxRuntimeMs: Number(process.env.CLAUDE_EXTRACTION_MAX_RUNTIME_MS ?? 3_000_000),
