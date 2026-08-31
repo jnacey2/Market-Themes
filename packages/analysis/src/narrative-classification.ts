@@ -6,6 +6,10 @@ import type {
   NarrativeObservationInput,
   ToneDirection
 } from "@market-themes/db";
+import {
+  narrativeClassificationOutputFormat,
+  requireStructuredOutput
+} from "./structured-output";
 
 export const narrativeClassificationPromptVersion = "narrative_classification_v5";
 
@@ -39,7 +43,7 @@ export async function classifyDocumentNarratives(
     narrativeClassificationPromptVersion;
   const client = new Anthropic({ apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY });
   const sourceText = document.text.slice(0, options.maxDocumentChars ?? 120_000);
-  const message = await client.messages.create(
+  const message = await client.messages.parse(
     {
       model,
       max_tokens: 8_000,
@@ -61,6 +65,7 @@ For matched=false use matchScore 0-69 and empty evidenceSnippet.
 For matched=true use matchScore 70-100 and copy evidenceSnippet exactly from the source.
 When uncertain, return matched=false. Do not make trade recommendations.
 Stance is risk, bullish, mixed, or neutral.`,
+      output_config: { format: narrativeClassificationOutputFormat },
       messages: [
         {
           role: "user",
@@ -102,17 +107,9 @@ Stance is risk, bullish, mixed, or neutral.`,
     },
     options.signal ? { signal: options.signal } : undefined
   );
-  const response = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-  const parsed = JSON.parse(response) as { observations?: RawObservation[] };
+  const parsed = requireStructuredOutput(message, "Narrative classification");
   const byDefinition = new Map(
-    (parsed.observations ?? []).map((observation) => [
+    (parsed.observations as RawObservation[]).map((observation) => [
       observation.narrativeDefinitionId,
       observation
     ])

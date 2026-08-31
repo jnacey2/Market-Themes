@@ -23,3 +23,15 @@ test("Anthropic request bodies omit deprecated temperature sampling", () => {
     );
   }
 });
+
+test("every Anthropic analysis request uses schema-constrained output", () => {
+  for (const moduleName of requestModules) {
+    const source = readFileSync(
+      fileURLToPath(new URL(moduleName, import.meta.url)),
+      "utf8"
+    );
+    assert.match(source, /messages\.parse\(/, moduleName);
+    assert.match(source, /output_config:\s*\{\s*format:/, moduleName);
+    assert.doesNotMatch(source, /messages\.create\(/, moduleName);
+  }
+});

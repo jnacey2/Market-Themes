@@ -5,6 +5,10 @@ import {
   signalExtractionPromptVersion,
   signalExtractionSystemPrompt
 } from "./prompts";
+import {
+  requireStructuredOutput,
+  signalExtractionOutputFormat
+} from "./structured-output";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TOKENS = 8_000;
@@ -24,6 +28,7 @@ export type ExtractSignalsOptions = {
   sectionChars?: number;
   sectionOverlap?: number;
   maxEvidenceChars?: number;
+  signal?: AbortSignal;
 };
 
 export async function extractSignalsFromDocument(
@@ -67,23 +72,22 @@ async function extractSignalsFromText(
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.create({
-    model: options.model,
-    max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-    system: signalExtractionSystemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: buildUserPrompt(document, section)
-      }
-    ]
-  });
-  const responseText = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
-  const parsed = parseClaudeJson(responseText);
+  const message = await client.messages.parse(
+    {
+      model: options.model,
+      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      system: signalExtractionSystemPrompt,
+      output_config: { format: signalExtractionOutputFormat },
+      messages: [
+        {
+          role: "user",
+          content: buildUserPrompt(document, section)
+        }
+      ]
+    },
+    options.signal ? { signal: options.signal } : undefined
+  );
+  const parsed = requireStructuredOutput(message, "Claude extraction");
   const maxEvidenceChars = options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS;
 
   return validateSignals(parsed, document, section, {
@@ -118,24 +122,6 @@ function buildUserPrompt(
     null,
     2
   );
-}
-
-function parseClaudeJson(responseText: string): unknown {
-  const trimmed = responseText
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-
-  try {
-    return JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(
-      `Claude extraction returned invalid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
 }
 
 function validateSignals(

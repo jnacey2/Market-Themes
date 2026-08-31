@@ -5,6 +5,10 @@ import {
   themeNormalizationPromptVersion,
   themeNormalizationSystemPrompt
 } from "./prompts";
+import {
+  requireStructuredOutput,
+  themeNormalizationOutputFormat
+} from "./structured-output";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TOKENS = 12_000;
@@ -26,10 +30,11 @@ export async function normalizeThemeGroups(
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.create({
+  const message = await client.messages.parse({
     model,
     max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
     system: themeNormalizationSystemPrompt,
+    output_config: { format: themeNormalizationOutputFormat },
     messages: [
       {
         role: "user",
@@ -37,40 +42,19 @@ export async function normalizeThemeGroups(
       }
     ]
   });
-  const responseText = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
-
-  return validateMappings(parseJson(responseText), {
+  return validateMappings(
+    requireStructuredOutput(message, "Theme normalization"),
+    {
     model,
     promptVersion,
     inputThemeIds: new Set(groups.map((group) => group.themeId))
-  });
+    }
+  );
 }
 
 export function normalizedThemeId(level: "market" | "sector", label: string, sector?: string | null) {
   const suffix = sector ? `${sector}:${label}` : label;
   return `theme:${level}:${slugify(suffix)}`;
-}
-
-function parseJson(responseText: string): unknown {
-  const trimmed = responseText
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-
-  try {
-    return JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(
-      `Theme normalization returned invalid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
 }
 
 function validateMappings(
@@ -98,7 +82,7 @@ function validateMappings(
       index,
       "marketThemeDescription"
     );
-    const sector = requiredString(candidate.sector, index, "sector");
+    const sector = sectorFor(candidate.sector);
     const mappedThemeIds = stringArray(candidate.mappedThemeIds).filter((themeId) =>
       options.inputThemeIds.has(themeId)
     );
@@ -184,6 +168,28 @@ function confidenceLabelFor(value: unknown, confidence: number): "high" | "mediu
   }
 
   return "low";
+}
+
+function sectorFor(value: unknown) {
+  const sector = typeof value === "string" ? value.trim() : "";
+  return [
+    "Technology",
+    "Communication Services",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Health Care",
+    "Financials",
+    "Industrials",
+    "Energy",
+    "Materials",
+    "Utilities",
+    "Real Estate",
+    "Macro",
+    "Cross-sector",
+    "Other"
+  ].includes(sector)
+    ? sector
+    : "Other";
 }
 
 function mappingId(themeIds: string[], promptVersion: string) {

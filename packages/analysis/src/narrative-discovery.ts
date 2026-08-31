@@ -11,6 +11,10 @@ import {
   narrativeDiscoveryPromptVersion,
   narrativeDiscoverySystemPrompt
 } from "./prompts";
+import {
+  narrativeDiscoveryOutputFormat,
+  requireStructuredOutput
+} from "./structured-output";
 
 export const narrativeCandidateAnalysisType = "narrative_candidate_discovery";
 
@@ -58,11 +62,12 @@ export async function discoverNarrativeCandidates(
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.create(
+  const message = await client.messages.parse(
     {
       model,
       max_tokens: options.maxTokens ?? 4_000,
       system: narrativeDiscoverySystemPrompt,
+      output_config: { format: narrativeDiscoveryOutputFormat },
       messages: [
         {
           role: "user",
@@ -89,13 +94,8 @@ export async function discoverNarrativeCandidates(
     },
     options.signal ? { signal: options.signal } : undefined
   );
-  const response = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
-
   return normalizeNarrativeDiscoveryResponse(
-    parseJsonResponse(response),
+    requireStructuredOutput(message, "Narrative discovery"),
     document,
     trackedNarratives,
     existingCandidates,
@@ -231,7 +231,7 @@ function normalizeCandidate(
     clusterKey,
     name,
     proposition,
-    category: cleanString(raw.category, 60) || "Other",
+    category: candidateCategory(raw.category),
     inclusionGuidance:
       cleanString(raw.inclusionGuidance, 500) ||
       `Include direct evidence supporting: ${proposition}`,
@@ -263,23 +263,6 @@ function normalizeCandidate(
   };
 }
 
-function parseJsonResponse(response: string) {
-  const trimmed = response
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(
-      `Claude narrative discovery returned invalid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-}
-
 function cleanString(value: unknown, maxLength: number) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
@@ -302,6 +285,23 @@ function tone(value: unknown): ToneDirection {
   return ["risk", "bullish", "mixed", "neutral"].includes(String(value))
     ? (value as ToneDirection)
     : "neutral";
+}
+
+function candidateCategory(value: unknown) {
+  const category = cleanString(value, 60);
+  return [
+    "Technology",
+    "Consumer",
+    "Credit",
+    "Financials",
+    "Energy",
+    "Capital Markets",
+    "Cross-sector",
+    "Macro",
+    "Other"
+  ].includes(category)
+    ? category
+    : "Other";
 }
 
 function containsSnippet(text: string, snippet: string) {

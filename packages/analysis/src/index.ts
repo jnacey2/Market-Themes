@@ -3,4 +3,5 @@ export * from "./narrative-classification";
 export * from "./narrative-discovery";
 export * from "./prompts";
 export * from "./scoring";
+export * from "./structured-output";
 export * from "./theme-normalization";
