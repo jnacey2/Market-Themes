@@ -698,13 +698,14 @@ export async function getNarrativeCandidateQueue(
          join documents d on d.id = ce.document_id
          where nc.prompt_version = $1 and nc.status = 'pending'
            and d.published_at >= now() - ($4::text || ' days')::interval
+           and d.published_at <= now()
          group by nc.id
          having count(distinct ce.document_id) >= $2
-            and count(distinct lower(btrim(coalesce(
-              nullif(d.publisher_owner, ''),
-              nullif(d.publisher_id, ''),
-              d.publisher
-            )))) >= $3
+            and count(distinct coalesce(
+              nullif(lower(btrim(d.publisher_owner)), ''),
+              nullif(lower(btrim(d.publisher_id)), ''),
+              nullif(lower(btrim(d.publisher)), '')
+            )) >= $3
        ) qualified`,
       [
         promptVersion,
@@ -717,14 +718,15 @@ export async function getNarrativeCandidateQueue(
       `with recent_breadth as (
          select ce.candidate_id,
                 count(distinct ce.document_id) as document_breadth,
-                count(distinct lower(btrim(coalesce(
-                  nullif(d.publisher_owner, ''),
-                  nullif(d.publisher_id, ''),
-                  d.publisher
-                )))) as publisher_owner_breadth
+                count(distinct coalesce(
+                  nullif(lower(btrim(d.publisher_owner)), ''),
+                  nullif(lower(btrim(d.publisher_id)), ''),
+                  nullif(lower(btrim(d.publisher)), '')
+                )) as publisher_owner_breadth
          from narrative_candidate_evidence ce
          join documents d on d.id = ce.document_id
          where d.published_at >= now() - ($2::text || ' days')::interval
+           and d.published_at <= now()
          group by ce.candidate_id
        )
        select nc.id, nc.cluster_key, nc.name, nc.proposition, nc.category,
@@ -760,8 +762,13 @@ export async function getNarrativeCandidateQueue(
       : await client.query<CandidateEvidenceRow>(
           `select ce.id, ce.candidate_id, ce.document_id,
                   d.title, d.publisher,
-                  coalesce(nullif(d.publisher_id, ''), d.publisher) as publisher_id,
-                  coalesce(nullif(d.publisher_owner, ''), nullif(d.publisher_id, ''), d.publisher)
+                  coalesce(nullif(btrim(d.publisher_id), ''), btrim(d.publisher))
+                    as publisher_id,
+                  coalesce(
+                    nullif(btrim(d.publisher_owner), ''),
+                    nullif(btrim(d.publisher_id), ''),
+                    btrim(d.publisher)
+                  )
                     as publisher_owner,
                   d.source_class, d.published_at::text, d.url,
                   ce.evidence_snippet, ce.interpretation, ce.stance,
@@ -1328,6 +1335,7 @@ export async function promoteNarrativeCandidate(
     }));
     const reviewMetadata = {
       ...(input.reviewMetadata ?? {}),
+      ...(automaticPolicy ? { automaticPolicy } : {}),
       promotedDefinitionId: definitionId,
       qualifyingEvidence
     };

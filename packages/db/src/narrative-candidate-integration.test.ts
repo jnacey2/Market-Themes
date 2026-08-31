@@ -429,6 +429,7 @@ test(
     assert.equal(promoted?.status, "approved");
     assert.equal(weak?.status, "pending");
     assert.equal(sameOwner?.status, "pending");
+    assert.equal(sameOwner?.qualified, false);
     assert.equal(stale?.status, "pending");
 
     await recomputeNarrativeTrends({
@@ -475,6 +476,8 @@ test(
               where actor_type = 'automatic'
                 and metadata->>'candidateId' = $2
                 and metadata->'reviewProvenance'->>'promotedDefinitionId' = $1
+                and metadata->'reviewProvenance'->'automaticPolicy'
+                      ->>'minimumDocuments' = '3'
                 and jsonb_array_length(
                   metadata->'reviewProvenance'->'qualifyingEvidence'
                 ) = 3) as complete_audit_count`,
@@ -715,7 +718,26 @@ test(
     const initialClaims = await claimDocumentsForNarrativeDiscovery(claimOptions);
     const initial = initialClaims.find((document) => document.id === documentId);
     assert(initial);
-    await completeClaims(initialClaims);
+    const refreshedCandidateId = `narrative:candidate:refreshed:${suffix}`;
+    await Promise.all(
+      initialClaims.map((document) =>
+        completeNarrativeDiscoveryRun(
+          document.analysisRunId,
+          document.id === documentId
+            ? [
+                candidateFixture({
+                  candidateId: refreshedCandidateId,
+                  clusterKey: `refreshed-evidence-${suffix}`,
+                  documentId,
+                  quote: "The initial preview did not include the full market argument.",
+                  textHash: document.textHash
+                })
+              ]
+            : [],
+          { attemptToken: document.attemptToken }
+        )
+      )
+    );
 
     const updatedText =
       "The full article reports that enterprises are consolidating software vendors.";
@@ -741,7 +763,42 @@ test(
     assert(refreshed);
     assert.notEqual(refreshed.attemptToken, initial.attemptToken);
     assert.equal(refreshed.text, updatedText);
-    await completeClaims(refreshedClaims);
+    await Promise.all(
+      refreshedClaims.map((document) =>
+        completeNarrativeDiscoveryRun(
+          document.analysisRunId,
+          document.id === documentId
+            ? [
+                candidateFixture({
+                  candidateId: refreshedCandidateId,
+                  clusterKey: `refreshed-evidence-${suffix}`,
+                  documentId,
+                  quote: updatedText,
+                  textHash: document.textHash
+                })
+              ]
+            : [],
+          { attemptToken: document.attemptToken }
+        )
+      )
+    );
+    const evidenceClient = createDatabaseClient();
+    await evidenceClient.connect();
+    try {
+      const evidence = await evidenceClient.query<{
+        evidence_snippet: string;
+        text_hash: string;
+      }>(
+        `select evidence_snippet, metadata->>'textHash' as text_hash
+         from narrative_candidate_evidence
+         where candidate_id = $1 and document_id = $2`,
+        [refreshedCandidateId, documentId]
+      );
+      assert.equal(evidence.rows[0].evidence_snippet, updatedText);
+      assert.equal(evidence.rows[0].text_hash, refreshed.textHash);
+    } finally {
+      await evidenceClient.end();
+    }
   }
 );
 

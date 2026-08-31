@@ -41,7 +41,8 @@ export async function autoReviewNarratives() {
   console.log(`[auto-review-narratives] ${JSON.stringify(summary)}`);
   if (
     summary.failedCandidatePromotions.length > 0 &&
-    summary.candidatesPromoted === 0
+    summary.candidatesPromoted === 0 &&
+    summary.approvedObservations === 0
   ) {
     throw new Error(
       `${summary.failedCandidatePromotions.length} automatic candidate promotion(s) failed.`
