@@ -70,7 +70,6 @@ async function extractSignalsFromText(
   const message = await client.messages.create({
     model: options.model,
     max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-    temperature: 0,
     system: signalExtractionSystemPrompt,
     messages: [
       {
