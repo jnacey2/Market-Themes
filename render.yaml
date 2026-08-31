@@ -471,6 +471,8 @@ services:
         value: claude-sonnet-4-5-20250929
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
         value: narrative_classification_v5
+      - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
+        value: narrative_discovery_v1
       - key: NARRATIVE_AUTO_REVIEW_ENABLED
         value: "true"
       - key: NARRATIVE_AUTO_REVIEW_MIN_SCORE
@@ -483,6 +485,18 @@ services:
         value: "7"
       - key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS
         value: youtube,youtube-com,youtube.com,youtu.be
+      - key: NARRATIVE_AUTO_PROMOTE_CANDIDATES
+        value: "true"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_SCORE
+        value: "90"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_DOCUMENTS
+        value: "3"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_PUBLISHER_OWNERS
+        value: "3"
+      - key: NARRATIVE_AUTO_PROMOTE_LOOKBACK_DAYS
+        value: "7"
+      - key: NARRATIVE_AUTO_PROMOTE_MAX_CANDIDATES
+        value: "5"
 
   - type: cron
     name: recompute-narrative-trends

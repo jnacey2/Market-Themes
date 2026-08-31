@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import {
+  autoPromoteNarrativeCandidates,
   claimDocumentsForNarrativeDiscovery,
   completeNarrativeDiscoveryRun,
   createDatabaseClient,
   getNarrativeBoardStatus,
   getNarrativeCandidateQueue,
+  getNarrativeReviewQueue,
   getOperationsStatus,
   mergeNarrativeCandidate,
   persistDocuments,
+  persistNarrativeObservations,
   promoteNarrativeCandidate,
   recomputeNarrativeTrends,
   startDocumentAnalysisRun,
@@ -172,6 +175,336 @@ test(
     assert.equal(newsTelemetry.narrativeDiscoveryBacklog, 0);
     assert.equal(newsTelemetry.matchedApproved >= 1, true);
     assert.equal(newsTelemetry.narrativeClassificationBacklog >= 1, true);
+  }
+);
+
+test(
+  "auto-promotes only strongly corroborated candidate evidence",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const suffix = randomUUID();
+    context.after(() => cleanupCandidateFixtures(suffix));
+    const candidateId = `narrative:candidate:auto:${suffix}`;
+    const clusterKey = `autonomous-software-consolidation-${suffix}`;
+    const evidence = [
+      {
+        id: `candidate:auto:news:${suffix}`,
+        sourceId: `candidate-auto-news:${suffix}`,
+        sourceClass: "newspaper" as const,
+        publisher: "Auto Publisher A",
+        publisherOwner: `auto-owner-a:${suffix}`,
+        quote: "Enterprises are retiring overlapping software tools to reduce costs."
+      },
+      {
+        id: `candidate:auto:filing:${suffix}`,
+        sourceId: `candidate-auto-filing:${suffix}`,
+        sourceClass: "filing" as const,
+        publisher: "Auto Publisher B",
+        publisherOwner: `auto-owner-b:${suffix}`,
+        quote: "Customers are consolidating application portfolios onto fewer platforms."
+      },
+      {
+        id: `candidate:auto:transcript:${suffix}`,
+        sourceId: `candidate-auto-transcript:${suffix}`,
+        sourceClass: "transcript" as const,
+        publisher: "Auto Publisher C",
+        publisherOwner: `auto-owner-c:${suffix}`,
+        quote: "Technology budgets are shifting from point products to integrated suites."
+      },
+      {
+        id: `candidate:auto:low-score:${suffix}`,
+        sourceId: `candidate-auto-low:${suffix}`,
+        sourceClass: "newspaper" as const,
+        publisher: "Auto Publisher D",
+        publisherOwner: `auto-owner-d:${suffix}`,
+        quote: "A fourth source discussed software consolidation with lower confidence.",
+        matchScore: 85
+      }
+    ];
+    for (const item of evidence) {
+      await persistFixtureDocument({
+        id: item.id,
+        suffix,
+        sourceId: item.sourceId,
+        sourceClass: item.sourceClass,
+        publisher: item.publisher,
+        publisherOwner: item.publisherOwner,
+        quote: item.quote,
+        publishedAt: new Date().toISOString()
+      });
+      await completeNarrativeDiscoveryRun(
+        await startDiscoveryRun(item.id),
+        [
+          candidateFixture({
+            candidateId,
+            clusterKey,
+            documentId: item.id,
+            quote: item.quote,
+            matchScore: item.matchScore,
+            textHash: fixtureTextHash(item.quote, suffix)
+          })
+        ]
+      );
+    }
+
+    const weakCandidateId = `narrative:candidate:auto-weak:${suffix}`;
+    for (const index of [1, 2, 3]) {
+      const documentId = `candidate:auto:weak-${index}:${suffix}`;
+      const quote = `Weak candidate evidence ${index} has only two independent sources.`;
+      await persistFixtureDocument({
+        id: documentId,
+        suffix,
+        sourceId: `candidate-auto-weak-${index}:${suffix}`,
+        sourceClass: "newspaper",
+        publisher: `Weak Publisher ${index}`,
+        publisherOwner: `weak-owner-${index}:${suffix}`,
+        quote,
+        publishedAt: new Date().toISOString(),
+        metadata: index === 3 ? { content: "preview" } : {}
+      });
+      await completeNarrativeDiscoveryRun(
+        await startDiscoveryRun(documentId),
+        [
+          candidateFixture({
+            candidateId: weakCandidateId,
+            clusterKey: `weak-autonomous-candidate-${suffix}`,
+            documentId,
+            quote,
+            textHash: fixtureTextHash(quote, suffix)
+          })
+        ]
+      );
+    }
+
+    const sameOwnerCandidateId = `narrative:candidate:auto-same-owner:${suffix}`;
+    const ownerVariants = [
+      `Shared Owner ${suffix}`,
+      ` shared owner ${suffix} `,
+      `SHARED OWNER ${suffix}`
+    ];
+    for (const [index, publisherOwner] of ownerVariants.entries()) {
+      const documentId = `candidate:auto:same-owner-${index}:${suffix}`;
+      const quote = `Same-owner candidate evidence ${index} must not inflate breadth.`;
+      await persistFixtureDocument({
+        id: documentId,
+        suffix,
+        sourceId: `candidate-auto-same-owner-${index}:${suffix}`,
+        sourceClass: "newspaper",
+        publisher: `Same Owner Publisher ${index}`,
+        publisherOwner,
+        quote,
+        publishedAt: new Date().toISOString()
+      });
+      await completeNarrativeDiscoveryRun(
+        await startDiscoveryRun(documentId),
+        [
+          candidateFixture({
+            candidateId: sameOwnerCandidateId,
+            clusterKey: `same-owner-autonomous-candidate-${suffix}`,
+            documentId,
+            quote,
+            textHash: fixtureTextHash(quote, suffix)
+          })
+        ]
+      );
+    }
+
+    const staleCandidateId = `narrative:candidate:auto-stale:${suffix}`;
+    const staleDocumentIds: string[] = [];
+    for (const index of [1, 2, 3]) {
+      const documentId = `candidate:auto:stale-${index}:${suffix}`;
+      const quote = `Stale-text candidate evidence ${index} initially supports the proposition.`;
+      staleDocumentIds.push(documentId);
+      await persistFixtureDocument({
+        id: documentId,
+        suffix,
+        sourceId: `candidate-auto-stale-${index}:${suffix}`,
+        sourceClass: "newspaper",
+        publisher: `Stale Publisher ${index}`,
+        publisherOwner: `stale-owner-${index}:${suffix}`,
+        quote,
+        publishedAt: new Date().toISOString()
+      });
+      await completeNarrativeDiscoveryRun(
+        await startDiscoveryRun(documentId),
+        [
+          candidateFixture({
+            candidateId: staleCandidateId,
+            clusterKey: `stale-autonomous-candidate-${suffix}`,
+            documentId,
+            quote,
+            textHash: fixtureTextHash(quote, suffix)
+          })
+        ]
+      );
+    }
+    const staleText = "The upgraded source no longer contains the prior evidence.";
+    const staleClient = createDatabaseClient();
+    await staleClient.connect();
+    try {
+      await staleClient.query(
+        `update document_texts
+         set content = $2, content_hash = $3, updated_at = now()
+         where document_id = $1`,
+        [
+          staleDocumentIds[2],
+          staleText,
+          createHash("sha256").update(staleText).digest("hex")
+        ]
+      );
+    } finally {
+      await staleClient.end();
+    }
+
+    const autoClassificationPrompt = `integration-auto-promotion:${suffix}`;
+    const result = await autoPromoteNarrativeCandidates({
+      discoveryPromptVersion,
+      classificationModel: model,
+      classificationPromptVersion: autoClassificationPrompt,
+      minimumMatchScore: 90,
+      minimumDocuments: 3,
+      minimumPublisherOwners: 3,
+      evidenceWindowDays: 7,
+      excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"],
+      limit: 5
+    });
+    assert.equal(result.candidatesEvaluated, 1);
+    assert.equal(result.candidatesPromoted, 1);
+    assert.equal(result.observationsCreated, 3);
+    assert.equal(result.failedCandidates.length, 0);
+    await assert.rejects(
+      () =>
+        promoteNarrativeCandidate({
+          id: weakCandidateId,
+          classificationModel: model,
+          classificationPromptVersion: autoClassificationPrompt,
+          minimumDocuments: 1,
+          minimumPublisherOwners: 1,
+          evidenceWindowDays: 7,
+          reviewActorType: "automatic",
+          automaticPolicy: {
+            minimumMatchScore: 0,
+            minimumDocuments: 1,
+            minimumPublisherOwners: 1,
+            evidenceWindowDays: 7,
+            excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"]
+          }
+        }),
+      /independent publisher groups/
+    );
+    await assert.rejects(
+      () =>
+        promoteNarrativeCandidate({
+          id: staleCandidateId,
+          classificationModel: model,
+          classificationPromptVersion: autoClassificationPrompt,
+          reviewActorType: "automatic",
+          automaticPolicy: {
+            minimumMatchScore: 90,
+            minimumDocuments: 3,
+            minimumPublisherOwners: 3,
+            evidenceWindowDays: 7,
+            excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"]
+          }
+        }),
+      /independent publisher groups/
+    );
+
+    const queue = await getNarrativeCandidateQueue(
+      process.env.DATABASE_URL,
+      discoveryPromptVersion
+    );
+    const promoted = queue.candidates.find(
+      (candidate) => candidate.id === candidateId
+    );
+    const weak = queue.candidates.find(
+      (candidate) => candidate.id === weakCandidateId
+    );
+    const sameOwner = queue.candidates.find(
+      (candidate) => candidate.id === sameOwnerCandidateId
+    );
+    const stale = queue.candidates.find(
+      (candidate) => candidate.id === staleCandidateId
+    );
+    assert.equal(promoted?.status, "approved");
+    assert.equal(weak?.status, "pending");
+    assert.equal(sameOwner?.status, "pending");
+    assert.equal(stale?.status, "pending");
+
+    await recomputeNarrativeTrends({
+      asOfDate: "2026-08-31",
+      lookbackDays: 10,
+      lowHistoryDays: 2,
+      promptVersion: autoClassificationPrompt
+    });
+    const board = await getNarrativeBoardStatus(
+      process.env.DATABASE_URL,
+      autoClassificationPrompt
+    );
+    const narrative = board.narratives.find(
+      (item) => item.id === result.promotedDefinitionIds[0]
+    );
+    assert.equal(narrative?.matchedDocuments, 3);
+    assert.equal(narrative?.publisherOwnerBreadth, 3);
+
+    const client = createDatabaseClient();
+    await client.connect();
+    try {
+      const audit = await client.query<{
+        observation_count: string;
+        event_count: string;
+        automatic_provenance_count: string;
+      }>(
+        `select
+           (select count(*)::text
+              from narrative_observations
+              where narrative_definition_id = $1) as observation_count,
+           (select count(*)::text
+              from narrative_review_events
+              where actor_type = 'automatic'
+                and metadata->>'action' = 'candidate_promotion'
+                and metadata->>'candidateId' = $2) as event_count,
+           (select count(*)::text
+              from narrative_observations
+              where narrative_definition_id = $1
+                and metadata->'reviewProvenance'->>'actorType' = 'automatic')
+             as automatic_provenance_count`,
+        [result.promotedDefinitionIds[0], candidateId]
+      );
+      assert.equal(Number(audit.rows[0].observation_count), 3);
+      assert.equal(Number(audit.rows[0].event_count), 3);
+      assert.equal(Number(audit.rows[0].automatic_provenance_count), 3);
+    } finally {
+      await client.end();
+    }
+
+    await persistNarrativeObservations([
+      {
+        id: `auto-promoted-reclassification:${suffix}`,
+        narrativeDefinitionId: result.promotedDefinitionIds[0],
+        documentId: evidence[0].id,
+        matched: true,
+        matchScore: 70,
+        stance: "risk",
+        riskTone: 60,
+        bullishTone: 0,
+        evidenceSnippet: evidence[0].quote,
+        interpretation: "Reclassified under a later prompt.",
+        affectedEntities: [],
+        model,
+        promptVersion: `${autoClassificationPrompt}:v2`
+      }
+    ]);
+    const inherited = await getNarrativeReviewQueue(
+      process.env.DATABASE_URL,
+      `${autoClassificationPrompt}:v2`
+    );
+    assert.equal(
+      inherited.items.find(
+        (item) => item.id === `auto-promoted-reclassification:${suffix}`
+      )?.reviewStatus,
+      "pending"
+    );
   }
 );
 
@@ -429,12 +762,16 @@ function candidateFixture({
   candidateId,
   clusterKey,
   documentId,
-  quote
+  quote,
+  matchScore = 90,
+  textHash
 }: {
   candidateId: string;
   clusterKey: string;
   documentId: string;
   quote: string;
+  matchScore?: number;
+  textHash?: string;
 }): NarrativeCandidateInput {
   return {
     id: candidateId,
@@ -458,12 +795,17 @@ function candidateFixture({
         riskTone: 65,
         bullishTone: 10,
         affectedEntities: ["Enterprise software"],
-        matchScore: 90,
+        matchScore,
         model,
-        promptVersion: discoveryPromptVersion
+        promptVersion: discoveryPromptVersion,
+        metadata: textHash ? { textHash } : undefined
       }
     ]
   };
+}
+
+function fixtureTextHash(quote: string, suffix: string) {
+  return createHash("sha256").update(`${quote} ${suffix}`).digest("hex");
 }
 
 async function persistFixtureDocument({
@@ -473,7 +815,10 @@ async function persistFixtureDocument({
   sourceClass,
   publisher,
   publisherOwner,
-  quote
+  quote,
+  metadata = {},
+  publishedAt = "2026-08-29T12:00:00.000Z",
+  url
 }: {
   id: string;
   suffix: string;
@@ -482,6 +827,9 @@ async function persistFixtureDocument({
   publisher: string;
   publisherOwner: string;
   quote: string;
+  metadata?: Record<string, unknown>;
+  publishedAt?: string;
+  url?: string;
 }) {
   const result = await persistDocuments([
     {
@@ -492,13 +840,16 @@ async function persistFixtureDocument({
       publisher,
       publisherId: publisher.toLowerCase().replaceAll(" ", "-"),
       publisherOwner,
-      url: `https://example.com/candidates/${suffix}/${encodeURIComponent(id)}`,
-      publishedAt: "2026-08-29T12:00:00.000Z",
+      url:
+        url ??
+        `https://example.com/candidates/${suffix}/${encodeURIComponent(id)}`,
+      publishedAt,
       tickers: [],
       summary: "Candidate narrative integration fixture.",
       body: `${quote} ${suffix}`,
       retrievalMethod: "api",
-      retentionPolicy: "full_text"
+      retentionPolicy: "full_text",
+      metadata
     }
   ]);
   assert.equal(result.insertedDocuments, 1);
@@ -524,6 +875,16 @@ async function cleanupCandidateFixtures(suffix: string) {
       [classificationPromptVersion]
     );
     if (definitionIds.length > 0) {
+      await client.query(
+        `delete from narrative_trends
+         where narrative_definition_id = any($1::text[])`,
+        [definitionIds]
+      );
+      await client.query(
+        `delete from narrative_review_events
+         where metadata->>'candidateId' like $1`,
+        [`%${suffix}`]
+      );
       await client.query(
         `delete from narrative_observations
          where narrative_definition_id = any($1::text[])`,

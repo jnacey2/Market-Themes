@@ -41,8 +41,9 @@ export default async function NarrativeCandidatesPage() {
           <p className="eyebrow">Discovery version</p>
           <h2>{queue.promptVersion}</h2>
           <p>
-            Approval creates a versioned narrative and carries its reviewed
-            evidence into the next trend recompute.
+            Three score-90 documents from three independent publisher groups
+            promote automatically. Two-source candidates remain available for
+            manual review.
           </p>
         </div>
       </section>
