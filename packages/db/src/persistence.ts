@@ -52,6 +52,7 @@ type SelectAnalysisDocumentsOptions = {
   limit?: number;
   lookbackDays?: number;
   excludedSecFilingCategories?: string[];
+  excludedDocumentIds?: string[];
   maxAttempts?: number;
 };
 
@@ -398,6 +399,7 @@ export async function selectDocumentsForAnalysis(
             d.source_id = 'sec-filings'
             and coalesce(d.metadata->>'filingCategory', 'uncategorized') = any($6::text[])
           )
+          and not (d.id = any($8::text[]))
           and coalesce(ar.status, '') not in ('completed', 'running')
           and coalesce(ar.attempt_count, 0) < $7
         order by
@@ -440,7 +442,8 @@ export async function selectDocumentsForAnalysis(
         lookbackDays,
         limit,
         excludedSecFilingCategories,
-        maxAttempts
+        maxAttempts,
+        options.excludedDocumentIds ?? []
       ]
     );
 
@@ -639,10 +642,7 @@ export async function requestBackfillStop(
           completed_at = now(),
           updated_at = now()
          where status = 'running'
-          and (
-            metadata->>'backfillJobId' = $1
-            or metadata ? 'backfillJobId'
-          )`,
+          and metadata->>'backfillJobId' = $1`,
         [options.jobId]
       );
     }

@@ -6,6 +6,10 @@ import type {
   NarrativeObservationInput,
   ToneDirection
 } from "@market-themes/db";
+import {
+  narrativeClassificationOutputFormat,
+  parseStructuredOutput
+} from "./structured-output";
 
 export const narrativeClassificationPromptVersion = "narrative_classification_v5";
 
@@ -61,6 +65,7 @@ For matched=false use matchScore 0-69 and empty evidenceSnippet.
 For matched=true use matchScore 70-100 and copy evidenceSnippet exactly from the source.
 When uncertain, return matched=false. Do not make trade recommendations.
 Stance is risk, bullish, mixed, or neutral.`,
+      output_config: { format: narrativeClassificationOutputFormat },
       messages: [
         {
           role: "user",
@@ -102,17 +107,12 @@ Stance is risk, bullish, mixed, or neutral.`,
     },
     options.signal ? { signal: options.signal } : undefined
   );
-  const response = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-  const parsed = JSON.parse(response) as { observations?: RawObservation[] };
+  const parsed = parseStructuredOutput<{ observations: RawObservation[] }>(
+    message,
+    "Narrative classification"
+  );
   const byDefinition = new Map(
-    (parsed.observations ?? []).map((observation) => [
+    (parsed.observations as RawObservation[]).map((observation) => [
       observation.narrativeDefinitionId,
       observation
     ])

@@ -6,7 +6,8 @@ import {
 export async function runRecordedJob<T extends Record<string, unknown>>(
   stage: string,
   runner: () => Promise<T>,
-  processedCount: (result: T) => number
+  processedCount: (result: T) => number,
+  failedCount: (result: T) => number = () => 0
 ) {
   const runId = await startPipelineRun(stage, {
     trigger: process.env.PIPELINE_TRIGGER ?? "scheduled",
@@ -17,6 +18,7 @@ export async function runRecordedJob<T extends Record<string, unknown>>(
     await finishPipelineRun(runId, {
       status: "completed",
       processedCount: processedCount(result),
+      failedCount: failedCount(result),
       metadata: serializableRecord(result)
     });
     return result;

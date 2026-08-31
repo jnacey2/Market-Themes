@@ -1,104 +1,52 @@
-import {
-  extractSignalsFromDocument,
-  marketSignalAnalysisType,
-  signalExtractionPromptVersion
-} from "@market-themes/analysis";
-import {
-  completeDocumentAnalysisRun,
-  failDocumentAnalysisRun,
-  selectDocumentsForAnalysis,
-  startDocumentAnalysisRun
-} from "@market-themes/db";
+import { pathToFileURL } from "node:url";
+import { signalExtractionPromptVersion } from "@market-themes/analysis";
+import { runClaudeExtractionBackfill } from "./claude-extract-backfill";
 
-const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
-const promptVersion = process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion;
-const documentLimit = Number(process.env.CLAUDE_EXTRACTION_DOCUMENT_LIMIT ?? 20);
-const lookbackDays = optionalNumber(process.env.CLAUDE_EXTRACTION_LOOKBACK_DAYS);
-const maxEvidenceChars = Number(process.env.CLAUDE_MAX_EVIDENCE_CHARS ?? 800);
-const excludedSecFilingCategories = parseCsv(
-  process.env.CLAUDE_EXCLUDED_SEC_CATEGORIES ?? "capital_markets"
-);
-
-if (!process.env.ANTHROPIC_API_KEY) {
-  throw new Error("ANTHROPIC_API_KEY is required for Claude extraction.");
-}
-
-const documents = await selectDocumentsForAnalysis({
-  analysisType: marketSignalAnalysisType,
-  model,
-  promptVersion,
-  limit: documentLimit,
-  lookbackDays,
-  excludedSecFilingCategories
-});
-
-let completedDocuments = 0;
-let failedDocuments = 0;
-let insertedSignals = 0;
-let themesTouched = 0;
-
-for (const document of documents) {
-  console.log(
-    `[claude-extract-smoke] analyzing document=${document.id} source=${document.sourceId} published=${document.publishedAt}`
+export async function runClaudeExtractionSmoke() {
+  const documentLimit = boundedInteger(
+    process.env.CLAUDE_EXTRACTION_DOCUMENT_LIMIT,
+    20,
+    100
   );
-
-  const runId = await startDocumentAnalysisRun(document.id, {
-    analysisType: marketSignalAnalysisType,
-    model,
-    promptVersion,
-    metadata: {
-      sourceId: document.sourceId,
-      sourceClass: document.sourceClass,
-      textHash: document.textHash
-    }
+  const result = await runClaudeExtractionBackfill({
+    model:
+      process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+    promptVersion:
+      process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion,
+    batchSize: documentLimit,
+    maxBatches: 1,
+    concurrency: boundedInteger(
+      process.env.CLAUDE_EXTRACTION_CONCURRENCY,
+      1,
+      2
+    ),
+    documentTimeoutMs: Number(
+      process.env.CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS ?? 600_000
+    ),
+    maxRuntimeMs: Number(
+      process.env.CLAUDE_EXTRACTION_MAX_RUNTIME_MS ?? 1_800_000
+    ),
+    lookbackDays: optionalNumber(process.env.CLAUDE_EXTRACTION_LOOKBACK_DAYS),
+    maxEvidenceChars: Number(process.env.CLAUDE_MAX_EVIDENCE_CHARS ?? 800),
+    staleAfterMinutes: Number(process.env.CLAUDE_STALE_RUN_MINUTES ?? 90),
+    maxAnalysisAttempts: Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5),
+    excludedSecFilingCategories: parseCsv(
+      process.env.CLAUDE_EXCLUDED_SEC_CATEGORIES ?? "capital_markets"
+    )
   });
-
-  try {
-    const signals = await extractWithRetry(document, {
-      model,
-      promptVersion,
-      maxEvidenceChars
-    });
-    const result = await completeDocumentAnalysisRun(runId, signals);
-    completedDocuments += 1;
-    insertedSignals += result.insertedSignals;
-    themesTouched += result.themesTouched;
-    console.log(
-      `[claude-extract-smoke] completed document=${document.id} signals=${result.insertedSignals} themes=${result.themesTouched}`
-    );
-  } catch (error) {
-    failedDocuments += 1;
-    await failDocumentAnalysisRun(runId, error);
-    console.error(
-      `[claude-extract-smoke] failed document=${document.id} error=${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
+  console.log(`[claude-extract-smoke] ${JSON.stringify(result)}`);
+  return result;
 }
 
-console.log(
-  `[claude-extract-smoke] selected=${documents.length} completed=${completedDocuments} failed=${failedDocuments} signals=${insertedSignals} themes=${themesTouched} model=${model} promptVersion=${promptVersion}`
-);
-
-async function extractWithRetry(
-  document: (typeof documents)[number],
-  options: {
-    model: string;
-    promptVersion: string;
-    maxEvidenceChars: number;
-  }
+function boundedInteger(
+  value: string | undefined,
+  fallback: number,
+  maximum: number
 ) {
-  try {
-    return await extractSignalsFromDocument(document, options);
-  } catch (firstError) {
-    console.warn(
-      `[claude-extract-smoke] retrying document=${document.id} after error=${
-        firstError instanceof Error ? firstError.message : String(firstError)
-      }`
-    );
-    return extractSignalsFromDocument(document, options);
-  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(Math.floor(parsed), maximum)
+    : fallback;
 }
 
 function optionalNumber(value: string | undefined) {
@@ -115,4 +63,8 @@ function parseCsv(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runClaudeExtractionSmoke();
 }

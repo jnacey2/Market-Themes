@@ -40,12 +40,17 @@ export function BackfillControls({ status }: { status: BackfillControlStatus }) 
         <span className="pill">{activeJob ? activeJob.status : "idle"}</span>
         {activeJob ? <span className="pill">job {activeJob.id.slice(-8)}</span> : null}
         {activeJob ? <span className="pill">concurrency {activeJob.concurrency}</span> : null}
+        {activeJob ? (
+          <span className="pill">
+            limit {activeJob.batchSize * activeJob.maxBatches} docs
+          </span>
+        ) : null}
       </div>
       <h2>Document Analysis Backfill</h2>
       <p>
-        Start queues Claude extraction across the unread eligible backlog at
-        concurrency 4. Stop is cooperative: the worker finishes any in-flight
-        documents, then stops before selecting more.
+        Start queues a controlled pass over up to 100 unread documents from the
+        latest 30 days at concurrency 2. Stop is cooperative: the worker finishes
+        any in-flight documents, then stops before selecting more.
       </p>
 
       {activeJob ? (
