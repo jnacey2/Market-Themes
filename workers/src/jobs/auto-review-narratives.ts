@@ -39,9 +39,17 @@ export async function autoReviewNarratives() {
     failedCandidatePromotions: candidateResult.failedCandidates
   };
   console.log(`[auto-review-narratives] ${JSON.stringify(summary)}`);
-  if (summary.failedCandidatePromotions.length > 0) {
+  if (
+    summary.failedCandidatePromotions.length > 0 &&
+    summary.candidatesPromoted === 0
+  ) {
     throw new Error(
       `${summary.failedCandidatePromotions.length} automatic candidate promotion(s) failed.`
+    );
+  }
+  if (summary.failedCandidatePromotions.length > 0) {
+    console.warn(
+      `[auto-review-narratives] partial candidate promotion failures=${summary.failedCandidatePromotions.length}`
     );
   }
   return summary;

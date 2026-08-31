@@ -558,7 +558,26 @@ export async function completeNarrativeDiscoveryRun(
            ) values (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb
            )
-           on conflict (candidate_id, document_id) do nothing`,
+           on conflict (candidate_id, document_id) do update set
+             evidence_snippet = excluded.evidence_snippet,
+             interpretation = excluded.interpretation,
+             stance = excluded.stance,
+             risk_tone = excluded.risk_tone,
+             bullish_tone = excluded.bullish_tone,
+             affected_entities = excluded.affected_entities,
+             match_score = excluded.match_score,
+             model = excluded.model,
+             prompt_version = excluded.prompt_version,
+             metadata = excluded.metadata,
+             created_at = now()
+           where narrative_candidate_evidence.metadata->>'textHash'
+                   is distinct from excluded.metadata->>'textHash'
+             and exists (
+               select 1
+               from narrative_candidates nc
+               where nc.id = narrative_candidate_evidence.candidate_id
+                 and nc.status = 'pending'
+             )`,
           [
             candidateEvidenceId(candidateId, evidence.documentId),
             candidateId,
@@ -909,6 +928,27 @@ export type NarrativeCandidateAutomaticPolicy = {
   excludedPublisherOwners: string[];
 };
 
+type NarrativeCandidatePromotionInput = {
+  id: string;
+  note?: string;
+  classificationModel?: string;
+  classificationPromptVersion?: string;
+  minimumDocuments?: number;
+  minimumPublisherOwners?: number;
+  evidenceWindowDays?: number;
+} & (
+  | {
+      reviewActorType?: "human";
+      reviewMetadata?: Record<string, unknown>;
+      automaticPolicy?: never;
+    }
+  | {
+      reviewActorType: "automatic";
+      reviewMetadata?: Record<string, unknown>;
+      automaticPolicy: NarrativeCandidateAutomaticPolicy;
+    }
+);
+
 export type NarrativeCandidateAutoPromotionOptions = {
   discoveryPromptVersion?: string;
   classificationModel?: string;
@@ -965,12 +1005,15 @@ export async function autoPromoteNarrativeCandidates(
       )
     );
   const evidenceWindowDays =
-    Math.max(
-      1,
-      finiteInteger(
-        options.evidenceWindowDays ??
-          Number(process.env.NARRATIVE_AUTO_PROMOTE_LOOKBACK_DAYS ?? 7),
-        7
+    Math.min(
+      7,
+      Math.max(
+        1,
+        finiteInteger(
+          options.evidenceWindowDays ??
+            Number(process.env.NARRATIVE_AUTO_PROMOTE_LOOKBACK_DAYS ?? 7),
+          7
+        )
       )
     );
   const excludedPublisherOwners = (
@@ -1010,11 +1053,11 @@ export async function autoPromoteNarrativeCandidates(
          and not exists (
            select 1
            from unnest($4::text[]) blocked(value)
-           where lower(btrim(coalesce(
-                   nullif(d.publisher_owner, ''),
-                   nullif(d.publisher_id, ''),
-                   d.publisher
-                 ))) = blocked.value
+           where coalesce(
+                   nullif(lower(btrim(d.publisher_owner)), ''),
+                   nullif(lower(btrim(d.publisher_id)), ''),
+                   nullif(lower(btrim(d.publisher)), '')
+                 ) = blocked.value
               or lower(btrim(d.publisher)) = blocked.value
               or lower(coalesce(d.metadata->>'platform', '')) = blocked.value
               or lower(d.url) like '%//' || blocked.value || '/%'
@@ -1024,11 +1067,11 @@ export async function autoPromoteNarrativeCandidates(
          )
        group by nc.id
        having count(distinct ce.document_id) >= $5
-          and count(distinct lower(btrim(coalesce(
-            nullif(d.publisher_owner, ''),
-            nullif(d.publisher_id, ''),
-            d.publisher
-          )))) >= $6
+          and count(distinct coalesce(
+            nullif(lower(btrim(d.publisher_owner)), ''),
+            nullif(lower(btrim(d.publisher_id)), ''),
+            nullif(lower(btrim(d.publisher)), '')
+          )) >= $6
        order by max(d.published_at) desc
        limit $7`,
       [
@@ -1112,20 +1155,16 @@ export async function autoPromoteNarrativeCandidates(
 }
 
 export async function promoteNarrativeCandidate(
-  input: {
-    id: string;
-    note?: string;
-    classificationModel?: string;
-    classificationPromptVersion?: string;
-    minimumDocuments?: number;
-    minimumPublisherOwners?: number;
-    evidenceWindowDays?: number;
-    reviewActorType?: "human" | "automatic";
-    reviewMetadata?: Record<string, unknown>;
-    automaticPolicy?: NarrativeCandidateAutomaticPolicy;
-  },
+  input: NarrativeCandidatePromotionInput,
   databaseUrl = process.env.DATABASE_URL
 ) {
+  if (
+    (input.reviewActorType === "automatic") !== Boolean(input.automaticPolicy)
+  ) {
+    throw new Error(
+      "Automatic candidate promotion requires its complete safety policy."
+    );
+  }
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -1162,8 +1201,12 @@ export async function promoteNarrativeCandidate(
     const evidenceResult = await client.query<PromotionEvidenceRow>(
       `select ce.id, ce.candidate_id, ce.document_id,
               d.title, d.publisher,
-              coalesce(nullif(d.publisher_id, ''), d.publisher) as publisher_id,
-              coalesce(nullif(d.publisher_owner, ''), nullif(d.publisher_id, ''), d.publisher)
+              coalesce(nullif(btrim(d.publisher_id), ''), btrim(d.publisher)) as publisher_id,
+              coalesce(
+                nullif(btrim(d.publisher_owner), ''),
+                nullif(btrim(d.publisher_id), ''),
+                btrim(d.publisher)
+              )
                 as publisher_owner,
               d.source_class, d.published_at::text, d.url,
               ce.evidence_snippet, ce.interpretation, ce.stance,
@@ -1272,12 +1315,20 @@ export async function promoteNarrativeCandidate(
       evidenceId: row.id,
       documentId: row.document_id,
       publisherOwner: normalizePublisherOwner(row.publisher_owner),
+      matchScore: Number(row.match_score),
+      publishedAt: row.published_at,
+      url: row.url,
+      hostname: canonicalHostname(row.url),
       textHash: row.current_text_hash,
+      evidenceSnippetHash: createHash("sha256")
+        .update(row.evidence_snippet)
+        .digest("hex"),
       discoveryModel: row.evidence_model,
       discoveryPromptVersion: row.evidence_prompt_version
     }));
     const reviewMetadata = {
       ...(input.reviewMetadata ?? {}),
+      promotedDefinitionId: definitionId,
       qualifyingEvidence
     };
     const reviewProvenance = {
@@ -1419,8 +1470,12 @@ function isAllowedAutomaticPromotionEvidence(
   const now = Date.now();
   const cutoff = now - policy.evidenceWindowDays * 24 * 60 * 60 * 1_000;
   const evidenceTextHash = row.evidence_metadata.textHash;
+  const matchScore = Number(row.match_score);
   if (
-    row.match_score < policy.minimumMatchScore ||
+    !Number.isFinite(matchScore) ||
+    matchScore < policy.minimumMatchScore ||
+    matchScore > 100 ||
+    row.evidence_snippet.trim().length === 0 ||
     row.evidence_prompt_version !== candidate.prompt_version ||
     typeof evidenceTextHash !== "string" ||
     evidenceTextHash !== row.current_text_hash ||
@@ -1435,19 +1490,28 @@ function isAllowedAutomaticPromotionEvidence(
 
   const blocked = new Set(
     policy.excludedPublisherOwners.map((value) =>
-      value.trim().toLowerCase().replace(/^www\./, "")
+      value.trim().toLowerCase().replace(/^www\./, "").replace(/\.+$/, "")
     )
   );
+  const normalizedOwner =
+    normalizePublisherOwner(row.publisher_owner) ||
+    normalizePublisherOwner(row.publisher_id) ||
+    row.publisher.trim().toLowerCase();
+  if (!normalizedOwner) return false;
   const sourceValues = [
-    normalizePublisherOwner(row.publisher_owner),
+    normalizedOwner,
     row.publisher.trim().toLowerCase(),
     String(row.document_metadata.platform ?? "").trim().toLowerCase()
   ];
   if (sourceValues.some((value) => blocked.has(value))) return false;
   try {
-    const hostname = new URL(row.url).hostname
+    const url = new URL(row.url);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    const hostname = url.hostname
       .toLowerCase()
-      .replace(/^www\./, "");
+      .replace(/^www\./, "")
+      .replace(/\.+$/, "");
+    if (!hostname) return false;
     if (
       [...blocked].some(
         (value) => hostname === value || hostname.endsWith(`.${value}`)
@@ -1479,7 +1543,7 @@ function normalizeAutomaticPromotionPolicy(
     ),
     evidenceWindowDays: Math.max(
       1,
-      finiteInteger(policy.evidenceWindowDays, 7)
+      Math.min(7, finiteInteger(policy.evidenceWindowDays, 7))
     ),
     excludedPublisherOwners: policy.excludedPublisherOwners.map((value) =>
       value.trim().toLowerCase()
@@ -1489,6 +1553,18 @@ function normalizeAutomaticPromotionPolicy(
 
 function normalizePublisherOwner(value: string) {
   return value.trim().toLowerCase();
+}
+
+function canonicalHostname(value: string) {
+  try {
+    const url = new URL(value);
+    return url.hostname
+      .toLowerCase()
+      .replace(/^www\./, "")
+      .replace(/\.+$/, "");
+  } catch {
+    return null;
+  }
 }
 
 function finiteNumber(value: number, fallback: number) {
@@ -1568,10 +1644,14 @@ function candidateBreadth(evidence: NarrativeCandidateEvidence[]) {
   return {
     documentBreadth: new Set(evidence.map((item) => item.documentId)).size,
     publisherBreadth: new Set(
-      evidence.map((item) => item.publisherId.trim().toLowerCase())
+      evidence
+        .map((item) => item.publisherId.trim().toLowerCase())
+        .filter(Boolean)
     ).size,
     publisherOwnerBreadth: new Set(
-      evidence.map((item) => normalizePublisherOwner(item.publisherOwner))
+      evidence
+        .map((item) => normalizePublisherOwner(item.publisherOwner))
+        .filter(Boolean)
     ).size,
     sourceClassBreadth: new Set(evidence.map((item) => item.sourceClass)).size,
     entityBreadth: new Set(evidence.flatMap((item) => item.affectedEntities)).size

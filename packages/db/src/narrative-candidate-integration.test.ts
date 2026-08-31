@@ -432,7 +432,7 @@ test(
     assert.equal(stale?.status, "pending");
 
     await recomputeNarrativeTrends({
-      asOfDate: "2026-08-31",
+      asOfDate: new Date().toISOString().slice(0, 10),
       lookbackDays: 10,
       lowHistoryDays: 2,
       promptVersion: autoClassificationPrompt
@@ -454,6 +454,7 @@ test(
         observation_count: string;
         event_count: string;
         automatic_provenance_count: string;
+        complete_audit_count: string;
       }>(
         `select
            (select count(*)::text
@@ -468,12 +469,21 @@ test(
               from narrative_observations
               where narrative_definition_id = $1
                 and metadata->'reviewProvenance'->>'actorType' = 'automatic')
-             as automatic_provenance_count`,
+             as automatic_provenance_count,
+           (select count(*)::text
+              from narrative_review_events
+              where actor_type = 'automatic'
+                and metadata->>'candidateId' = $2
+                and metadata->'reviewProvenance'->>'promotedDefinitionId' = $1
+                and jsonb_array_length(
+                  metadata->'reviewProvenance'->'qualifyingEvidence'
+                ) = 3) as complete_audit_count`,
         [result.promotedDefinitionIds[0], candidateId]
       );
       assert.equal(Number(audit.rows[0].observation_count), 3);
       assert.equal(Number(audit.rows[0].event_count), 3);
       assert.equal(Number(audit.rows[0].automatic_provenance_count), 3);
+      assert.equal(Number(audit.rows[0].complete_audit_count), 3);
     } finally {
       await client.end();
     }
