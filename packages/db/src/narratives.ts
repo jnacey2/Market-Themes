@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createDatabaseClient } from "./persistence";
+import { closeDatabaseClient, createDatabaseClient } from "./persistence";
 import {
   calculateNarrativeTrendSeries,
   type NarrativeMetricObservation
@@ -9,6 +9,9 @@ import type {
   NarrativeBacklogSummary,
   NarrativeBoardStatus,
   NarrativeDefinition,
+  NarrativeEvidence,
+  NarrativeHomepageItem,
+  NarrativeHomepageStatus,
   NarrativeObservationInput,
   NarrativeReviewQueue,
   NarrativeReviewStatus,
@@ -882,6 +885,245 @@ export async function recomputeNarrativeTrends(
   }
 }
 
+export const NARRATIVE_HOMEPAGE_QUERY_TIMEOUT_MS = 5_000;
+
+type NarrativeHomepageEvidenceRow = {
+  id: string;
+  narrative_definition_id: string;
+  title: string;
+  publisher: string;
+  published_at: string;
+  url: string;
+  source_class: NarrativeEvidence["sourceClass"];
+  stance: NarrativeEvidence["stance"];
+  evidence_snippet: string;
+  interpretation: string;
+  affected_entities: string[];
+  match_score: number;
+  review_status: NarrativeReviewStatus;
+};
+
+export async function getNarrativeHomepageStatus(
+  databaseUrl = process.env.DATABASE_URL,
+  configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+): Promise<NarrativeHomepageStatus> {
+  const promptVersion =
+    configuredPromptVersion ?? "narrative_classification_v5";
+  if (!databaseUrl) {
+    return emptyNarrativeHomepageStatus(false);
+  }
+  let client: ReturnType<typeof createDatabaseClient> | null = null;
+  try {
+    client = createDatabaseClient(databaseUrl, {
+      queryTimeoutMs: NARRATIVE_HOMEPAGE_QUERY_TIMEOUT_MS,
+      statementTimeoutMs: NARRATIVE_HOMEPAGE_QUERY_TIMEOUT_MS
+    });
+    await client.connect();
+    const trends = await client.query<{
+      tracked_count: string;
+      latest_date: string | null;
+      id: string | null;
+      slug: string | null;
+      version: number | null;
+      name: string | null;
+      proposition: string | null;
+      category: string | null;
+      inclusion_guidance: string | null;
+      exclusion_guidance: string | null;
+      positive_examples: string[] | null;
+      negative_examples: string[] | null;
+      status: string | null;
+      density: number | null;
+      baseline_mean: number | null;
+      z_score: number | null;
+      percentile_rank: number | null;
+      change_value: number | null;
+      acceleration: number | null;
+      risk_tone: number | null;
+      bullish_tone: number | null;
+      eligible_documents: number | null;
+      matched_documents: number | null;
+      publisher_breadth: number | null;
+      publisher_owner_breadth: number | null;
+      source_class_breadth: number | null;
+      entity_breadth: number | null;
+      low_history: boolean | null;
+    }>(
+      `with overview as (
+         select
+           (select count(*)::text
+              from narrative_definitions
+              where status = 'active') as tracked_count,
+           (select max(nt.date)::text
+              from narrative_trends nt
+              join narrative_definitions nd
+                on nd.id = nt.narrative_definition_id
+              where nt.prompt_version = $1
+                and nt.trend_window = '7d'
+                and nd.status = 'active') as latest_date
+       )
+       select o.tracked_count, o.latest_date, ranked.*
+       from overview o
+       left join lateral (
+         select nd.id, nd.slug, nd.version, nd.name, nd.proposition, nd.category,
+                nd.inclusion_guidance, nd.exclusion_guidance,
+                nd.positive_examples, nd.negative_examples, nd.status,
+                nt.density::float, nt.baseline_mean::float, nt.z_score::float,
+                nt.percentile_rank::float, nt.change_value::float,
+                nt.acceleration::float, nt.risk_tone::float,
+                nt.bullish_tone::float, nt.eligible_documents,
+                nt.matched_documents, nt.publisher_breadth,
+                nt.publisher_owner_breadth, nt.source_class_breadth,
+                nt.entity_breadth, nt.low_history
+         from narrative_trends nt
+         join narrative_definitions nd on nd.id = nt.narrative_definition_id
+         where o.latest_date is not null
+           and nt.date = o.latest_date::date
+           and nt.trend_window = '7d'
+           and nt.prompt_version = $1
+           and nd.status = 'active'
+           and nt.matched_documents > 0
+         order by nt.publisher_owner_breadth desc,
+                  nt.matched_documents desc,
+                  nt.source_class_breadth desc,
+                  nt.density desc,
+                  nd.id
+         limit 6
+       ) ranked on true
+       order by ranked.publisher_owner_breadth desc nulls last,
+                ranked.matched_documents desc nulls last,
+                ranked.source_class_breadth desc nulls last,
+                ranked.density desc nulls last,
+                ranked.id`,
+      [promptVersion]
+    );
+    const trackedNarrativeCount = Number(
+      trends.rows[0]?.tracked_count ?? 0
+    );
+    const latestDate = trends.rows[0]?.latest_date ?? null;
+    const trendRows = trends.rows.filter(
+      (row): row is typeof row & { id: string } => Boolean(row.id)
+    );
+    const narrativeIds = trendRows.map((row) => row.id);
+    let evidenceRows: NarrativeHomepageEvidenceRow[] = [];
+    let evidenceDegraded = false;
+    if (narrativeIds.length > 0 && latestDate) {
+      try {
+        const evidence = await client.query<NarrativeHomepageEvidenceRow>(
+          `with latest_observations as (
+             select distinct on (no.narrative_definition_id, no.document_id)
+                    no.id, no.narrative_definition_id,
+                    d.title, d.publisher, d.published_at::text, d.url,
+                    d.source_class, no.matched, no.stance, no.evidence_snippet,
+                    no.interpretation, no.affected_entities,
+                    no.match_score::float, no.review_status
+             from narrative_observations no
+             join documents d on d.id = no.document_id
+             where no.prompt_version = $1
+               and no.narrative_definition_id = any($2::text[])
+               and d.published_at >= $3::date - interval '6 days'
+               and d.published_at < $3::date + interval '1 day'
+             order by no.narrative_definition_id, no.document_id,
+                      no.observed_at desc, no.id
+           ),
+           ranked as (
+             select latest_observations.*,
+                    row_number() over (
+                      partition by narrative_definition_id
+                      order by published_at desc, match_score desc, id
+                    ) as evidence_rank
+             from latest_observations
+             where matched and review_status = 'approved'
+           )
+           select id, narrative_definition_id, title, publisher,
+                  published_at, url, source_class, stance, evidence_snippet,
+                  interpretation, affected_entities, match_score, review_status
+           from ranked
+           where evidence_rank <= 3
+           order by narrative_definition_id, evidence_rank`,
+          [promptVersion, narrativeIds, latestDate]
+        );
+        evidenceRows = evidence.rows;
+      } catch (error) {
+        evidenceDegraded = true;
+        console.warn(
+          `[db] narrative homepage evidence preview failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+    const evidenceByNarrative = new Map<string, NarrativeEvidence[]>();
+    for (const row of evidenceRows) {
+      const items = evidenceByNarrative.get(row.narrative_definition_id) ?? [];
+      items.push({
+        id: row.id,
+        title: row.title,
+        publisher: row.publisher,
+        publishedAt: row.published_at,
+        url: row.url,
+        sourceClass: row.source_class,
+        stance: row.stance,
+        evidenceSnippet: row.evidence_snippet,
+        interpretation: row.interpretation,
+        affectedEntities: row.affected_entities,
+        matchScore: Number(row.match_score),
+        reviewStatus: row.review_status
+      });
+      evidenceByNarrative.set(row.narrative_definition_id, items);
+    }
+
+    return {
+      databaseConfigured: true,
+      degraded: evidenceDegraded,
+      latestDate,
+      trackedNarrativeCount,
+      narratives: trendRows.map((row): NarrativeHomepageItem => ({
+        id: row.id,
+        slug: row.slug ?? "",
+        version: row.version ?? 1,
+        name: row.name ?? "",
+        proposition: row.proposition ?? "",
+        category: row.category ?? "Other",
+        inclusionGuidance: row.inclusion_guidance ?? "",
+        exclusionGuidance: row.exclusion_guidance ?? "",
+        positiveExamples: row.positive_examples ?? [],
+        negativeExamples: row.negative_examples ?? [],
+        status: row.status ?? "active",
+        trendWindow: "7d",
+        latestDate,
+        density: Number(row.density),
+        baselineMean: Number(row.baseline_mean),
+        zScore: Number(row.z_score),
+        percentileRank: Number(row.percentile_rank),
+        change: Number(row.change_value),
+        acceleration: Number(row.acceleration),
+        riskTone: Number(row.risk_tone),
+        bullishTone: Number(row.bullish_tone),
+        eligibleDocuments: row.eligible_documents ?? 0,
+        matchedDocuments: row.matched_documents ?? 0,
+        publisherBreadth: row.publisher_breadth ?? 0,
+        publisherOwnerBreadth: row.publisher_owner_breadth ?? 0,
+        sourceClassBreadth: row.source_class_breadth ?? 0,
+        entityBreadth: row.entity_breadth ?? 0,
+        lowHistory: row.low_history ?? true,
+        evidencePreview: evidenceByNarrative.get(row.id) ?? []
+      }))
+    };
+  } catch (error) {
+    console.warn(
+      `[db] narrative homepage query failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return emptyNarrativeHomepageStatus(Boolean(databaseUrl), true);
+  } finally {
+    if (client) {
+      await closeDatabaseClient(client);
+    }
+  }
+}
+
 export async function getNarrativeBoardStatus(
   databaseUrl = process.env.DATABASE_URL,
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
@@ -1035,6 +1277,19 @@ export async function getNarrativeDetailStatus(
   return board.narratives.find(
     (narrative) => narrative.id === idOrSlug || narrative.slug === idOrSlug
   ) ?? null;
+}
+
+function emptyNarrativeHomepageStatus(
+  databaseConfigured: boolean,
+  degraded = false
+): NarrativeHomepageStatus {
+  return {
+    databaseConfigured,
+    degraded,
+    latestDate: null,
+    trackedNarrativeCount: 0,
+    narratives: []
+  };
 }
 
 function mapDefinition(row: {

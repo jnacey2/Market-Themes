@@ -5,6 +5,7 @@ import {
   createDatabaseClient,
   getActiveNarrativeDefinitions,
   getNarrativeBoardStatus,
+  getNarrativeHomepageStatus,
   getNarrativeReviewQueue,
   createPublicationFeed,
   listPublicationFeeds,
@@ -164,6 +165,29 @@ test(
     assert(narrative);
     assert(narrative.matchedDocuments >= 1);
     assert(narrative.evidence.length >= 1);
+
+    await recomputeNarrativeTrends({
+      asOfDate: "2026-08-28",
+      lookbackDays: 10,
+      lowHistoryDays: 2,
+      promptVersion: "integration-v1",
+      windows: ["30d"]
+    });
+    const homepage = await getNarrativeHomepageStatus(
+      process.env.DATABASE_URL,
+      "integration-v1"
+    );
+    assert.equal(homepage.degraded, false);
+    assert.equal(homepage.latestDate, "2026-08-27");
+    assert.equal(homepage.trackedNarrativeCount, definitions.length);
+    assert(
+      homepage.narratives.some(
+        (item) =>
+          item.id === definition.id &&
+          item.matchedDocuments >= 1 &&
+          item.evidencePreview.length >= 1
+      )
+    );
   }
 );
 
