@@ -31,12 +31,9 @@ export default async function StoryboardPage({
 
   return (
     <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">Market Themes</Link>
-        <div className="nav-links">
-          <Link href="/trends">Narrative Currents</Link>
-          <Link href={`/themes/${encodeURIComponent(narrative.id)}`}>Data view</Link>
-        </div>
+      <nav className="context-nav" aria-label="Narrative views">
+        <span>Live storyboard</span>
+        <Link href={`/themes/${encodeURIComponent(narrative.id)}`}>Open data view</Link>
       </nav>
 
       <section className="hero">

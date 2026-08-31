@@ -9,17 +9,6 @@ export default async function TrendsPage() {
 
   return (
     <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">Market Themes</Link>
-        <div className="nav-links">
-          <Link href="/">Dashboard</Link>
-          <Link href="/narrative-candidates">Candidates</Link>
-          <Link href="/narrative-review">Evidence Review</Link>
-          <Link href="/analysis">Analysis</Link>
-          <Link href="/ingestion">Operations</Link>
-        </div>
-      </nav>
-
       <section className="hero currents-hero">
         <div>
           <p className="eyebrow">Narrative Currents</p>

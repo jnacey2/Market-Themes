@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getAnalysisStatus } from "@market-themes/db";
 import { BackfillControls } from "./BackfillControls";
 
@@ -9,18 +8,6 @@ export default async function AnalysisPage() {
 
   return (
     <div className="shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <div className="nav-links">
-          <Link href="/">Dashboard</Link>
-          <Link href="/trends">Trends</Link>
-          <Link href="/theme-mappings">Theme Mappings</Link>
-          <Link href="/ingestion">Ingestion</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Claude Analysis</p>

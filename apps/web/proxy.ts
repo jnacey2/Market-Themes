@@ -1,18 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PROTECTED_PATHS } from "./lib/navigation";
 import { isAuthorized } from "./lib/ops-auth";
-
-const PROTECTED_PATHS = [
-  "/analysis",
-  "/ingestion",
-  "/theme-mappings",
-  "/narrative-review",
-  "/narrative-candidates",
-  "/sources",
-  "/api/backfill",
-  "/api/narrative-candidates",
-  "/api/narrative-observations",
-  "/api/publication-feeds"
-];
 
 export function proxy(request: NextRequest) {
   if (!PROTECTED_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {

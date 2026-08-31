@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getNarrativeReviewQueue } from "@market-themes/db";
 import { ReviewControls } from "./ReviewControls";
 
@@ -9,16 +8,6 @@ export default async function NarrativeReviewPage() {
 
   return (
     <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">Market Themes</Link>
-        <div className="nav-links">
-          <Link href="/trends">Narrative Currents</Link>
-          <Link href="/narrative-candidates">Candidates</Link>
-          <Link href="/analysis">Analysis</Link>
-          <Link href="/ingestion">Operations</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Quality Control</p>

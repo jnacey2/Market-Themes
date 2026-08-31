@@ -45,18 +45,11 @@ export default async function HomePage() {
 
   return (
     <div className="shell">
-      <nav className="nav">
-        <div className="brand">Market Themes</div>
-        <div className="nav-links">
-          <a href="#themes">Themes</a>
-          <a href="#brief">Daily Brief</a>
-          <a href="#copilot">Copilot</a>
-          <Link href="/ingestion">Ingestion</Link>
-          <Link href="/analysis">Analysis</Link>
-          <Link href="/trends">Trends</Link>
-          <Link href="/narrative-candidates">Candidates</Link>
-          <Link href="/theme-mappings">Theme Mappings</Link>
-        </div>
+      <nav className="page-jump-nav" aria-label="On this page">
+        <span>On this page</span>
+        <a href="#themes">Themes</a>
+        <a href="#brief">Daily Brief</a>
+        <a href="#copilot">Copilot</a>
       </nav>
 
       <section className="hero">
