@@ -1013,7 +1013,7 @@ export async function getNarrativeHomepageStatus(
           `with latest_observations as (
              select distinct on (no.narrative_definition_id, no.document_id)
                     no.id, no.narrative_definition_id, no.document_id,
-                    d.published_at,
+                    d.published_at, no.matched,
                     no.match_score::float, no.review_status
              from narrative_observations no
              join documents d on d.id = no.document_id
@@ -1032,7 +1032,7 @@ export async function getNarrativeHomepageStatus(
                       order by published_at desc, match_score desc, id
                     ) as evidence_rank
              from latest_observations
-             where review_status = 'approved'
+             where matched and review_status = 'approved'
            ),
            top_evidence as (
              select id, narrative_definition_id, document_id, evidence_rank

@@ -257,9 +257,9 @@ function buildNarrativeBrief(narratives: NarrativeHomepageItem[]) {
   const context = narratives[1];
   if (!lead) {
     return {
-      headline: "No reviewed narrative evidence yet.",
+      headline: "No published 7-day narrative signal yet.",
       summary:
-        "Automatic classification, review, and trend publication will populate this brief."
+        "Reviewed evidence may be historical or awaiting the next scheduled narrative trend publication."
     };
   }
 
