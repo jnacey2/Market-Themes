@@ -62,7 +62,6 @@ export async function discoverNarrativeCandidates(
     {
       model,
       max_tokens: options.maxTokens ?? 4_000,
-      temperature: 0,
       system: narrativeDiscoverySystemPrompt,
       messages: [
         {

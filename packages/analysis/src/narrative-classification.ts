@@ -43,7 +43,6 @@ export async function classifyDocumentNarratives(
     {
       model,
       max_tokens: 8_000,
-      temperature: 0,
       system: `Classify a source document against stable market-narrative propositions.
 Return only JSON with an "observations" array containing exactly one item per definition.
 Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.

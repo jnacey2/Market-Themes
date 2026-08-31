@@ -29,7 +29,6 @@ export async function normalizeThemeGroups(
   const message = await client.messages.create({
     model,
     max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-    temperature: 0,
     system: themeNormalizationSystemPrompt,
     messages: [
       {
