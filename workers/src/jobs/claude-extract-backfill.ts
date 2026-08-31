@@ -65,7 +65,7 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
       jobId: job.id,
       shouldStop: async () => {
         const currentJob = await getBackfillJobForWorker(job.id);
-        return !currentJob || currentJob.status === "stop_requested";
+        return shouldStopClaimedBackfillJob(currentJob);
       }
     });
 
@@ -104,6 +104,12 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
     });
     throw error;
   }
+}
+
+export function shouldStopClaimedBackfillJob(
+  job: { status: string } | null
+) {
+  return !job || job.status !== "running";
 }
 
 export async function runClaudeExtractionBackfill(options = defaultBackfillOptions()) {

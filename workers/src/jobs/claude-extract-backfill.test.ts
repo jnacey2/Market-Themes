@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createDatabaseClient } from "@market-themes/db";
-import { runClaudeExtractionBackfill } from "./claude-extract-backfill";
+import {
+  runClaudeExtractionBackfill,
+  shouldStopClaimedBackfillJob
+} from "./claude-extract-backfill";
+
+test("claimed jobs stop for requested, cancelled, or missing state", () => {
+  assert.equal(shouldStopClaimedBackfillJob({ status: "running" }), false);
+  assert.equal(shouldStopClaimedBackfillJob({ status: "stop_requested" }), true);
+  assert.equal(shouldStopClaimedBackfillJob({ status: "cancelled" }), true);
+  assert.equal(shouldStopClaimedBackfillJob({ status: "completed" }), true);
+  assert.equal(shouldStopClaimedBackfillJob(null), true);
+});
 
 test(
   "signal extraction skips safely when another run owns the global lock",
