@@ -28,6 +28,36 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
   assert.match(discovery, /key: NARRATIVE_DISCOVERY_PROMPT_VERSION/);
 });
 
+test("extracts a bounded recent-document batch every hour", () => {
+  const extraction = serviceBlock("extract-recent-signals");
+  assert.match(extraction, /schedule: "35 \* \* \* \*"/);
+  assert.match(
+    extraction,
+    /startCommand: npm run claude:extract:backfill --workspace @market-themes\/workers/
+  );
+  assert.match(extraction, /key: ANTHROPIC_API_KEY/);
+  assert.match(
+    extraction,
+    /key: CLAUDE_EXTRACTION_LOOKBACK_DAYS\s+value: "30"/
+  );
+  assert.match(
+    extraction,
+    /key: CLAUDE_EXTRACTION_BATCH_SIZE\s+value: "10"/
+  );
+  assert.match(
+    extraction,
+    /key: CLAUDE_EXTRACTION_MAX_BATCHES\s+value: "10"/
+  );
+  assert.match(
+    extraction,
+    /key: CLAUDE_EXTRACTION_CONCURRENCY\s+value: "2"/
+  );
+  assert.match(
+    extraction,
+    /key: CLAUDE_EXTRACTION_MAX_RUNTIME_MS\s+value: "3000000"/
+  );
+});
+
 test("publishes narrative trends twice hourly without waiting on model work", () => {
   const trends = serviceBlock("recompute-narrative-trends");
   assert.match(trends, /schedule: "25,55 \* \* \* \*"/);
@@ -77,6 +107,8 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
 
 test("the theme pipeline skips work owned by narrative crons", () => {
   const themes = serviceBlock("recompute-theme-trends");
+  assert.match(themes, /key: PIPELINE_START_AT\s+value: normalize/);
+  assert.match(themes, /key: PIPELINE_SKIP_EXTRACTION\s+value: "true"/);
   assert.match(themes, /key: PIPELINE_SKIP_CLASSIFICATION\s+value: "true"/);
   assert.match(themes, /key: PIPELINE_SKIP_DISCOVERY\s+value: "true"/);
   assert.match(themes, /key: PIPELINE_SKIP_NARRATIVE_TRENDS\s+value: "true"/);

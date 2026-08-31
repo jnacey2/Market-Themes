@@ -52,7 +52,8 @@ mix, and follow-up research questions for a market theme.
   review, and promotion into versioned tracked narratives.
 - Per-source ingest, extraction, classification, discovery, and review telemetry.
 - Interactive Narrative Currents board, timeline drilldowns, and live storyboards.
-- Claude signal extraction for bounded SEC/FMP smoke runs.
+- Schema-constrained Claude signal extraction for bounded SEC/FMP smoke and
+  recent-corpus backfill runs.
 - Analysis inspection page for recent signals, evidence snippets, interpretations,
   and failed document runs.
 - Connector interfaces for source ingestion.
@@ -509,9 +510,9 @@ npm run claude:extract:smoke
 Then inspect `/analysis` before scheduling any automated Claude cron.
 
 For broader corpus coverage, open `/analysis` and use the Backfill Control panel
-to start or stop a worker-backed run. UI-started jobs default to concurrency `4`
-and keep selecting batches until the eligible unread backlog is empty. The manual
-command is still useful for local testing:
+to start or stop a worker-backed run. UI-started jobs default to a controlled
+100-document pass over the latest 30 days at concurrency `2`. The manual command
+supports other explicitly bounded runs:
 
 ```bash
 CLAUDE_EXTRACTION_BATCH_SIZE=25 CLAUDE_EXTRACTION_MAX_BATCHES=4 CLAUDE_EXTRACTION_CONCURRENCY=2 npm run claude:extract:backfill
@@ -520,8 +521,9 @@ CLAUDE_EXTRACTION_BATCH_SIZE=25 CLAUDE_EXTRACTION_MAX_BATCHES=4 CLAUDE_EXTRACTIO
 The backfill job recovers stale `running` analysis rows, processes bounded
 batches with bounded concurrency, applies a per-document timeout, keeps the same
 source priority order as smoke extraction, and continues to exclude
-`capital_markets` SEC filings by default. After each larger backfill, run theme
-normalization and trend recompute.
+`capital_markets` SEC filings by default. Anthropic responses use JSON-schema
+constrained output instead of free-form JSON. After each larger backfill, run
+theme normalization and trend recompute.
 
 Theme normalization maps company-specific extracted themes into overall market
 themes and optional sector sub-themes:
@@ -565,6 +567,11 @@ minute 5 each hour, candidate discovery at minute 10, conservative automatic
 evidence review at minutes 15 and 45, and narrative trends at minutes 25 and 55.
 This keeps approved evidence publishing even while model work continues. The
 four-hour theme pipeline skips all narrative-owned stages.
+
+Recent signal extraction runs independently at minute 35 each hour. It processes
+at most 100 unread documents from the latest 30 days at concurrency 2. The
+four-hour theme pipeline skips extraction and focuses on normalization and theme
+trend publication.
 
 Automatic review is deliberately stricter than the manual queue. Production
 requires a classifier score of at least 90 plus corroboration by two documents
@@ -610,6 +617,7 @@ The blueprint defines:
 - `poll-fmp-transcripts`: daily cron job for FMP transcript polling.
 - `generate-daily-brief`: cron job for daily brief generation.
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
+- `extract-recent-signals`: hourly bounded extraction of the latest 30-day corpus.
 - `classify-narratives`: hourly existing-narrative evidence classification.
 - `discover-narratives`: hourly new-proposition candidate discovery.
 - `auto-review-narratives`: twice-hourly conservative evidence approval and
@@ -627,8 +635,9 @@ Deployment steps:
    - `FMP_API_KEY`
    - source credentials in `SOURCE_CONFIG_JSON` or separate env vars
    - For Blueprint updates, set `ANTHROPIC_API_KEY` separately on the new
-     `classify-narratives` and `discover-narratives` services, or attach both to
-     an existing Render environment group that provides the key.
+     `extract-recent-signals`, `classify-narratives`, and `discover-narratives`
+     services, or attach them to an existing Render environment group that
+     provides the key.
 5. Keep `SCRAPING_ENABLED=false` until each source has explicit configuration.
 6. Apply the SQL from `npm run db:schema` to the Render Postgres database.
 7. Deploy `themes-web`.
