@@ -71,6 +71,15 @@ type CandidateEvidenceRow = {
   match_score: number;
 };
 
+type PromotionEvidenceRow = CandidateEvidenceRow & {
+  document_metadata: Record<string, unknown>;
+  evidence_metadata: Record<string, unknown>;
+  current_text_hash: string;
+  current_text: string;
+  evidence_prompt_version: string;
+  evidence_model: string;
+};
+
 export async function selectDocumentsForNarrativeDiscovery(
   options: DiscoverySelectionOptions,
   databaseUrl = process.env.DATABASE_URL
@@ -549,7 +558,26 @@ export async function completeNarrativeDiscoveryRun(
            ) values (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb
            )
-           on conflict (candidate_id, document_id) do nothing`,
+           on conflict (candidate_id, document_id) do update set
+             evidence_snippet = excluded.evidence_snippet,
+             interpretation = excluded.interpretation,
+             stance = excluded.stance,
+             risk_tone = excluded.risk_tone,
+             bullish_tone = excluded.bullish_tone,
+             affected_entities = excluded.affected_entities,
+             match_score = excluded.match_score,
+             model = excluded.model,
+             prompt_version = excluded.prompt_version,
+             metadata = excluded.metadata,
+             created_at = now()
+           where narrative_candidate_evidence.metadata->>'textHash'
+                   is distinct from excluded.metadata->>'textHash'
+             and exists (
+               select 1
+               from narrative_candidates nc
+               where nc.id = narrative_candidate_evidence.candidate_id
+                 and nc.status = 'pending'
+             )`,
           [
             candidateEvidenceId(candidateId, evidence.documentId),
             candidateId,
@@ -670,12 +698,13 @@ export async function getNarrativeCandidateQueue(
          join documents d on d.id = ce.document_id
          where nc.prompt_version = $1 and nc.status = 'pending'
            and d.published_at >= now() - ($4::text || ' days')::interval
+           and d.published_at <= now()
          group by nc.id
          having count(distinct ce.document_id) >= $2
             and count(distinct coalesce(
-              nullif(d.publisher_owner, ''),
-              nullif(d.publisher_id, ''),
-              d.publisher
+              nullif(lower(btrim(d.publisher_owner)), ''),
+              nullif(lower(btrim(d.publisher_id)), ''),
+              nullif(lower(btrim(d.publisher)), '')
             )) >= $3
        ) qualified`,
       [
@@ -690,13 +719,14 @@ export async function getNarrativeCandidateQueue(
          select ce.candidate_id,
                 count(distinct ce.document_id) as document_breadth,
                 count(distinct coalesce(
-                  nullif(d.publisher_owner, ''),
-                  nullif(d.publisher_id, ''),
-                  d.publisher
+                  nullif(lower(btrim(d.publisher_owner)), ''),
+                  nullif(lower(btrim(d.publisher_id)), ''),
+                  nullif(lower(btrim(d.publisher)), '')
                 )) as publisher_owner_breadth
          from narrative_candidate_evidence ce
          join documents d on d.id = ce.document_id
          where d.published_at >= now() - ($2::text || ' days')::interval
+           and d.published_at <= now()
          group by ce.candidate_id
        )
        select nc.id, nc.cluster_key, nc.name, nc.proposition, nc.category,
@@ -732,8 +762,13 @@ export async function getNarrativeCandidateQueue(
       : await client.query<CandidateEvidenceRow>(
           `select ce.id, ce.candidate_id, ce.document_id,
                   d.title, d.publisher,
-                  coalesce(nullif(d.publisher_id, ''), d.publisher) as publisher_id,
-                  coalesce(nullif(d.publisher_owner, ''), nullif(d.publisher_id, ''), d.publisher)
+                  coalesce(nullif(btrim(d.publisher_id), ''), btrim(d.publisher))
+                    as publisher_id,
+                  coalesce(
+                    nullif(btrim(d.publisher_owner), ''),
+                    nullif(btrim(d.publisher_id), ''),
+                    btrim(d.publisher)
+                  )
                     as publisher_owner,
                   d.source_class, d.published_at::text, d.url,
                   ce.evidence_snippet, ce.interpretation, ce.stance,
@@ -892,18 +927,251 @@ export async function mergeNarrativeCandidate(
   }
 }
 
-export async function promoteNarrativeCandidate(
-  input: {
-    id: string;
-    note?: string;
-    classificationModel?: string;
-    classificationPromptVersion?: string;
-    minimumDocuments?: number;
-    minimumPublisherOwners?: number;
-    evidenceWindowDays?: number;
-  },
+export type NarrativeCandidateAutomaticPolicy = {
+  minimumMatchScore: number;
+  minimumDocuments: number;
+  minimumPublisherOwners: number;
+  evidenceWindowDays: number;
+  excludedPublisherOwners: string[];
+};
+
+type NarrativeCandidatePromotionInput = {
+  id: string;
+  note?: string;
+  classificationModel?: string;
+  classificationPromptVersion?: string;
+  minimumDocuments?: number;
+  minimumPublisherOwners?: number;
+  evidenceWindowDays?: number;
+} & (
+  | {
+      reviewActorType?: "human";
+      reviewMetadata?: Record<string, unknown>;
+      automaticPolicy?: never;
+    }
+  | {
+      reviewActorType: "automatic";
+      reviewMetadata?: Record<string, unknown>;
+      automaticPolicy: NarrativeCandidateAutomaticPolicy;
+    }
+);
+
+export type NarrativeCandidateAutoPromotionOptions = {
+  discoveryPromptVersion?: string;
+  classificationModel?: string;
+  classificationPromptVersion?: string;
+  minimumMatchScore?: number;
+  minimumDocuments?: number;
+  minimumPublisherOwners?: number;
+  evidenceWindowDays?: number;
+  excludedPublisherOwners?: string[];
+  limit?: number;
+};
+
+export async function autoPromoteNarrativeCandidates(
+  options: NarrativeCandidateAutoPromotionOptions = {},
   databaseUrl = process.env.DATABASE_URL
 ) {
+  const discoveryPromptVersion =
+    options.discoveryPromptVersion ??
+    process.env.NARRATIVE_DISCOVERY_PROMPT_VERSION ??
+    "narrative_discovery_v1";
+  const classificationModel =
+    options.classificationModel ??
+    process.env.ANTHROPIC_MODEL ??
+    "claude-sonnet-4-5-20250929";
+  const classificationPromptVersion =
+    options.classificationPromptVersion ??
+    process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+    "narrative_classification_v5";
+  const minimumMatchScore =
+    Math.max(
+      90,
+      finiteNumber(
+        options.minimumMatchScore ??
+          Number(process.env.NARRATIVE_AUTO_PROMOTE_MIN_SCORE ?? 90),
+        90
+      )
+    );
+  const minimumDocuments =
+    Math.max(
+      3,
+      finiteInteger(
+        options.minimumDocuments ??
+          Number(process.env.NARRATIVE_AUTO_PROMOTE_MIN_DOCUMENTS ?? 3),
+        3
+      )
+    );
+  const minimumPublisherOwners =
+    Math.max(
+      3,
+      finiteInteger(
+        options.minimumPublisherOwners ??
+          Number(process.env.NARRATIVE_AUTO_PROMOTE_MIN_PUBLISHER_OWNERS ?? 3),
+        3
+      )
+    );
+  const evidenceWindowDays =
+    Math.min(
+      7,
+      Math.max(
+        1,
+        finiteInteger(
+          options.evidenceWindowDays ??
+            Number(process.env.NARRATIVE_AUTO_PROMOTE_LOOKBACK_DAYS ?? 7),
+          7
+        )
+      )
+    );
+  const excludedPublisherOwners = (
+    options.excludedPublisherOwners ??
+    parseCsv(
+      process.env.NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS ??
+        "youtube,youtube-com,youtube.com,youtu.be"
+    )
+  ).map((value) => value.toLowerCase());
+  const limit =
+    Math.max(
+      1,
+      finiteInteger(
+        options.limit ??
+          Number(process.env.NARRATIVE_AUTO_PROMOTE_MAX_CANDIDATES ?? 5),
+        5
+      )
+    );
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  let candidates: Array<{ id: string }>;
+  try {
+    const result = await client.query<{ id: string }>(
+      `select nc.id
+       from narrative_candidates nc
+       join narrative_candidate_evidence ce on ce.candidate_id = nc.id
+       join documents d on d.id = ce.document_id
+       join document_texts dt on dt.document_id = d.id
+       where nc.status = 'pending'
+         and nc.prompt_version = $1
+         and ce.prompt_version = nc.prompt_version
+         and ce.match_score >= $2
+         and ce.metadata->>'textHash' = dt.content_hash
+         and d.published_at >= now() - ($3::text || ' days')::interval
+         and d.published_at <= now()
+         and lower(coalesce(d.metadata->>'content', '')) <> 'preview'
+         and not exists (
+           select 1
+           from unnest($4::text[]) blocked(value)
+           where coalesce(
+                   nullif(lower(btrim(d.publisher_owner)), ''),
+                   nullif(lower(btrim(d.publisher_id)), ''),
+                   nullif(lower(btrim(d.publisher)), '')
+                 ) = blocked.value
+              or lower(btrim(d.publisher)) = blocked.value
+              or lower(coalesce(d.metadata->>'platform', '')) = blocked.value
+              or lower(d.url) like '%//' || blocked.value || '/%'
+              or lower(d.url) like '%.' || blocked.value || '/%'
+              or lower(d.url) like '%//' || blocked.value || ':%/%'
+              or lower(d.url) like '%.' || blocked.value || ':%/%'
+         )
+       group by nc.id
+       having count(distinct ce.document_id) >= $5
+          and count(distinct coalesce(
+            nullif(lower(btrim(d.publisher_owner)), ''),
+            nullif(lower(btrim(d.publisher_id)), ''),
+            nullif(lower(btrim(d.publisher)), '')
+          )) >= $6
+       order by max(d.published_at) desc
+       limit $7`,
+      [
+        discoveryPromptVersion,
+        minimumMatchScore,
+        evidenceWindowDays,
+        excludedPublisherOwners,
+        minimumDocuments,
+        minimumPublisherOwners,
+        limit
+      ]
+    );
+    candidates = result.rows;
+  } finally {
+    await client.end();
+  }
+
+  const policy = {
+    policyName: "candidate_auto_promotion_v1",
+    discoveryPromptVersion,
+    classificationModel,
+    classificationPromptVersion,
+    minimumMatchScore,
+    minimumDocuments,
+    minimumPublisherOwners,
+    evidenceWindowDays,
+    excludedPublisherOwners
+  };
+  const note =
+    `Auto-promoted: score >= ${minimumMatchScore}; corroborated by >= ` +
+    `${minimumDocuments} documents from >= ${minimumPublisherOwners} independent ` +
+    `publisher groups within ${evidenceWindowDays} days.`;
+  const promotedDefinitionIds: string[] = [];
+  const failures: Array<{ candidateId: string; error: string }> = [];
+  let observationsCreated = 0;
+  let candidatesSkippedAlreadyPromoted = 0;
+  for (const candidate of candidates) {
+    try {
+      const promoted = await promoteNarrativeCandidate(
+        {
+          id: candidate.id,
+          note,
+          classificationModel,
+          classificationPromptVersion,
+          minimumDocuments,
+          minimumPublisherOwners,
+          evidenceWindowDays,
+          reviewActorType: "automatic",
+          reviewMetadata: policy,
+          automaticPolicy: {
+            minimumMatchScore,
+            minimumDocuments,
+            minimumPublisherOwners,
+            evidenceWindowDays,
+            excludedPublisherOwners
+          }
+        },
+        databaseUrl
+      );
+      if (promoted.alreadyPromoted) {
+        candidatesSkippedAlreadyPromoted += 1;
+        continue;
+      }
+      promotedDefinitionIds.push(promoted.definitionId);
+      observationsCreated += promoted.observationsCreated;
+    } catch (error) {
+      failures.push({
+        candidateId: candidate.id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return {
+    candidatesEvaluated: candidates.length,
+    candidatesPromoted: promotedDefinitionIds.length,
+    observationsCreated,
+    candidatesSkippedAlreadyPromoted,
+    promotedDefinitionIds,
+    failedCandidates: failures
+  };
+}
+
+export async function promoteNarrativeCandidate(
+  input: NarrativeCandidatePromotionInput,
+  databaseUrl = process.env.DATABASE_URL
+) {
+  if (
+    (input.reviewActorType === "automatic") !== Boolean(input.automaticPolicy)
+  ) {
+    throw new Error(
+      "Automatic candidate promotion requires its complete safety policy."
+    );
+  }
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -933,25 +1201,50 @@ export async function promoteNarrativeCandidate(
     if (candidate.status !== "pending") {
       throw new Error("Only pending narrative candidates can be promoted.");
     }
+    const automaticPolicy = input.automaticPolicy
+      ? normalizeAutomaticPromotionPolicy(input.automaticPolicy)
+      : null;
 
-    const evidenceResult = await client.query<CandidateEvidenceRow>(
+    const evidenceResult = await client.query<PromotionEvidenceRow>(
       `select ce.id, ce.candidate_id, ce.document_id,
               d.title, d.publisher,
-              coalesce(nullif(d.publisher_id, ''), d.publisher) as publisher_id,
-              coalesce(nullif(d.publisher_owner, ''), nullif(d.publisher_id, ''), d.publisher)
+              coalesce(nullif(btrim(d.publisher_id), ''), btrim(d.publisher)) as publisher_id,
+              coalesce(
+                nullif(btrim(d.publisher_owner), ''),
+                nullif(btrim(d.publisher_id), ''),
+                btrim(d.publisher)
+              )
                 as publisher_owner,
               d.source_class, d.published_at::text, d.url,
               ce.evidence_snippet, ce.interpretation, ce.stance,
               ce.risk_tone::float, ce.bullish_tone::float,
-              ce.affected_entities, ce.match_score::float
+              ce.affected_entities, ce.match_score::float,
+              d.metadata as document_metadata,
+              ce.metadata as evidence_metadata,
+              dt.content_hash as current_text_hash,
+              dt.content as current_text,
+              ce.prompt_version as evidence_prompt_version,
+              ce.model as evidence_model
        from narrative_candidate_evidence ce
        join documents d on d.id = ce.document_id
+       join document_texts dt on dt.document_id = d.id
        where ce.candidate_id = $1
-       order by d.published_at desc`,
+       order by d.published_at desc
+       for share of ce, d, dt`,
       [candidate.id]
     );
-    const evidence = evidenceResult.rows.map(mapEvidence);
+    const selectedRows = automaticPolicy
+      ? evidenceResult.rows.filter((row) =>
+          isAllowedAutomaticPromotionEvidence(
+            row,
+            candidate,
+            automaticPolicy
+          )
+        )
+      : evidenceResult.rows;
+    const evidence = selectedRows.map(mapEvidence);
     const evidenceWindowDays =
+      automaticPolicy?.evidenceWindowDays ??
       input.evidenceWindowDays ??
       Number(
         process.env.NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS ??
@@ -960,9 +1253,14 @@ export async function promoteNarrativeCandidate(
     const qualification = candidateBreadth(
       recentCandidateEvidence(evidence, evidenceWindowDays)
     );
-    const minimumDocuments = input.minimumDocuments ?? DEFAULT_CANDIDATE_MIN_DOCUMENTS;
+    const minimumDocuments =
+      automaticPolicy?.minimumDocuments ??
+      input.minimumDocuments ??
+      DEFAULT_CANDIDATE_MIN_DOCUMENTS;
     const minimumPublisherOwners =
-      input.minimumPublisherOwners ?? DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS;
+      automaticPolicy?.minimumPublisherOwners ??
+      input.minimumPublisherOwners ??
+      DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS;
     if (
       !isNarrativeCandidateQualified(
         qualification,
@@ -1018,6 +1316,34 @@ export async function promoteNarrativeCandidate(
       input.classificationPromptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
       "narrative_classification_v5";
+    const reviewActorType = input.reviewActorType ?? "human";
+    const reviewedAt = new Date().toISOString();
+    const qualifyingEvidence = selectedRows.map((row) => ({
+      evidenceId: row.id,
+      documentId: row.document_id,
+      publisherOwner: normalizePublisherOwner(row.publisher_owner),
+      matchScore: Number(row.match_score),
+      publishedAt: row.published_at,
+      url: row.url,
+      hostname: canonicalHostname(row.url),
+      textHash: row.current_text_hash,
+      evidenceSnippetHash: createHash("sha256")
+        .update(row.evidence_snippet)
+        .digest("hex"),
+      discoveryModel: row.evidence_model,
+      discoveryPromptVersion: row.evidence_prompt_version
+    }));
+    const reviewMetadata = {
+      ...(input.reviewMetadata ?? {}),
+      ...(automaticPolicy ? { automaticPolicy } : {}),
+      promotedDefinitionId: definitionId,
+      qualifyingEvidence
+    };
+    const reviewProvenance = {
+      ...reviewMetadata,
+      actorType: reviewActorType,
+      reviewedAt
+    };
     let observationsCreated = 0;
     for (const item of evidence) {
       const result = await client.query(
@@ -1052,12 +1378,43 @@ export async function promoteNarrativeCandidate(
           classificationPromptVersion,
           JSON.stringify({
             promotedFromCandidateId: candidate.id,
-            discoveryPromptVersion: candidate.prompt_version
+            discoveryPromptVersion: candidate.prompt_version,
+            reviewProvenance,
+            ...(reviewActorType === "automatic"
+              ? { autoReview: reviewMetadata }
+              : {})
           }),
           input.note?.trim() || "Approved with discovered narrative candidate."
         ]
       );
       observationsCreated += result.rowCount ?? 0;
+      if ((result.rowCount ?? 0) > 0) {
+        const observationId = promotedObservationId(
+          definitionId,
+          item.documentId,
+          classificationModel,
+          classificationPromptVersion
+        );
+        await client.query(
+          `insert into narrative_review_events (
+             id, observation_id, observation_key, previous_status, new_status,
+             actor_type, review_note, metadata
+           ) values (
+             $1, $2, $2, 'pending', 'approved', $3, $4, $5::jsonb
+           )`,
+          [
+            `narrative:review-event:${randomUUID()}`,
+            observationId,
+            reviewActorType,
+            input.note?.trim() || "Approved with discovered narrative candidate.",
+            JSON.stringify({
+              action: "candidate_promotion",
+              candidateId: candidate.id,
+              reviewProvenance
+            })
+          ]
+        );
+      }
     }
 
     await client.query(
@@ -1066,9 +1423,15 @@ export async function promoteNarrativeCandidate(
            promoted_definition_id = $2,
            review_note = nullif($3, ''),
            reviewed_at = now(),
+           metadata = metadata || $4::jsonb,
            updated_at = now()
        where id = $1`,
-      [candidate.id, definitionId, input.note?.trim() ?? ""]
+      [
+        candidate.id,
+        definitionId,
+        input.note?.trim() ?? "",
+        JSON.stringify({ promotionProvenance: reviewProvenance })
+      ]
     );
     await client.query("commit");
     return {
@@ -1104,6 +1467,127 @@ export function slugifyNarrativeCandidate(value: string) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return slug || "emerging-narrative";
+}
+
+function isAllowedAutomaticPromotionEvidence(
+  row: PromotionEvidenceRow,
+  candidate: CandidateRow,
+  policy: NarrativeCandidateAutomaticPolicy
+) {
+  const publishedAt = new Date(row.published_at).getTime();
+  const now = Date.now();
+  const cutoff = now - policy.evidenceWindowDays * 24 * 60 * 60 * 1_000;
+  const evidenceTextHash = row.evidence_metadata.textHash;
+  const matchScore = Number(row.match_score);
+  if (
+    !Number.isFinite(matchScore) ||
+    matchScore < policy.minimumMatchScore ||
+    matchScore > 100 ||
+    row.evidence_snippet.trim().length === 0 ||
+    row.evidence_prompt_version !== candidate.prompt_version ||
+    typeof evidenceTextHash !== "string" ||
+    evidenceTextHash !== row.current_text_hash ||
+    !row.current_text.includes(row.evidence_snippet) ||
+    !Number.isFinite(publishedAt) ||
+    publishedAt < cutoff ||
+    publishedAt > now ||
+    String(row.document_metadata.content ?? "").trim().toLowerCase() === "preview"
+  ) {
+    return false;
+  }
+
+  const blocked = new Set(
+    policy.excludedPublisherOwners.map((value) =>
+      value.trim().toLowerCase().replace(/^www\./, "").replace(/\.+$/, "")
+    )
+  );
+  const normalizedOwner =
+    normalizePublisherOwner(row.publisher_owner) ||
+    normalizePublisherOwner(row.publisher_id) ||
+    row.publisher.trim().toLowerCase();
+  if (!normalizedOwner) return false;
+  const sourceValues = [
+    normalizedOwner,
+    row.publisher.trim().toLowerCase(),
+    String(row.document_metadata.platform ?? "").trim().toLowerCase()
+  ];
+  if (sourceValues.some((value) => blocked.has(value))) return false;
+  try {
+    const url = new URL(row.url);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    const hostname = url.hostname
+      .toLowerCase()
+      .replace(/^www\./, "")
+      .replace(/\.+$/, "");
+    if (!hostname) return false;
+    if (
+      [...blocked].some(
+        (value) => hostname === value || hostname.endsWith(`.${value}`)
+      )
+    ) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function normalizeAutomaticPromotionPolicy(
+  policy: NarrativeCandidateAutomaticPolicy
+): NarrativeCandidateAutomaticPolicy {
+  return {
+    minimumMatchScore: Math.max(
+      90,
+      finiteNumber(policy.minimumMatchScore, 90)
+    ),
+    minimumDocuments: Math.max(
+      3,
+      finiteInteger(policy.minimumDocuments, 3)
+    ),
+    minimumPublisherOwners: Math.max(
+      3,
+      finiteInteger(policy.minimumPublisherOwners, 3)
+    ),
+    evidenceWindowDays: Math.max(
+      1,
+      Math.min(7, finiteInteger(policy.evidenceWindowDays, 7))
+    ),
+    excludedPublisherOwners: policy.excludedPublisherOwners.map((value) =>
+      value.trim().toLowerCase()
+    )
+  };
+}
+
+function normalizePublisherOwner(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function canonicalHostname(value: string) {
+  try {
+    const url = new URL(value);
+    return url.hostname
+      .toLowerCase()
+      .replace(/^www\./, "")
+      .replace(/\.+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function finiteNumber(value: number, fallback: number) {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function finiteInteger(value: number, fallback: number) {
+  return Number.isFinite(value) ? Math.floor(value) : fallback;
+}
+
+function parseCsv(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function mapEvidence(row: CandidateEvidenceRow): NarrativeCandidateEvidence {
@@ -1167,8 +1651,16 @@ function mapCandidate(
 function candidateBreadth(evidence: NarrativeCandidateEvidence[]) {
   return {
     documentBreadth: new Set(evidence.map((item) => item.documentId)).size,
-    publisherBreadth: new Set(evidence.map((item) => item.publisherId)).size,
-    publisherOwnerBreadth: new Set(evidence.map((item) => item.publisherOwner)).size,
+    publisherBreadth: new Set(
+      evidence
+        .map((item) => item.publisherId.trim().toLowerCase())
+        .filter(Boolean)
+    ).size,
+    publisherOwnerBreadth: new Set(
+      evidence
+        .map((item) => normalizePublisherOwner(item.publisherOwner))
+        .filter(Boolean)
+    ).size,
     sourceClassBreadth: new Set(evidence.map((item) => item.sourceClass)).size,
     entityBreadth: new Set(evidence.flatMap((item) => item.affectedEntities)).size
   };
@@ -1178,10 +1670,12 @@ function recentCandidateEvidence(
   evidence: NarrativeCandidateEvidence[],
   windowDays: number
 ) {
-  const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1_000;
-  return evidence.filter(
-    (item) => new Date(item.publishedAt).getTime() >= cutoff
-  );
+  const now = Date.now();
+  const cutoff = now - windowDays * 24 * 60 * 60 * 1_000;
+  return evidence.filter((item) => {
+    const publishedAt = new Date(item.publishedAt).getTime();
+    return publishedAt >= cutoff && publishedAt <= now;
+  });
 }
 
 function candidateEvidenceId(candidateId: string, documentId: string) {

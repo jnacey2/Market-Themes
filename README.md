@@ -572,9 +572,13 @@ from two independent publisher-owner groups within seven days. Preview content
 and configured low-trust owners are excluded. Every automatic decision receives
 an audit note plus an append-only review event and can still be rejected by a
 human. Automatic decisions do not inherit across classifier versions; human
-decisions do. Lower-confidence matches
-remain pending, and promotion of newly discovered narrative candidates remains
-manual during the initial evaluation period.
+decisions do. Lower-confidence matches remain pending.
+
+New candidates use a stricter autonomous promotion gate: at least three
+score-90 evidence documents from three independent publisher-owner groups
+within seven days. Only the qualifying evidence is seeded as approved when the
+candidate becomes a versioned tracked narrative. Candidates below that gate
+remain available for manual review and merge.
 
 ## Database Setup
 
@@ -608,7 +612,8 @@ The blueprint defines:
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
 - `classify-narratives`: hourly existing-narrative evidence classification.
 - `discover-narratives`: hourly new-proposition candidate discovery.
-- `auto-review-narratives`: twice-hourly conservative evidence approval.
+- `auto-review-narratives`: twice-hourly conservative evidence approval and
+  guarded candidate promotion.
 - `recompute-narrative-trends`: twice-hourly publication of approved evidence.
 
 Deployment steps:

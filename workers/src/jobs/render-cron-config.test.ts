@@ -59,6 +59,19 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
     review,
     /key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS\s+value: youtube,youtube-com,youtube\.com,youtu\.be/
   );
+  assert.match(
+    review,
+    /key: NARRATIVE_AUTO_PROMOTE_CANDIDATES\s+value: "true"/
+  );
+  assert.match(review, /key: NARRATIVE_DISCOVERY_PROMPT_VERSION/);
+  assert.match(
+    review,
+    /key: NARRATIVE_AUTO_PROMOTE_MIN_DOCUMENTS\s+value: "3"/
+  );
+  assert.match(
+    review,
+    /key: NARRATIVE_AUTO_PROMOTE_MIN_PUBLISHER_OWNERS\s+value: "3"/
+  );
   assert.doesNotMatch(review, /ANTHROPIC_API_KEY/);
 });
 

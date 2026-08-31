@@ -9,7 +9,9 @@ test("automatic review is fail-closed unless explicitly enabled", async () => {
     assert.deepEqual(await autoReviewNarratives(), {
       enabled: false,
       approvedObservations: 0,
-      narrativesTouched: 0
+      narrativesTouched: 0,
+      candidatesPromoted: 0,
+      candidateObservationsCreated: 0
     });
   } finally {
     if (previous === undefined) {

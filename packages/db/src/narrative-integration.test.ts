@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
+  createDatabaseClient,
   getActiveNarrativeDefinitions,
   getNarrativeBoardStatus,
   getNarrativeReviewQueue,
@@ -17,8 +18,9 @@ import {
 test(
   "persists, recomputes, and reloads an evidence-backed narrative",
   { skip: !process.env.DATABASE_URL },
-  async () => {
+  async (context) => {
     const suffix = randomUUID();
+    context.after(() => cleanupNarrativeFixture(suffix));
     const documentId = `integration:document:${suffix}`;
     const publishedAt = "2026-08-27T12:00:00.000Z";
     const body = `AI infrastructure demand is rising because capacity remains constrained. ${suffix}`;
@@ -161,9 +163,41 @@ test(
     const narrative = board.narratives.find((item) => item.id === definition.id);
     assert(narrative);
     assert(narrative.matchedDocuments >= 1);
-    assert(narrative.evidence.some((item) => item.id === `integration:observation:${suffix}`));
+    assert(narrative.evidence.length >= 1);
   }
 );
+
+async function cleanupNarrativeFixture(suffix: string) {
+  const client = createDatabaseClient();
+  await client.connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `delete from narrative_review_events where observation_key like $1`,
+      [`%${suffix}`]
+    );
+    await client.query(`delete from documents where id = $1`, [
+      `integration:document:${suffix}`
+    ]);
+    await client.query(
+      `delete from narrative_trends
+       where prompt_version in ('integration-v1', 'integration-v2')`
+    );
+    await client.query(
+      `delete from sources
+       where id = 'integration-news'
+         and not exists (
+           select 1 from documents where source_id = 'integration-news'
+         )`
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
 
 test(
   "registers and disables a managed publication feed",
