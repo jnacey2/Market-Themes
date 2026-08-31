@@ -9,8 +9,11 @@ export const dynamic = "force-dynamic";
 export default async function HomePage() {
   const dashboard = await getNarrativeHomepageStatus();
   const leadNarrative = dashboard.narratives[0];
+  const summaryUnavailable =
+    !dashboard.databaseConfigured ||
+    (dashboard.degraded && dashboard.narratives.length === 0);
   const brief =
-    dashboard.degraded && !leadNarrative
+    summaryUnavailable
       ? {
           headline: "Live narrative summary is temporarily unavailable.",
           summary:
@@ -41,31 +44,33 @@ export default async function HomePage() {
           <p className="eyebrow">Today&apos;s highest priority</p>
           <h2>
             {leadNarrative?.name ??
-              (dashboard.degraded
+              (!dashboard.databaseConfigured
+                ? "Narrative database is unavailable"
+                : dashboard.degraded
                 ? "Narrative summary is delayed"
-                : "No reviewed narrative evidence yet")}
+                : "Awaiting a published 7-day signal")}
           </h2>
           <p>
             {leadNarrative
               ? leadNarrative.proposition
-              : dashboard.degraded
+              : !dashboard.databaseConfigured
+                ? "Connect the research database to load reviewed narratives."
+                : dashboard.degraded
                 ? "The lightweight narrative summary could not finish. Open Narrative Currents for the full live board."
-                : dashboard.databaseConfigured
-                  ? "Reviewed narrative evidence will appear after the next publication cycle."
-                  : "Set DATABASE_URL to connect the dashboard to live trend data."}
+                : "Reviewed evidence may exist historically or await the next narrative trend publication."}
           </p>
           <div className="metric-row">
             <div className="metric">
               <span>Reviewed documents</span>
-              <strong>{leadNarrative?.matchedDocuments ?? 0}</strong>
+              <strong>{leadNarrative?.matchedDocuments ?? "—"}</strong>
             </div>
             <div className="metric">
               <span>Publisher groups</span>
-              <strong>{leadNarrative?.publisherOwnerBreadth ?? 0}</strong>
+              <strong>{leadNarrative?.publisherOwnerBreadth ?? "—"}</strong>
             </div>
             <div className="metric">
               <span>Source classes</span>
-              <strong>{leadNarrative?.sourceClassBreadth ?? 0}</strong>
+              <strong>{leadNarrative?.sourceClassBreadth ?? "—"}</strong>
             </div>
           </div>
         </div>
@@ -75,7 +80,7 @@ export default async function HomePage() {
         <div className="panel">
           <span className="label">Tracked narratives</span>
           <h2>
-            {dashboard.degraded && dashboard.trackedNarrativeCount === 0
+            {summaryUnavailable
               ? "Unavailable"
               : dashboard.trackedNarrativeCount}
           </h2>
@@ -84,7 +89,7 @@ export default async function HomePage() {
         <div className="panel">
           <span className="label">Homepage focus</span>
           <h2>
-            {dashboard.degraded && dashboard.narratives.length === 0
+            {summaryUnavailable
               ? "Unavailable"
               : `${dashboard.narratives.length} active signals`}
           </h2>
@@ -100,7 +105,9 @@ export default async function HomePage() {
               (dashboard.degraded ? "Temporarily unavailable" : "None yet")}
           </h2>
           <p>
-            {dashboard.degraded
+            {!dashboard.databaseConfigured
+              ? "Connect the research database to measure current narratives."
+              : dashboard.degraded
               ? "Some live summary data is temporarily unavailable; displayed zeroes should not be treated as measurements."
               : "Approved evidence only. Pending and rejected matches are excluded."}
           </p>
@@ -115,12 +122,16 @@ export default async function HomePage() {
               <h2>
                 {dashboard.degraded
                   ? "Live narrative cards are delayed"
-                  : "No reviewed narratives yet"}
+                  : !dashboard.databaseConfigured
+                    ? "Narrative database is unavailable"
+                    : "No published 7-day narrative signals yet"}
               </h2>
               <p>
                 {dashboard.degraded
                   ? "Open Narrative Currents for the complete live board."
-                  : "Classification, review, and narrative trend publication populate this list automatically."}
+                  : !dashboard.databaseConfigured
+                    ? "Connect DATABASE_URL to load the live narrative board."
+                    : "Reviewed evidence may be historical or awaiting the next scheduled narrative trend publication."}
               </p>
               <Link className="pill" href="/trends">
                 Open Narrative Currents
@@ -128,7 +139,11 @@ export default async function HomePage() {
             </div>
           ) : (
             dashboard.narratives.map((narrative) => (
-              <NarrativeCard key={narrative.id} narrative={narrative} />
+              <NarrativeCard
+                evidenceDegraded={dashboard.degraded}
+                key={narrative.id}
+                narrative={narrative}
+              />
             ))
           )}
         </div>
@@ -158,8 +173,10 @@ export default async function HomePage() {
 }
 
 function NarrativeCard({
+  evidenceDegraded,
   narrative
 }: {
+  evidenceDegraded: boolean;
   narrative: NarrativeHomepageItem;
 }) {
   return (
@@ -185,7 +202,11 @@ function NarrativeCard({
           <div className="grid">
             {narrative.evidencePreview.length === 0 ? (
               <div className="evidence-card">
-                <p>No reviewed citation preview is available yet.</p>
+                <p>
+                  {evidenceDegraded
+                    ? "Evidence preview is temporarily unavailable."
+                    : "No current seven-day citation preview is available."}
+                </p>
               </div>
             ) : (
               narrative.evidencePreview.map((evidence) => (

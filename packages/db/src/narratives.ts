@@ -954,13 +954,15 @@ export async function getNarrativeHomepageStatus(
            (select count(*)::text
               from narrative_definitions
               where status = 'active') as tracked_count,
-           (select max(nt.date)::text
+           (select nt.date::text
               from narrative_trends nt
               join narrative_definitions nd
                 on nd.id = nt.narrative_definition_id
               where nt.prompt_version = $1
                 and nt.trend_window = '7d'
-                and nd.status = 'active') as latest_date
+                and nd.status = 'active'
+              order by nt.date desc
+              limit 1) as latest_date
        )
        select o.tracked_count, o.latest_date, ranked.*
        from overview o
@@ -986,14 +988,12 @@ export async function getNarrativeHomepageStatus(
          order by nt.publisher_owner_breadth desc,
                   nt.matched_documents desc,
                   nt.source_class_breadth desc,
-                  nt.density desc,
                   nd.id
          limit 6
        ) ranked on true
        order by ranked.publisher_owner_breadth desc nulls last,
                 ranked.matched_documents desc nulls last,
                 ranked.source_class_breadth desc nulls last,
-                ranked.density desc nulls last,
                 ranked.id`,
       [promptVersion]
     );
@@ -1012,10 +1012,8 @@ export async function getNarrativeHomepageStatus(
         const evidence = await client.query<NarrativeHomepageEvidenceRow>(
           `with latest_observations as (
              select distinct on (no.narrative_definition_id, no.document_id)
-                    no.id, no.narrative_definition_id,
-                    d.title, d.publisher, d.published_at::text, d.url,
-                    d.source_class, no.matched, no.stance, no.evidence_snippet,
-                    no.interpretation, no.affected_entities,
+                    no.id, no.narrative_definition_id, no.document_id,
+                    d.published_at,
                     no.match_score::float, no.review_status
              from narrative_observations no
              join documents d on d.id = no.document_id
@@ -1027,20 +1025,31 @@ export async function getNarrativeHomepageStatus(
                       no.observed_at desc, no.id
            ),
            ranked as (
-             select latest_observations.*,
+             select id, narrative_definition_id, document_id,
+                    published_at, match_score,
                     row_number() over (
                       partition by narrative_definition_id
                       order by published_at desc, match_score desc, id
                     ) as evidence_rank
              from latest_observations
-             where matched and review_status = 'approved'
+             where review_status = 'approved'
+           ),
+           top_evidence as (
+             select id, narrative_definition_id, document_id, evidence_rank
+             from ranked
+             where evidence_rank <= 3
            )
-           select id, narrative_definition_id, title, publisher,
-                  published_at, url, source_class, stance, evidence_snippet,
-                  interpretation, affected_entities, match_score, review_status
-           from ranked
-           where evidence_rank <= 3
-           order by narrative_definition_id, evidence_rank`,
+           select no.id, top_evidence.narrative_definition_id,
+                  d.title, d.publisher, d.published_at::text, d.url,
+                  d.source_class, no.stance, no.evidence_snippet,
+                  no.interpretation, no.affected_entities,
+                  no.match_score::float, no.review_status
+           from top_evidence
+           join narrative_observations no on no.id = top_evidence.id
+           join documents d on d.id = top_evidence.document_id
+           where no.matched
+           order by top_evidence.narrative_definition_id,
+                    top_evidence.evidence_rank`,
           [promptVersion, narrativeIds, latestDate]
         );
         evidenceRows = evidence.rows;
