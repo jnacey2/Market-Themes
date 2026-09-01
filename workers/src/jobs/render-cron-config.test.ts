@@ -13,7 +13,7 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
   assert.match(classification, /schedule: "5 \* \* \* \*"/);
   assert.match(
     classification,
-    /startCommand: npm run narratives:classify --workspace @market-themes\/workers/
+    /startCommand: npm run narratives:classify:batch --workspace @market-themes\/workers/
   );
   assert.match(classification, /key: ANTHROPIC_API_KEY/);
   assert.match(
@@ -34,7 +34,7 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
   assert.match(discovery, /schedule: "10 \* \* \* \*"/);
   assert.match(
     discovery,
-    /startCommand: npm run narratives:discover --workspace @market-themes\/workers/
+    /startCommand: npm run narratives:discover:batch --workspace @market-themes\/workers/
   );
   assert.match(discovery, /key: ANTHROPIC_API_KEY/);
   assert.match(discovery, /key: NARRATIVE_DISCOVERY_PROMPT_VERSION/);
@@ -45,7 +45,7 @@ test("extracts a bounded recent-document batch every hour", () => {
   assert.match(extraction, /schedule: "35 \* \* \* \*"/);
   assert.match(
     extraction,
-    /startCommand: npm run claude:extract:backfill --workspace @market-themes\/workers/
+    /startCommand: npm run claude:extract:batch --workspace @market-themes\/workers/
   );
   assert.match(extraction, /key: ANTHROPIC_API_KEY/);
   assert.match(
@@ -83,6 +83,18 @@ test("publishes narrative trends twice hourly without waiting on model work", ()
   );
   assert.doesNotMatch(trends, /ANTHROPIC_API_KEY/);
   assert.match(trends, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
+});
+
+test("reconciles durable Anthropic batches every ten minutes", () => {
+  const poller = serviceBlock("poll-anthropic-batches");
+  assert.match(poller, /schedule: "2,12,22,32,42,52 \* \* \* \*"/);
+  assert.match(
+    poller,
+    /startCommand: npm run anthropic:batches:poll --workspace @market-themes\/workers/
+  );
+  assert.match(poller, /key: DATABASE_URL/);
+  assert.match(poller, /key: ANTHROPIC_API_KEY/);
+  assert.doesNotMatch(poller, /ANTHROPIC_MODEL/);
 });
 
 test("auto-reviews only explicitly enabled corroborated matches", () => {
