@@ -583,10 +583,16 @@ human. Automatic decisions do not inherit across classifier versions; human
 decisions do. Lower-confidence matches remain pending.
 
 New candidates use a stricter autonomous promotion gate: at least three
-score-90 evidence documents from three independent publisher-owner groups
-within seven days. Only the qualifying evidence is seeded as approved when the
-candidate becomes a versioned tracked narrative. Candidates below that gate
-remain available for manual review and merge.
+score-90 independent reports from three publisher-owner groups within seven
+days. Before promotion, a second schema-constrained Claude pass deduplicates
+media echo, adjudicates every quotation against the candidate's inclusion and
+exclusion contract, and labels the candidate as either a specific event or a
+structural narrative. Structural narratives also need multiple underlying
+events or primary entities; event narratives need one explicit event label.
+Only contract-valid evidence is seeded as approved. Blocked candidates expose
+the exact reasons in `/narrative-candidates` and remain available for a
+documented human override. Operators can retract a promoted narrative without
+deleting its evidence or immutable review history.
 
 ## Database Setup
 

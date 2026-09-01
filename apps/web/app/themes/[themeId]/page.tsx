@@ -148,8 +148,12 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
     <div className="shell wide-shell">
       <section className="hero narrative-detail-hero">
         <div>
-          <p className="eyebrow">{narrative.category} · Version {narrative.version}</p>
+          <p className="eyebrow">
+            {narrative.category} · {narrative.kind ?? "structural"} · Version{" "}
+            {narrative.version}
+          </p>
           <h1>{narrative.name}</h1>
+          {narrative.eventLabel ? <p className="label">{narrative.eventLabel}</p> : null}
           <p className="lede">{narrative.proposition}</p>
           <div className="pill-row">
             <span className="pill">

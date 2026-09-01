@@ -39,10 +39,12 @@ export async function getActiveNarrativeDefinitions(
       positive_examples: string[];
       negative_examples: string[];
       status: string;
+      kind: NarrativeDefinition["kind"];
+      event_label: string | null;
     }>(
       `select id, slug, version, name, proposition, category,
               inclusion_guidance, exclusion_guidance,
-              positive_examples, negative_examples, status
+              positive_examples, negative_examples, status, kind, event_label
        from narrative_definitions
        where status = 'active'
        order by category, name`
@@ -434,6 +436,79 @@ export async function reviewNarrativeObservation(
       reviewStatus: result.rows[0].review_status,
       reviewedAt: result.rows[0].reviewed_at
     };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function retractNarrativeDefinition(
+  input: {
+    id: string;
+    reason: string;
+    actorType?: "human" | "system";
+  },
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const reason = input.reason.trim();
+  if (!reason) throw new Error("A retraction reason is required.");
+  const actorType = input.actorType ?? "human";
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    await client.query("begin");
+    const definition = await client.query<{ id: string; status: string }>(
+      `select id, status
+       from narrative_definitions
+       where id = $1
+       for update`,
+      [input.id]
+    );
+    if (!definition.rows[0]) throw new Error("Narrative definition not found.");
+    if (definition.rows[0].status !== "inactive") {
+      await client.query(
+        `update narrative_definitions
+         set status = 'inactive',
+             metadata = metadata || jsonb_build_object(
+               'retraction', jsonb_build_object(
+                 'actorType', $2::text,
+                 'reason', $3::text,
+                 'at', now()
+               )
+             ),
+             updated_at = now()
+         where id = $1`,
+        [input.id, actorType, reason]
+      );
+      await client.query(
+        `insert into narrative_definition_events (
+           id, narrative_definition_id, action, actor_type, reason, metadata
+         ) values ($1, $2, 'retracted', $3, $4, '{}'::jsonb)`,
+        [
+          `narrative:definition:event:${randomUUID()}`,
+          input.id,
+          actorType,
+          reason
+        ]
+      );
+      await client.query(
+        `update narrative_candidates
+         set metadata = metadata || jsonb_build_object(
+               'retraction', jsonb_build_object(
+                 'actorType', $2::text,
+                 'reason', $3::text,
+                 'at', now()
+               )
+             ),
+             updated_at = now()
+         where promoted_definition_id = $1`,
+        [input.id, actorType, reason]
+      );
+    }
+    await client.query("commit");
+    return { id: input.id, status: "inactive" as const, reason };
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -933,6 +1008,8 @@ export async function getNarrativeHomepageStatus(
       positive_examples: string[] | null;
       negative_examples: string[] | null;
       status: string | null;
+      kind: NarrativeDefinition["kind"] | null;
+      event_label: string | null;
       density: number | null;
       baseline_mean: number | null;
       z_score: number | null;
@@ -970,6 +1047,7 @@ export async function getNarrativeHomepageStatus(
          select nd.id, nd.slug, nd.version, nd.name, nd.proposition, nd.category,
                 nd.inclusion_guidance, nd.exclusion_guidance,
                 nd.positive_examples, nd.negative_examples, nd.status,
+                nd.kind, nd.event_label,
                 nt.density::float, nt.baseline_mean::float, nt.z_score::float,
                 nt.percentile_rank::float, nt.change_value::float,
                 nt.acceleration::float, nt.risk_tone::float,
@@ -1099,6 +1177,8 @@ export async function getNarrativeHomepageStatus(
         positiveExamples: row.positive_examples ?? [],
         negativeExamples: row.negative_examples ?? [],
         status: row.status ?? "active",
+        kind: row.kind ?? "structural",
+        eventLabel: row.event_label,
         trendWindow: "7d",
         latestDate,
         density: Number(row.density),
@@ -1313,6 +1393,8 @@ function mapDefinition(row: {
   positive_examples: string[];
   negative_examples: string[];
   status: string;
+  kind: NarrativeDefinition["kind"];
+  event_label: string | null;
 }): NarrativeDefinition {
   return {
     id: row.id,
@@ -1325,7 +1407,9 @@ function mapDefinition(row: {
     exclusionGuidance: row.exclusion_guidance,
     positiveExamples: row.positive_examples,
     negativeExamples: row.negative_examples,
-    status: row.status
+    status: row.status,
+    kind: row.kind,
+    eventLabel: row.event_label
   };
 }
 

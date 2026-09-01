@@ -38,8 +38,12 @@ export default async function StoryboardPage({
 
       <section className="hero">
         <div>
-          <p className="eyebrow">Live Storyboard · {narrative.category}</p>
+          <p className="eyebrow">
+            Live Storyboard · {narrative.category} ·{" "}
+            {narrative.kind ?? "structural"}
+          </p>
           <h1>{narrative.name}</h1>
+          {narrative.eventLabel ? <p className="label">{narrative.eventLabel}</p> : null}
           <p className="lede">
             {hasCoverage && !narrative.lowHistory
               ? `This narrative is ${direction} ${breadth}. Current normalized density is ${narrative.density.toFixed(1)}, a ${signed(narrative.change)} change from the prior seven-day window.`

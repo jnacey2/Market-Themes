@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { validateCandidateForPromotion } from "@market-themes/analysis";
 import {
+  getCandidatePromotionValidationInput,
   mergeNarrativeCandidate,
+  persistCandidatePromotionValidation,
   promoteNarrativeCandidate,
   rejectNarrativeCandidate
 } from "@market-themes/db";
@@ -29,7 +32,32 @@ export async function POST(request: Request) {
     const note = typeof body.note === "string" ? body.note : undefined;
 
     if (body.action === "promote") {
-      const result = await promoteNarrativeCandidate({ id: body.id, note });
+      const promotionInput = await getCandidatePromotionValidationInput(
+        body.id,
+        {
+          minimumMatchScore: 75,
+          minimumDocuments: 2,
+          minimumPublisherOwners: 2,
+          evidenceWindowDays: 30,
+          excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"]
+        },
+        process.env.DATABASE_URL,
+        "manual"
+      );
+      if (!promotionInput) {
+        throw new Error("Pending narrative candidate not found.");
+      }
+      const promotionValidation =
+        await validateCandidateForPromotion(promotionInput);
+      await persistCandidatePromotionValidation(
+        body.id,
+        promotionValidation
+      );
+      const result = await promoteNarrativeCandidate({
+        id: body.id,
+        note,
+        promotionValidation
+      });
       return NextResponse.json({ candidate: result });
     }
     if (body.action === "reject") {

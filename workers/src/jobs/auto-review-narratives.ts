@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { validateCandidateForPromotion } from "@market-themes/analysis";
 import {
   autoApproveNarrativeObservations,
   autoPromoteNarrativeCandidates
@@ -12,6 +13,7 @@ export async function autoReviewNarratives() {
       approvedObservations: 0,
       narrativesTouched: 0,
       candidatesPromoted: 0,
+      candidatesBlocked: 0,
       candidateObservationsCreated: 0
     };
     console.log(`[auto-review-narratives] ${JSON.stringify(result)}`);
@@ -21,10 +23,14 @@ export async function autoReviewNarratives() {
   const result = await autoApproveNarrativeObservations();
   const candidateResult =
     process.env.NARRATIVE_AUTO_PROMOTE_CANDIDATES === "true"
-      ? await autoPromoteNarrativeCandidates()
+      ? await autoPromoteNarrativeCandidates({
+          validateCandidate: (input) =>
+            validateCandidateForPromotion(input)
+        })
       : {
           candidatesEvaluated: 0,
           candidatesPromoted: 0,
+          candidatesBlocked: 0,
           observationsCreated: 0,
           promotedDefinitionIds: [],
           failedCandidates: []
@@ -34,6 +40,7 @@ export async function autoReviewNarratives() {
     ...result,
     candidatesEvaluated: candidateResult.candidatesEvaluated,
     candidatesPromoted: candidateResult.candidatesPromoted,
+    candidatesBlocked: candidateResult.candidatesBlocked,
     candidateObservationsCreated: candidateResult.observationsCreated,
     promotedDefinitionIds: candidateResult.promotedDefinitionIds,
     failedCandidatePromotions: candidateResult.failedCandidates

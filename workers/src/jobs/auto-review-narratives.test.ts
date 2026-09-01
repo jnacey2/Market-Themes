@@ -11,6 +11,7 @@ test("automatic review is fail-closed unless explicitly enabled", async () => {
       approvedObservations: 0,
       narrativesTouched: 0,
       candidatesPromoted: 0,
+      candidatesBlocked: 0,
       candidateObservationsCreated: 0
     });
   } finally {

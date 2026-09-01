@@ -40,6 +40,7 @@ export const PROTECTED_PATHS = [
     group.items.filter((item) => item.protected).map((item) => item.href)
   ),
   "/api/backfill",
+  "/api/narrative-definitions",
   "/api/narrative-candidates",
   "/api/narrative-observations",
   "/api/publication-feeds"

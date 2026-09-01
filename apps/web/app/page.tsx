@@ -184,6 +184,7 @@ function NarrativeCard({
       <div>
         <div className="pill-row">
           <span className="pill">{narrative.category}</span>
+          <span className="pill">{narrative.kind ?? "structural"}</span>
           <span className="pill">{narrative.trendWindow}</span>
           <span className="pill">{narrative.matchedDocuments} reviewed docs</span>
           <span className="pill">
@@ -195,6 +196,9 @@ function NarrativeCard({
           ) : null}
         </div>
         <h2>{narrative.name}</h2>
+        {narrative.eventLabel ? (
+          <p className="label">{narrative.eventLabel}</p>
+        ) : null}
         <p>{narrative.proposition}</p>
         <p>{narrativeSummary(narrative)}</p>
         <details className="detail-block">
