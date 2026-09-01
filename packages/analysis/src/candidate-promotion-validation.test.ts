@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { CandidatePromotionValidationInput } from "@market-themes/db";
 import {
+  DEFAULT_PROMOTION_VALIDATION_MODEL,
   normalizeCandidatePromotionValidation,
-  prepareCandidateEvidence
+  prepareCandidateEvidence,
+  resolveCandidatePromotionValidationModel
 } from "./candidate-promotion-validation";
 
 const baseInput: CandidatePromotionValidationInput = {
@@ -41,6 +43,28 @@ const baseInput: CandidatePromotionValidationInput = {
     sourceTextHash: `hash-${index}`
   }))
 };
+
+test("uses a dedicated Haiku model without changing the pipeline model", () => {
+  assert.equal(
+    resolveCandidatePromotionValidationModel(undefined, {
+      NARRATIVE_PROMOTION_VALIDATION_MODEL:
+        "claude-haiku-4-5-20251001",
+      ANTHROPIC_MODEL: "claude-sonnet-4-5-20250929"
+    }),
+    "claude-haiku-4-5-20251001"
+  );
+  assert.equal(
+    resolveCandidatePromotionValidationModel("explicit-model", {
+      NARRATIVE_PROMOTION_VALIDATION_MODEL:
+        "claude-haiku-4-5-20251001"
+    }),
+    "explicit-model"
+  );
+  assert.equal(
+    resolveCandidatePromotionValidationModel(undefined, {}),
+    DEFAULT_PROMOTION_VALIDATION_MODEL
+  );
+});
 
 test("deduplicates syndicated titles and quotations before validation", () => {
   const duplicated = [

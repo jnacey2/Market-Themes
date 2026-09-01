@@ -27,6 +27,8 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-5-20250929
+      - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
@@ -491,6 +493,8 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-5-20250929
+      - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
+        value: claude-haiku-4-5-20251001
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
         value: narrative_classification_v5
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION

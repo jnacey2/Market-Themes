@@ -109,7 +109,23 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
   assert.match(review, /key: ANTHROPIC_API_KEY/);
   assert.match(
     review,
+    /key: ANTHROPIC_MODEL\s+value: claude-sonnet-4-5-20250929/
+  );
+  assert.match(
+    review,
+    /key: NARRATIVE_PROMOTION_VALIDATION_MODEL\s+value: claude-haiku-4-5-20251001/
+  );
+  assert.match(
+    review,
     /key: NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION\s+value: candidate_promotion_validation_v1/
+  );
+});
+
+test("uses Haiku for web-triggered promotion validation", () => {
+  const web = serviceBlock("themes-web", "web");
+  assert.match(
+    web,
+    /key: NARRATIVE_PROMOTION_VALIDATION_MODEL\s+value: claude-haiku-4-5-20251001/
   );
 });
 
@@ -126,8 +142,8 @@ test("the theme cron runs normalization and trends without stage selectors", () 
   assert.doesNotMatch(themes, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
 });
 
-function serviceBlock(name: string) {
-  const marker = `  - type: cron\n    name: ${name}\n`;
+function serviceBlock(name: string, type = "cron") {
+  const marker = `  - type: ${type}\n    name: ${name}\n`;
   const start = renderYaml.indexOf(marker);
   assert.notEqual(start, -1, `Missing Render cron service ${name}`);
   const next = renderYaml.indexOf("\n  - type:", start + marker.length);
