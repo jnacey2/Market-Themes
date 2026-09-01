@@ -81,7 +81,7 @@ async function runClassification(options: ClassificationOptions) {
   const configuredMaxDocuments =
     options.maxDocuments ??
     (options.maxBatches === undefined ? undefined : batchSize * options.maxBatches) ??
-    Number(process.env.NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS ?? 0);
+    Number(process.env.NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS ?? 40);
   const maxDocuments = Math.max(0, configuredMaxDocuments);
   const maxRuntimeMs =
     options.maxRuntimeMs ??

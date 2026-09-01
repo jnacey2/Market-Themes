@@ -432,7 +432,7 @@ services:
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
         value: "10"
       - key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS
-        value: "0"
+        value: "40"
       - key: NARRATIVE_CLASSIFICATION_MAX_RUNTIME_MS
         value: "2400000"
       - key: NARRATIVE_CLASSIFICATION_CONCURRENCY

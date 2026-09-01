@@ -359,6 +359,12 @@ entry when that reusable prefix reaches 4,096 tokens, so shorter prefixes contin
 uncached without error. Each request logs uncached input, cache-write input,
 cache-read input, and output token counts under `[anthropic-usage]`.
 
+Model identity is part of extraction, classification, and discovery idempotency.
+Changing `ANTHROPIC_MODEL` therefore makes previously analyzed documents eligible
+for a one-time reprocessing backlog; it does not relabel old records. Scheduled
+extraction, classification, and discovery runs cap that rollout at 100, 40, and
+40 documents per run respectively.
+
 Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
 runs before using them in production storyboards. The same page can queue and
@@ -567,9 +573,11 @@ entities or two independent documents, nests sector sub-themes under their
 parent market theme, collapses supporting evidence, and moves company-specific
 or one-off themes into an emerging lane.
 
-Narrative classification drains readable documents fairly across source classes
-until the backlog is empty or the configured runtime limit is reached. Candidate
-discovery then looks for directional propositions not covered by active
+Narrative classification processes up to
+`NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS` readable documents per run, fairly
+across source classes. Set the value to `0` only for an intentionally unbounded
+drain that still observes the configured runtime limit. Candidate discovery then
+looks for directional propositions not covered by active
 definitions. Open `/narrative-candidates` to review the resulting clusters. A
 candidate cannot be promoted until at least two documents from two independent
 publisher-owner groups support it within the configured 30-day evidence window.

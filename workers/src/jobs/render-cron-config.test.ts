@@ -25,6 +25,10 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
     /key: ANTHROPIC_PROMPT_CACHING\s+value: "true"/
   );
   assert.match(classification, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
+  assert.match(
+    classification,
+    /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "40"/
+  );
 
   const discovery = serviceBlock("discover-narratives");
   assert.match(discovery, /schedule: "10 \* \* \* \*"/);
