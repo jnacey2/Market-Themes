@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
+  Message,
+  MessageCreateParamsNonStreaming
+} from "@anthropic-ai/sdk/resources/messages";
+import type {
   AnalysisDocument,
   NarrativeDefinition,
   NarrativeObservationInput,
@@ -13,6 +17,27 @@ import {
 import { logAnthropicUsage } from "./anthropic-usage";
 
 export const narrativeClassificationPromptVersion = "narrative_classification_v6";
+
+export const narrativeClassificationSystemPrompt =
+  `Classify a source document against stable market-narrative propositions.
+Evaluate every definition, but return observations only for definitions that match.
+Omit non-matches; the caller records omitted definitions as matched=false.
+Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.
+Set matched=true only when the exact quoted evidence directly entails the proposition.
+Topic, sector, company, or keyword adjacency is not a match.
+Do not infer pricing power from inflation, AI demand from semiconductor adjacency,
+credit deterioration from hypothetical policy risk, or broad deal recovery from one transaction.
+Do not infer AI-driven demand from data-center adjacency without explicit AI language,
+industry maturity, circular financing, or the word "compute" alone. Require a concrete
+demand, capacity, backlog, order, load, infrastructure-investment, or revenue-growth fact.
+Do not infer structural energy-demand growth from short-term weather-driven consumption.
+For directional propositions, contradictory evidence is not supporting evidence; omit the definition.
+The evidenceSnippet must independently support the match without facts added from elsewhere.
+Interpretation may explain the quote but must not introduce facts absent from it.
+Every returned observation must use matched=true, matchScore 70-100, and an
+evidenceSnippet copied exactly from the source. Return an empty observations array
+when no definitions match. When uncertain, omit the definition. Do not make trade recommendations.
+Stance is risk, bullish, mixed, or neutral.`;
 
 type RawObservation = {
   narrativeDefinitionId?: string;
@@ -36,6 +61,7 @@ export async function classifyDocumentNarratives(
     maxTokens?: number;
     maxDocumentChars?: number;
     promptCaching?: boolean;
+    cacheTtl?: "5m" | "1h";
     signal?: AbortSignal;
   } = {}
 ): Promise<NarrativeObservationInput[]> {
@@ -48,49 +74,76 @@ export async function classifyDocumentNarratives(
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
     narrativeClassificationPromptVersion;
   const client = new Anthropic({ apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY });
-  const sourceText = document.text.slice(0, options.maxDocumentChars ?? 120_000);
   const promptCaching =
     options.promptCaching ??
     process.env.ANTHROPIC_PROMPT_CACHING !== "false";
-  const message = await client.messages.create(
+  const request = buildNarrativeClassificationRequest(
+    document,
+    definitions,
     {
       model,
-      max_tokens: options.maxTokens ?? 4_000,
-      system: `Classify a source document against stable market-narrative propositions.
-Evaluate every definition, but return observations only for definitions that match.
-Omit non-matches; the caller records omitted definitions as matched=false.
-Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.
-Set matched=true only when the exact quoted evidence directly entails the proposition.
-Topic, sector, company, or keyword adjacency is not a match.
-Do not infer pricing power from inflation, AI demand from semiconductor adjacency,
-credit deterioration from hypothetical policy risk, or broad deal recovery from one transaction.
-Do not infer AI-driven demand from data-center adjacency without explicit AI language,
-industry maturity, circular financing, or the word "compute" alone. Require a concrete
-demand, capacity, backlog, order, load, infrastructure-investment, or revenue-growth fact.
-Do not infer structural energy-demand growth from short-term weather-driven consumption.
-For directional propositions, contradictory evidence is not supporting evidence; omit the definition.
-The evidenceSnippet must independently support the match without facts added from elsewhere.
-Interpretation may explain the quote but must not introduce facts absent from it.
-Every returned observation must use matched=true, matchScore 70-100, and an
-evidenceSnippet copied exactly from the source. Return an empty observations array
-when no definitions match. When uncertain, omit the definition. Do not make trade recommendations.
-Stance is risk, bullish, mixed, or neutral.`,
-      output_config: { format: narrativeClassificationOutputFormat },
-      messages: [
-        {
-          role: "user",
-          content: buildNarrativeClassificationContent(
-            document,
-            definitions,
-            sourceText,
-            promptCaching
-          )
-        }
-      ]
-    },
+      maxTokens: options.maxTokens,
+      maxDocumentChars: options.maxDocumentChars,
+      promptCaching,
+      cacheTtl: options.cacheTtl
+    }
+  );
+  const message = await client.messages.create(
+    request,
     options.signal ? { signal: options.signal } : undefined
   );
   logAnthropicUsage("narrative-classification", model, message.usage);
+  return normalizeNarrativeClassificationMessage(
+    message,
+    document,
+    definitions,
+    model,
+    promptVersion
+  );
+}
+
+export function buildNarrativeClassificationRequest(
+  document: AnalysisDocument,
+  definitions: NarrativeDefinition[],
+  options: {
+    model: string;
+    maxTokens?: number;
+    maxDocumentChars?: number;
+    promptCaching?: boolean;
+    cacheTtl?: "5m" | "1h";
+  }
+): MessageCreateParamsNonStreaming {
+  const sourceText = document.text.slice(
+    0,
+    options.maxDocumentChars ?? 120_000
+  );
+  return {
+    model: options.model,
+    max_tokens: options.maxTokens ?? 4_000,
+    system: narrativeClassificationSystemPrompt,
+    output_config: { format: narrativeClassificationOutputFormat },
+    messages: [
+      {
+        role: "user",
+        content: buildNarrativeClassificationContent(
+          document,
+          definitions,
+          sourceText,
+          options.promptCaching ?? true,
+          options.cacheTtl
+        )
+      }
+    ]
+  };
+}
+
+export function normalizeNarrativeClassificationMessage(
+  message: Message,
+  document: AnalysisDocument,
+  definitions: NarrativeDefinition[],
+  model: string,
+  promptVersion: string
+) {
   const parsed = parseStructuredOutput<{ observations: RawObservation[] }>(
     message,
     "Narrative classification"
@@ -117,7 +170,8 @@ export function buildNarrativeClassificationContent(
   document: AnalysisDocument,
   definitions: NarrativeDefinition[],
   sourceText = document.text,
-  promptCaching = true
+  promptCaching = true,
+  cacheTtl?: "5m" | "1h"
 ) {
   const referenceText = JSON.stringify({
     definitions: definitions.map((definition) => ({
@@ -134,7 +188,10 @@ export function buildNarrativeClassificationContent(
     ? {
         type: "text" as const,
         text: referenceText,
-        cache_control: { type: "ephemeral" as const }
+        cache_control: {
+          type: "ephemeral" as const,
+          ...(cacheTtl ? { ttl: cacheTtl } : {})
+        }
       }
     : {
         type: "text" as const,

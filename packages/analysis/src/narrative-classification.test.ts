@@ -127,6 +127,13 @@ test("caches only the stable definition prefix", () => {
     document.text,
     false
   );
+  const hourlyCache = buildNarrativeClassificationContent(
+    document,
+    [definition],
+    document.text,
+    true,
+    "1h"
+  );
 
   assert.deepEqual(first[0], second[0]);
   assert.notDeepEqual(first[1], second[1]);
@@ -135,6 +142,12 @@ test("caches only the stable definition prefix", () => {
     { type: "ephemeral" }
   );
   assert.equal("cache_control" in uncached[0], false);
+  assert.deepEqual(
+    "cache_control" in hourlyCache[0]
+      ? hourlyCache[0].cache_control
+      : undefined,
+    { type: "ephemeral", ttl: "1h" }
+  );
 });
 
 test("applies strict proposition-specific evidence guards", () => {

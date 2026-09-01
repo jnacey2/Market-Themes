@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { summarizeAnthropicUsage } from "./anthropic-usage";
+import {
+  aggregateAnthropicUsage,
+  summarizeAnthropicUsage
+} from "./anthropic-usage";
 
 test("summarizes uncached, cache-write, and cache-read input tokens", () => {
   assert.deepEqual(
@@ -31,4 +34,25 @@ test("treats absent cache counters as zero", () => {
   assert.equal(usage.cacheCreationInputTokens, 0);
   assert.equal(usage.cacheReadInputTokens, 0);
   assert.equal(usage.totalInputTokens, 800);
+});
+
+test("aggregates token counters across batch results", () => {
+  const first = summarizeAnthropicUsage("first", "model", {
+    input_tokens: 100,
+    cache_read_input_tokens: 400,
+    output_tokens: 20
+  });
+  const second = summarizeAnthropicUsage("second", "model", {
+    input_tokens: 50,
+    cache_creation_input_tokens: 300,
+    output_tokens: 10
+  });
+
+  assert.deepEqual(aggregateAnthropicUsage([first, second]), {
+    inputTokens: 150,
+    cacheCreationInputTokens: 300,
+    cacheReadInputTokens: 400,
+    totalInputTokens: 850,
+    outputTokens: 30
+  });
 });

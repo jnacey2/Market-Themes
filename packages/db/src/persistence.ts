@@ -504,6 +504,21 @@ export async function recoverStaleDocumentAnalysisRuns(
         and model = $2
         and prompt_version = $3
         and status = 'running'
+       and not (
+         coalesce(metadata->>'executionMode', '') = 'anthropic_batch'
+         and exists (
+           select 1
+           from anthropic_message_batches amb
+           where amb.id = document_analysis_runs.metadata->>'anthropicBatchId'
+             and amb.status in (
+               'submitting',
+               'submission_unknown',
+               'in_progress',
+               'canceling',
+               'processing_results'
+             )
+         )
+       )
         and updated_at < now() - ($4::text || ' minutes')::interval
        returning document_id`,
       [
@@ -1023,7 +1038,8 @@ export async function failDocumentAnalysisRun(
         error_message = $2,
         completed_at = now(),
         updated_at = now()
-       where id = $1`,
+       where id = $1
+         and status <> 'completed'`,
       [runId, error instanceof Error ? error.message : String(error)]
     );
   } finally {

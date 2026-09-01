@@ -93,6 +93,20 @@ export async function selectDocumentsForNarrativeClassification(
          join document_texts dt on dt.document_id = d.id
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
            and not (d.id = any($4::text[]))
+           and not exists (
+             select 1
+             from anthropic_message_batch_items mbi
+             join anthropic_message_batches mb on mb.id = mbi.batch_id
+             where mbi.document_id = d.id
+               and mb.workload = 'narrative_classification'
+               and mb.status in (
+                 'submitting',
+                 'submission_unknown',
+                 'in_progress',
+                 'canceling',
+                 'processing_results'
+               )
+           )
            and exists (
              select 1
              from narrative_definitions nd
@@ -151,6 +165,20 @@ export async function countNarrativeClassificationBacklog(
        from documents d
        join document_texts dt on dt.document_id = d.id
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+         and not exists (
+           select 1
+           from anthropic_message_batch_items mbi
+           join anthropic_message_batches mb on mb.id = mbi.batch_id
+           where mbi.document_id = d.id
+             and mb.workload = 'narrative_classification'
+             and mb.status in (
+               'submitting',
+               'submission_unknown',
+               'in_progress',
+               'canceling',
+               'processing_results'
+             )
+         )
          and exists (
            select 1
            from narrative_definitions nd

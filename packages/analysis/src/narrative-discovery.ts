@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
+  Message,
+  MessageCreateParamsNonStreaming
+} from "@anthropic-ai/sdk/resources/messages";
+import type {
   AnalysisDocument,
   NarrativeCandidateContext,
   NarrativeCandidateInput,
@@ -61,45 +65,26 @@ export async function discoverNarrativeCandidates(
     options.promptVersion ??
     process.env.NARRATIVE_DISCOVERY_PROMPT_VERSION ??
     narrativeDiscoveryPromptVersion;
-  const maxDocumentChars = options.maxDocumentChars ?? 120_000;
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.create(
+  const request = buildNarrativeDiscoveryRequest(
+    document,
+    trackedNarratives,
+    existingCandidates,
     {
       model,
-      max_tokens: options.maxTokens ?? 4_000,
-      system: narrativeDiscoverySystemPrompt,
-      output_config: { format: narrativeDiscoveryOutputFormat },
-      messages: [
-        {
-          role: "user",
-          content: JSON.stringify({
-            document: {
-              id: document.id,
-              sourceId: document.sourceId,
-              sourceClass: document.sourceClass,
-              title: document.title,
-              publisher: document.publisher,
-              publishedAt: document.publishedAt,
-              tickers: document.tickers,
-              text: document.text.slice(0, maxDocumentChars)
-            },
-            trackedNarratives: trackedNarratives.map((narrative) => ({
-              slug: narrative.slug,
-              name: narrative.name,
-              proposition: narrative.proposition
-            })),
-            existingCandidates: existingCandidates.slice(0, 100)
-          })
-        }
-      ]
-    },
+      maxTokens: options.maxTokens,
+      maxDocumentChars: options.maxDocumentChars
+    }
+  );
+  const message = await client.messages.create(
+    request,
     options.signal ? { signal: options.signal } : undefined
   );
   logAnthropicUsage("narrative-discovery", model, message.usage);
-  return normalizeNarrativeDiscoveryResponse(
-    parseStructuredOutput(message, "Narrative discovery"),
+  return normalizeNarrativeDiscoveryMessage(
+    message,
     document,
     trackedNarratives,
     existingCandidates,
@@ -108,6 +93,68 @@ export async function discoverNarrativeCandidates(
       promptVersion,
       maxEvidenceChars: options.maxEvidenceChars ?? 800
     }
+  );
+}
+
+export function buildNarrativeDiscoveryRequest(
+  document: AnalysisDocument,
+  trackedNarratives: NarrativeDefinition[],
+  existingCandidates: NarrativeCandidateContext[],
+  options: {
+    model: string;
+    maxTokens?: number;
+    maxDocumentChars?: number;
+  }
+): MessageCreateParamsNonStreaming {
+  const maxDocumentChars = options.maxDocumentChars ?? 120_000;
+  return {
+    model: options.model,
+    max_tokens: options.maxTokens ?? 4_000,
+    system: narrativeDiscoverySystemPrompt,
+    output_config: { format: narrativeDiscoveryOutputFormat },
+    messages: [
+      {
+        role: "user",
+        content: JSON.stringify({
+          document: {
+            id: document.id,
+            sourceId: document.sourceId,
+            sourceClass: document.sourceClass,
+            title: document.title,
+            publisher: document.publisher,
+            publishedAt: document.publishedAt,
+            tickers: document.tickers,
+            text: document.text.slice(0, maxDocumentChars)
+          },
+          trackedNarratives: trackedNarratives.map((narrative) => ({
+            slug: narrative.slug,
+            name: narrative.name,
+            proposition: narrative.proposition
+          })),
+          existingCandidates: existingCandidates.slice(0, 100)
+        })
+      }
+    ]
+  };
+}
+
+export function normalizeNarrativeDiscoveryMessage(
+  message: Message,
+  document: AnalysisDocument,
+  trackedNarratives: NarrativeDefinition[],
+  existingCandidates: NarrativeCandidateContext[],
+  options: {
+    model: string;
+    promptVersion: string;
+    maxEvidenceChars?: number;
+  }
+) {
+  return normalizeNarrativeDiscoveryResponse(
+    parseStructuredOutput(message, "Narrative discovery"),
+    document,
+    trackedNarratives,
+    existingCandidates,
+    options
   );
 }
 

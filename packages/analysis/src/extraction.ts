@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import type {
+  Message,
+  MessageCreateParamsNonStreaming
+} from "@anthropic-ai/sdk/resources/messages";
 import type { AnalysisDocument, ExtractedSignalInput, ToneDirection } from "@market-themes/db";
 import {
   signalExtractionPromptVersion,
@@ -20,6 +24,11 @@ const DEFAULT_MAX_EVIDENCE_CHARS = 800;
 
 export const marketSignalAnalysisType = "market_signal_extraction";
 
+export type SignalExtractionSection = {
+  label: string;
+  text: string;
+};
+
 export type ExtractSignalsOptions = {
   apiKey?: string;
   model?: string;
@@ -39,69 +48,99 @@ export async function extractSignalsFromDocument(
   const model = options.model ?? process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
   const promptVersion =
     options.promptVersion ?? process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion;
-  const maxDocumentChars = options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS;
-
-  const sections =
-    document.text.length <= maxDocumentChars
-      ? [{ label: "Full document", text: document.text }]
-      : splitIntoSections(
-          document.text,
-          options.sectionChars ?? DEFAULT_SECTION_CHARS,
-          options.sectionOverlap ?? DEFAULT_SECTION_OVERLAP
-        );
-
-  const allSignals: ExtractedSignalInput[] = [];
-
-  for (const section of sections) {
-    const signals = await extractSignalsFromText(document, section, {
-      ...options,
-      model,
-      promptVersion
-    });
-    allSignals.push(...signals);
-  }
-
-  return dedupeSignals(allSignals);
-}
-
-async function extractSignalsFromText(
-  document: AnalysisDocument,
-  section: { label: string; text: string },
-  options: Required<Pick<ExtractSignalsOptions, "model" | "promptVersion">> &
-    ExtractSignalsOptions
-) {
+  const sections = prepareSignalExtractionSections(document, options);
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.create(
-    {
-      model: options.model,
-      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-      system: signalExtractionSystemPrompt,
-      output_config: { format: signalExtractionOutputFormat },
-      messages: [
-        {
-          role: "user",
-          content: buildUserPrompt(document, section)
-        }
-      ]
-    },
-    options.signal ? { signal: options.signal } : undefined
-  );
-  logAnthropicUsage("signal-extraction", options.model, message.usage);
-  const parsed = parseStructuredOutput(message, "Claude extraction");
-  const maxEvidenceChars = options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS;
+  const allSignals: ExtractedSignalInput[] = [];
 
+  for (const section of sections) {
+    const message = await client.messages.create(
+      buildSignalExtractionRequest(document, section, {
+        model,
+        maxTokens: options.maxTokens
+      }),
+      options.signal ? { signal: options.signal } : undefined
+    );
+    logAnthropicUsage("signal-extraction", model, message.usage);
+    const signals = normalizeSignalExtractionMessage(
+      message,
+      document,
+      section,
+      {
+        model,
+        promptVersion,
+        maxEvidenceChars: options.maxEvidenceChars
+      }
+    );
+    allSignals.push(...signals);
+  }
+
+  return dedupeExtractedSignals(allSignals);
+}
+
+export function prepareSignalExtractionSections(
+  document: AnalysisDocument,
+  options: Pick<
+    ExtractSignalsOptions,
+    "maxDocumentChars" | "sectionChars" | "sectionOverlap"
+  > = {}
+) {
+  const maxDocumentChars =
+    options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS;
+  return document.text.length <= maxDocumentChars
+    ? [{ label: "Full document", text: document.text }]
+    : splitIntoSections(
+        document.text,
+        options.sectionChars ?? DEFAULT_SECTION_CHARS,
+        options.sectionOverlap ?? DEFAULT_SECTION_OVERLAP
+      );
+}
+
+export function buildSignalExtractionRequest(
+  document: AnalysisDocument,
+  section: SignalExtractionSection,
+  options: {
+    model: string;
+    maxTokens?: number;
+  }
+): MessageCreateParamsNonStreaming {
+  return {
+    model: options.model,
+    max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+    system: signalExtractionSystemPrompt,
+    output_config: { format: signalExtractionOutputFormat },
+    messages: [
+      {
+        role: "user",
+        content: buildUserPrompt(document, section)
+      }
+    ]
+  };
+}
+
+export function normalizeSignalExtractionMessage(
+  message: Message,
+  document: AnalysisDocument,
+  section: SignalExtractionSection,
+  options: {
+    model: string;
+    promptVersion: string;
+    maxEvidenceChars?: number;
+  }
+) {
+  const parsed = parseStructuredOutput(message, "Claude extraction");
   return validateSignals(parsed, document, section, {
     model: options.model,
     promptVersion: options.promptVersion,
-    maxEvidenceChars
+    maxEvidenceChars:
+      options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS
   });
 }
 
 function buildUserPrompt(
   document: AnalysisDocument,
-  section: { label: string; text: string }
+  section: SignalExtractionSection
 ) {
   return JSON.stringify(
     {
@@ -129,7 +168,7 @@ function buildUserPrompt(
 function validateSignals(
   parsed: unknown,
   document: AnalysisDocument,
-  section: { label: string; text: string },
+  section: SignalExtractionSection,
   options: {
     model: string;
     promptVersion: string;
@@ -157,7 +196,7 @@ function validateSignal(
   candidate: unknown,
   index: number,
   document: AnalysisDocument,
-  section: { label: string; text: string },
+  section: SignalExtractionSection,
   options: {
     model: string;
     promptVersion: string;
@@ -259,7 +298,7 @@ function splitIntoSections(text: string, sectionChars: number, overlap: number) 
   return sections;
 }
 
-function dedupeSignals(signals: ExtractedSignalInput[]) {
+export function dedupeExtractedSignals(signals: ExtractedSignalInput[]) {
   const seen = new Set<string>();
   const deduped: ExtractedSignalInput[] = [];
 

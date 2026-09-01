@@ -68,6 +68,54 @@ export type ExtractedSignalInput = {
 
 export type AnalysisRunStatus = "pending" | "running" | "completed" | "failed";
 
+export type AnthropicMessageBatchStatus =
+  | "submitting"
+  | "submission_unknown"
+  | "in_progress"
+  | "canceling"
+  | "processing_results"
+  | "completed"
+  | "failed";
+
+export type AnthropicMessageBatchItem = {
+  id: string;
+  batchId: string;
+  customId: string;
+  documentId: string;
+  analysisRunId: string | null;
+  status: string;
+  errorType: string | null;
+  errorMessage: string | null;
+  usage: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  completedAt: string | null;
+};
+
+export type AnthropicMessageBatchRecord = {
+  id: string;
+  providerBatchId: string | null;
+  workload: string;
+  model: string;
+  promptVersion: string;
+  status: AnthropicMessageBatchStatus;
+  requestCount: number;
+  processingCount: number;
+  succeededCount: number;
+  erroredCount: number;
+  canceledCount: number;
+  expiredCount: number;
+  errorMessage: string | null;
+  metadata: Record<string, unknown>;
+  submittedAt: string | null;
+  providerExpiresAt: string | null;
+  providerEndedAt: string | null;
+  resultsUrl: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: AnthropicMessageBatchItem[];
+};
+
 export type AnalysisRunSummary = {
   id: string;
   documentId: string;

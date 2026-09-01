@@ -36,3 +36,27 @@ export function logAnthropicUsage(
   console.info(`[anthropic-usage] ${JSON.stringify(summary)}`);
   return summary;
 }
+
+export function aggregateAnthropicUsage(
+  summaries: Array<ReturnType<typeof summarizeAnthropicUsage>>
+) {
+  return summaries.reduce(
+    (total, usage) => ({
+      inputTokens: total.inputTokens + usage.inputTokens,
+      cacheCreationInputTokens:
+        total.cacheCreationInputTokens +
+        usage.cacheCreationInputTokens,
+      cacheReadInputTokens:
+        total.cacheReadInputTokens + usage.cacheReadInputTokens,
+      totalInputTokens: total.totalInputTokens + usage.totalInputTokens,
+      outputTokens: total.outputTokens + usage.outputTokens
+    }),
+    {
+      inputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      totalInputTokens: 0,
+      outputTokens: 0
+    }
+  );
+}

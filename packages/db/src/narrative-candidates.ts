@@ -29,6 +29,8 @@ type DiscoverySelectionOptions = {
   lookbackDays?: number;
   maxAttempts?: number;
   excludedDocumentIds?: string[];
+  executionMode?: string;
+  anthropicBatchId?: string;
 };
 
 export type ClaimedNarrativeDiscoveryDocument = AnalysisDocument & {
@@ -324,7 +326,13 @@ export async function claimDocumentsForNarrativeDiscovery(
             sourceId: row.source_id,
             sourceClass: row.source_class,
             textHash: row.text_hash,
-            attemptToken
+            attemptToken,
+            ...(options.executionMode
+              ? { executionMode: options.executionMode }
+              : {}),
+            ...(options.anthropicBatchId
+              ? { anthropicBatchId: options.anthropicBatchId }
+              : {})
           })
         ]
       );
