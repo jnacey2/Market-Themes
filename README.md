@@ -116,6 +116,8 @@ Core tables:
 - `document_chunks`: searchable chunks with pgvector embeddings.
 - `document_analysis_runs`: idempotent Claude extraction status per document,
   model, and prompt version.
+- `anthropic_message_batches` / `anthropic_message_batch_items`: durable
+  provider-batch lifecycle, request mappings, outcomes, and token usage.
 - `entities`: companies, tickers, sectors, geographies, and macro topics.
 - `themes`: stable canonical theme IDs.
 - `signals`: per-document extracted theme evidence, tones, confidence, and
@@ -343,13 +345,42 @@ The first live Claude integration extracts market signals from SEC/FMP documents
 
 - Uses full-document analysis where practical.
 - Splits oversized documents into sections and merges/dedupes the outputs.
-- Defaults to Sonnet via `ANTHROPIC_MODEL`.
-- Uses Haiku 4.5 by default for the bounded promotion-quality pass via
-  `NARRATIVE_PROMOTION_VALIDATION_MODEL`, without changing classifier identity.
+- Defaults every live analysis workload to Haiku 4.5 via `ANTHROPIC_MODEL`.
+- Keeps a separate `NARRATIVE_PROMOTION_VALIDATION_MODEL` override for the
+  bounded promotion-quality pass.
 - Tracks idempotency by document, model, and `CLAUDE_PROMPT_VERSION`.
 - Stores exact evidence snippets capped by `CLAUDE_MAX_EVIDENCE_CHARS`.
 - Stores parsed structured fields only, not raw Claude responses by default.
 - Leaves extracted themes as `emerging` until later trend/storyboard promotion.
+
+Narrative classification returns only positive matches and deterministically
+persists omitted definitions as non-matches, avoiding repeated negative output
+tokens. Its stable definition prefix has an ephemeral cache breakpoint when
+`ANTHROPIC_PROMPT_CACHING` is not `false`: synchronous calls use five minutes
+and batches use one hour. Haiku 4.5 only creates a cache entry when that reusable
+prefix reaches 4,096 tokens, so shorter prefixes continue uncached without error.
+Each request logs uncached input, cache-write input, cache-read input, and output
+token counts under `[anthropic-usage]`.
+
+Scheduled extraction, classification, and discovery use Anthropic Message
+Batches, which discount input and output tokens by 50%. Hourly submit crons
+create the next bounded batch only when that workload has no active batch, while
+`poll-anthropic-batches` reconciles provider state and applies results every ten
+minutes.
+Provider IDs, custom-ID mappings, item outcomes, and usage are stored in
+`anthropic_message_batches` and `anthropic_message_batch_items`; raw model
+responses are not stored. Completed records are retained for 35 days by default.
+Only one provider batch may be active per workload.
+Most batches finish within an hour, but results can take up to 24 hours. An
+ambiguous submission is held for 25 hours instead of being resubmitted and
+potentially billed twice. Interactive candidate promotion and the normalization
+step that immediately feeds trend recomputation remain synchronous.
+
+Model identity is part of extraction, classification, and discovery idempotency.
+Changing `ANTHROPIC_MODEL` therefore makes previously analyzed documents eligible
+for a one-time reprocessing backlog; it does not relabel old records. Scheduled
+extraction, classification, and discovery runs cap that rollout at 100, 40, and
+40 documents per submitted batch respectively.
 
 Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
@@ -392,9 +423,12 @@ Copy `.env.example` to `.env.local` for local development when needed.
 ```text
 DATABASE_URL=postgres://user:password@host:5432/market_themes
 ANTHROPIC_API_KEY=sk-ant-api03-example
-ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+ANTHROPIC_PROMPT_CACHING=true
+ANTHROPIC_BATCH_MAX_BYTES=251658240
+ANTHROPIC_BATCH_RETENTION_DAYS=35
 NARRATIVE_PROMOTION_VALIDATION_MODEL=claude-haiku-4-5-20251001
-CLAUDE_PROMPT_VERSION=market_signal_extraction_v1
+CLAUDE_PROMPT_VERSION=market_signal_extraction_v2
 CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
 CLAUDE_EXTRACTION_BATCH_SIZE=25
 CLAUDE_EXTRACTION_MAX_BATCHES=1
@@ -406,9 +440,10 @@ CLAUDE_ANALYSIS_MAX_ATTEMPTS=5
 CLAUDE_MAX_EVIDENCE_CHARS=800
 CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
 BACKFILL_WORKER_POLL_INTERVAL_MS=45000
-THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v2
+THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v3
 THEME_NORMALIZATION_BATCH_SIZE=25
 THEME_NORMALIZATION_MAX_BATCHES=100
+NARRATIVE_CLASSIFICATION_PROMPT_VERSION=narrative_classification_v6
 TREND_LOOKBACK_DAYS=120
 TREND_LOW_HISTORY_DAYS=14
 TREND_STORAGE_DAYS=45
@@ -479,10 +514,14 @@ npm run fmp:poll
 npm run repair:document-texts
 npm run claude:extract:smoke
 npm run claude:extract:backfill
+npm run claude:extract:batch
 npm run themes:normalize
 npm run themes:normalize:backfill
 npm run narratives:classify
+npm run narratives:classify:batch
 npm run narratives:discover
+npm run narratives:discover:batch
+npm run anthropic:batches:poll
 npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run pipeline
@@ -557,9 +596,11 @@ entities or two independent documents, nests sector sub-themes under their
 parent market theme, collapses supporting evidence, and moves company-specific
 or one-off themes into an emerging lane.
 
-Narrative classification drains readable documents fairly across source classes
-until the backlog is empty or the configured runtime limit is reached. Candidate
-discovery then looks for directional propositions not covered by active
+Narrative classification processes up to
+`NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS` readable documents per run, fairly
+across source classes. Set the value to `0` only for an intentionally unbounded
+drain that still observes the configured runtime limit. Candidate discovery then
+looks for directional propositions not covered by active
 definitions. Open `/narrative-candidates` to review the resulting clusters. A
 candidate cannot be promoted until at least two documents from two independent
 publisher-owner groups support it within the configured 30-day evidence window.
@@ -575,9 +616,10 @@ This keeps approved evidence publishing even while model work continues. The
 four-hour theme cron invokes only normalization and theme-trend recomputation
 directly; it does not use the multi-stage pipeline selector.
 
-Recent signal extraction runs independently at minute 35 each hour. It processes
-at most 100 unread documents from the latest 30 days at concurrency 2. The
-four-hour theme cron therefore cannot duplicate extraction.
+Recent signal extraction runs independently at minute 35 each hour. It
+reconciles the prior provider batch, then submits at most 100 unread documents
+from the latest 30 days. Running analysis rows prevent the synchronous worker or
+four-hour theme cron from duplicating in-flight extraction.
 
 Automatic review is deliberately stricter than the manual queue. Production
 requires a classifier score of at least 90 plus corroboration by two documents
@@ -629,9 +671,10 @@ The blueprint defines:
 - `poll-fmp-transcripts`: daily cron job for FMP transcript polling.
 - `generate-daily-brief`: cron job for daily brief generation.
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
-- `extract-recent-signals`: hourly bounded extraction of the latest 30-day corpus.
-- `classify-narratives`: hourly existing-narrative evidence classification.
-- `discover-narratives`: hourly new-proposition candidate discovery.
+- `extract-recent-signals`: hourly batched extraction of the latest 30-day corpus.
+- `classify-narratives`: hourly batched existing-narrative evidence classification.
+- `discover-narratives`: hourly batched new-proposition candidate discovery.
+- `poll-anthropic-batches`: ten-minute reconciliation and result persistence.
 - `auto-review-narratives`: twice-hourly conservative evidence approval and
   guarded candidate promotion.
 - `recompute-narrative-trends`: twice-hourly publication of approved evidence.
@@ -691,9 +734,13 @@ npm run fmp:smoke
 npm run fmp:backfill
 npm run fmp:poll
 npm run claude:extract:smoke
+npm run claude:extract:batch
 npm run themes:normalize
 npm run narratives:classify
+npm run narratives:classify:batch
 npm run narratives:discover
+npm run narratives:discover:batch
+npm run anthropic:batches:poll
 npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run brief:daily --workspace @market-themes/workers

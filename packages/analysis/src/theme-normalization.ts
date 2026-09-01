@@ -9,8 +9,9 @@ import {
   parseStructuredOutput,
   themeNormalizationOutputFormat
 } from "./structured-output";
+import { logAnthropicUsage } from "./anthropic-usage";
 
-const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
+const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS = 12_000;
 
 export type NormalizeThemesOptions = {
@@ -42,6 +43,7 @@ export async function normalizeThemeGroups(
       }
     ]
   });
+  logAnthropicUsage("theme-normalization", model, message.usage);
   return validateMappings(
     parseStructuredOutput(message, "Theme normalization"),
     {

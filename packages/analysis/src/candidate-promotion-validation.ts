@@ -12,6 +12,7 @@ import {
   candidatePromotionValidationOutputFormat,
   parseStructuredOutput
 } from "./structured-output";
+import { logAnthropicUsage } from "./anthropic-usage";
 
 type PreparedEvidence =
   CandidatePromotionValidationInput["evidence"][number] & {
@@ -110,6 +111,11 @@ export async function validateCandidateForPromotion(
       ]
     },
     options.signal ? { signal: options.signal } : undefined
+  );
+  logAnthropicUsage(
+    "candidate-promotion-validation",
+    model,
+    message.usage
   );
   const raw = parseStructuredOutput<RawValidation>(
     message,

@@ -26,7 +26,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
         value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
@@ -58,7 +58,7 @@ services:
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
         value: narrative_discovery_v1
       - key: NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS
@@ -128,7 +128,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
@@ -228,7 +228,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
@@ -301,7 +301,7 @@ services:
     runtime: node
     schedule: "35 * * * *"
     buildCommand: npm install
-    startCommand: npm run claude:extract:backfill --workspace @market-themes/workers
+    startCommand: npm run claude:extract:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -310,7 +310,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_LOOKBACK_DAYS
@@ -398,7 +398,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: THEME_NORMALIZATION_PROMPT_VERSION
         value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE
@@ -411,7 +411,7 @@ services:
     runtime: node
     schedule: "5 * * * *"
     buildCommand: npm install
-    startCommand: npm run narratives:classify --workspace @market-themes/workers
+    startCommand: npm run narratives:classify:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -420,17 +420,19 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
+      - key: ANTHROPIC_PROMPT_CACHING
+        value: "true"
       - key: DB_QUERY_TIMEOUT_MS
         value: "120000"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
         value: "10"
       - key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS
-        value: "0"
+        value: "40"
       - key: NARRATIVE_CLASSIFICATION_MAX_RUNTIME_MS
         value: "2400000"
       - key: NARRATIVE_CLASSIFICATION_CONCURRENCY
@@ -443,7 +445,7 @@ services:
     runtime: node
     schedule: "10 * * * *"
     buildCommand: npm install
-    startCommand: npm run narratives:discover --workspace @market-themes/workers
+    startCommand: npm run narratives:discover:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -452,7 +454,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: DB_QUERY_TIMEOUT_MS
         value: "120000"
       - key: NODE_OPTIONS
@@ -479,6 +481,22 @@ services:
         value: "30"
 
   - type: cron
+    name: poll-anthropic-batches
+    runtime: node
+    schedule: "2,12,22,32,42,52 * * * *"
+    buildCommand: npm install
+    startCommand: npm run anthropic:batches:poll --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+
+  - type: cron
     name: auto-review-narratives
     runtime: node
     schedule: "15,45 * * * *"
@@ -492,11 +510,11 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
         value: claude-haiku-4-5-20251001
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
         value: narrative_discovery_v1
       - key: NARRATIVE_AUTO_REVIEW_ENABLED
@@ -546,7 +564,7 @@ services:
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_TREND_LOOKBACK_DAYS
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS

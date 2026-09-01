@@ -49,7 +49,7 @@ test("uses a dedicated Haiku model without changing the pipeline model", () => {
     resolveCandidatePromotionValidationModel(undefined, {
       NARRATIVE_PROMOTION_VALIDATION_MODEL:
         "claude-haiku-4-5-20251001",
-      ANTHROPIC_MODEL: "claude-sonnet-4-5-20250929"
+      ANTHROPIC_MODEL: "fallback-model"
     }),
     "claude-haiku-4-5-20251001"
   );

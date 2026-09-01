@@ -207,7 +207,7 @@ export async function getOperationsStatus(
     const analysisModel =
       overrides.analysisModel ??
       process.env.ANTHROPIC_MODEL ??
-      "claude-sonnet-4-5-20250929";
+      "claude-haiku-4-5-20251001";
     const analysisPromptVersion =
       overrides.analysisPromptVersion ??
       process.env.CLAUDE_PROMPT_VERSION ??
@@ -215,7 +215,7 @@ export async function getOperationsStatus(
     const classificationPromptVersion =
       overrides.classificationPromptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v5";
+      "narrative_classification_v6";
     const discoveryPromptVersion =
       overrides.discoveryPromptVersion ??
       process.env.NARRATIVE_DISCOVERY_PROMPT_VERSION ?? "narrative_discovery_v1";

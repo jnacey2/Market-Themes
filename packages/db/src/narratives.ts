@@ -93,6 +93,20 @@ export async function selectDocumentsForNarrativeClassification(
          join document_texts dt on dt.document_id = d.id
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
            and not (d.id = any($4::text[]))
+           and not exists (
+             select 1
+             from anthropic_message_batch_items mbi
+             join anthropic_message_batches mb on mb.id = mbi.batch_id
+             where mbi.document_id = d.id
+               and mb.workload = 'narrative_classification'
+               and mb.status in (
+                 'submitting',
+                 'submission_unknown',
+                 'in_progress',
+                 'canceling',
+                 'processing_results'
+               )
+           )
            and exists (
              select 1
              from narrative_definitions nd
@@ -151,6 +165,20 @@ export async function countNarrativeClassificationBacklog(
        from documents d
        join document_texts dt on dt.document_id = d.id
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+         and not exists (
+           select 1
+           from anthropic_message_batch_items mbi
+           join anthropic_message_batches mb on mb.id = mbi.batch_id
+           where mbi.document_id = d.id
+             and mb.workload = 'narrative_classification'
+             and mb.status in (
+               'submitting',
+               'submission_unknown',
+               'in_progress',
+               'canceling',
+               'processing_results'
+             )
+         )
          and exists (
            select 1
            from narrative_definitions nd
@@ -534,11 +562,11 @@ export async function autoApproveNarrativeObservations(
   const model =
     options.model ??
     process.env.ANTHROPIC_MODEL ??
-    "claude-sonnet-4-5-20250929";
+    "claude-haiku-4-5-20251001";
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-    "narrative_classification_v5";
+    "narrative_classification_v6";
   const minimumMatchScore =
     options.minimumMatchScore ??
     Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_SCORE ?? 90);
@@ -704,7 +732,7 @@ export async function getNarrativeReviewQueue(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeReviewQueue> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v5";
+    configuredPromptVersion ?? "narrative_classification_v6";
   if (!databaseUrl) {
     return {
       databaseConfigured: false,
@@ -824,7 +852,7 @@ export async function recomputeNarrativeTrends(
     const promptVersion =
       options.promptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v5";
+      "narrative_classification_v6";
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -983,7 +1011,7 @@ export async function getNarrativeHomepageStatus(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeHomepageStatus> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v5";
+    configuredPromptVersion ?? "narrative_classification_v6";
   if (!databaseUrl) {
     return emptyNarrativeHomepageStatus(false);
   }
@@ -1220,7 +1248,7 @@ export async function getNarrativeBoardStatus(
   if (!databaseUrl) return { databaseConfigured: false, latestDate: null, narratives: [] };
   const definitions = await getActiveNarrativeDefinitions(databaseUrl);
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v5";
+    configuredPromptVersion ?? "narrative_classification_v6";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {

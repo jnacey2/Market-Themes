@@ -29,6 +29,8 @@ type DiscoverySelectionOptions = {
   lookbackDays?: number;
   maxAttempts?: number;
   excludedDocumentIds?: string[];
+  executionMode?: string;
+  anthropicBatchId?: string;
 };
 
 export type ClaimedNarrativeDiscoveryDocument = AnalysisDocument & {
@@ -324,7 +326,13 @@ export async function claimDocumentsForNarrativeDiscovery(
             sourceId: row.source_id,
             sourceClass: row.source_class,
             textHash: row.text_hash,
-            attemptToken
+            attemptToken,
+            ...(options.executionMode
+              ? { executionMode: options.executionMode }
+              : {}),
+            ...(options.anthropicBatchId
+              ? { anthropicBatchId: options.anthropicBatchId }
+              : {})
           })
         ]
       );
@@ -1147,11 +1155,11 @@ export async function autoPromoteNarrativeCandidates(
   const classificationModel =
     options.classificationModel ??
     process.env.ANTHROPIC_MODEL ??
-    "claude-sonnet-4-5-20250929";
+    "claude-haiku-4-5-20251001";
   const classificationPromptVersion =
     options.classificationPromptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-    "narrative_classification_v5";
+    "narrative_classification_v6";
   const minimumMatchScore =
     Math.max(
       90,
@@ -1592,11 +1600,11 @@ export async function promoteNarrativeCandidate(
     const classificationModel =
       input.classificationModel ??
       process.env.ANTHROPIC_MODEL ??
-      "claude-sonnet-4-5-20250929";
+      "claude-haiku-4-5-20251001";
     const classificationPromptVersion =
       input.classificationPromptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v5";
+      "narrative_classification_v6";
     const reviewActorType = input.reviewActorType ?? "human";
     const reviewedAt = new Date().toISOString();
     const qualifyingEvidence = selectedRows.map((row) => {

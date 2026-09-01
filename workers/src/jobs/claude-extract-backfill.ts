@@ -484,7 +484,7 @@ async function extractWithRetry(
 
 function defaultBackfillOptions(): ClaudeBackfillOptions {
   return {
-    model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+    model: process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001",
     promptVersion: process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion,
     batchSize: Number(process.env.CLAUDE_EXTRACTION_BATCH_SIZE ?? 25),
     maxBatches: Number(process.env.CLAUDE_EXTRACTION_MAX_BATCHES ?? 1),

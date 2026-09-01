@@ -504,6 +504,21 @@ export async function recoverStaleDocumentAnalysisRuns(
         and model = $2
         and prompt_version = $3
         and status = 'running'
+       and not (
+         coalesce(metadata->>'executionMode', '') = 'anthropic_batch'
+         and exists (
+           select 1
+           from anthropic_message_batches amb
+           where amb.id = document_analysis_runs.metadata->>'anthropicBatchId'
+             and amb.status in (
+               'submitting',
+               'submission_unknown',
+               'in_progress',
+               'canceling',
+               'processing_results'
+             )
+         )
+       )
         and updated_at < now() - ($4::text || ' minutes')::interval
        returning document_id`,
       [
@@ -579,7 +594,7 @@ export async function createBackfillJob(
         options.staleAfterMinutes ?? 90,
         options.lookbackDays ?? null,
         options.excludedSecFilingCategories ?? ["capital_markets"],
-        options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+        options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001",
         options.promptVersion ?? process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1",
         JSON.stringify(options.metadata ?? {}),
         "Queued Claude extraction backfill."
@@ -1023,7 +1038,8 @@ export async function failDocumentAnalysisRun(
         error_message = $2,
         completed_at = now(),
         updated_at = now()
-       where id = $1`,
+       where id = $1
+         and status <> 'completed'`,
       [runId, error instanceof Error ? error.message : String(error)]
     );
   } finally {
@@ -1148,7 +1164,7 @@ export async function getAnalysisStatus(
 
   try {
     const analysisModel =
-      process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+      process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
     const analysisPromptVersion =
       process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1";
     const maxAnalysisAttempts = Number(

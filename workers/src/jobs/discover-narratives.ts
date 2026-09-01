@@ -264,7 +264,7 @@ function defaultOptions(): DiscoveryOptions {
       process.env.NARRATIVE_DISCOVERY_STALE_MINUTES ?? 90
     ),
     model:
-      process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+      process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001",
     promptVersion:
       process.env.NARRATIVE_DISCOVERY_PROMPT_VERSION ??
       narrativeDiscoveryPromptVersion
