@@ -152,6 +152,11 @@ export const narrativeDiscoveryOutputFormat = jsonSchemaOutputFormat({
           },
           inclusionGuidance: { type: "string" },
           exclusionGuidance: { type: "string" },
+          candidateKind: {
+            type: "string",
+            enum: ["event", "structural"]
+          },
+          eventLabel: { type: ["string", "null"] },
           stance: {
             type: "string",
             enum: ["risk", "bullish", "mixed", "neutral"]
@@ -170,6 +175,8 @@ export const narrativeDiscoveryOutputFormat = jsonSchemaOutputFormat({
           "category",
           "inclusionGuidance",
           "exclusionGuidance",
+          "candidateKind",
+          "eventLabel",
           "stance",
           "riskTone",
           "bullishTone",
@@ -183,6 +190,58 @@ export const narrativeDiscoveryOutputFormat = jsonSchemaOutputFormat({
     }
   },
   required: ["candidates"],
+  additionalProperties: false
+} as const);
+
+export const candidatePromotionValidationOutputFormat = jsonSchemaOutputFormat({
+  type: "object",
+  properties: {
+    candidateKind: {
+      type: "string",
+      enum: ["event", "structural"]
+    },
+    eventLabel: { type: ["string", "null"] },
+    promotionDecision: {
+      type: "string",
+      enum: ["approve", "reject", "manual_review"]
+    },
+    summaryReason: { type: "string" },
+    evidence: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          evidenceId: { type: "string" },
+          supportsProposition: { type: "boolean" },
+          violatesExclusion: { type: "boolean" },
+          verdict: {
+            type: "string",
+            enum: ["support", "reject"]
+          },
+          eventKey: { type: ["string", "null"] },
+          primaryEntityKey: { type: ["string", "null"] },
+          reason: { type: "string" }
+        },
+        required: [
+          "evidenceId",
+          "supportsProposition",
+          "violatesExclusion",
+          "verdict",
+          "eventKey",
+          "primaryEntityKey",
+          "reason"
+        ],
+        additionalProperties: false
+      }
+    }
+  },
+  required: [
+    "candidateKind",
+    "eventLabel",
+    "promotionDecision",
+    "summaryReason",
+    "evidence"
+  ],
   additionalProperties: false
 } as const);
 

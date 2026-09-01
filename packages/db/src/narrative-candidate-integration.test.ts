@@ -7,6 +7,8 @@ import {
   completeNarrativeDiscoveryRun,
   createDatabaseClient,
   getNarrativeBoardStatus,
+  getNarrativeHomepageStatus,
+  getCandidatePromotionValidationInput,
   getNarrativeCandidateQueue,
   getNarrativeReviewQueue,
   getOperationsStatus,
@@ -15,8 +17,11 @@ import {
   persistNarrativeObservations,
   promoteNarrativeCandidate,
   recomputeNarrativeTrends,
+  retractNarrativeDefinition,
   startDocumentAnalysisRun,
   type NarrativeCandidateInput,
+  type CandidatePromotionValidation,
+  type CandidatePromotionValidationInput,
   type SourceClass
 } from "./index";
 
@@ -357,6 +362,13 @@ test(
     }
 
     const autoClassificationPrompt = `integration-auto-promotion:${suffix}`;
+    const autoPolicy = {
+      minimumMatchScore: 90,
+      minimumDocuments: 3,
+      minimumPublisherOwners: 3,
+      evidenceWindowDays: 7,
+      excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"]
+    };
     const result = await autoPromoteNarrativeCandidates({
       discoveryPromptVersion,
       classificationModel: model,
@@ -365,13 +377,19 @@ test(
       minimumDocuments: 3,
       minimumPublisherOwners: 3,
       evidenceWindowDays: 7,
-      excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"],
-      limit: 5
+      excludedPublisherOwners: autoPolicy.excludedPublisherOwners,
+      limit: 5,
+      validateCandidate: async (input) => eligibleValidation(input)
     });
     assert.equal(result.candidatesEvaluated, 1);
     assert.equal(result.candidatesPromoted, 1);
     assert.equal(result.observationsCreated, 3);
     assert.equal(result.failedCandidates.length, 0);
+    const weakValidationInput = await getCandidatePromotionValidationInput(
+      weakCandidateId,
+      autoPolicy
+    );
+    assert(weakValidationInput);
     await assert.rejects(
       () =>
         promoteNarrativeCandidate({
@@ -388,10 +406,16 @@ test(
             minimumPublisherOwners: 1,
             evidenceWindowDays: 7,
             excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"]
-          }
+          },
+          promotionValidation: eligibleValidation(weakValidationInput)
         }),
-      /independent publisher groups/
+      /breadth policy|independent publisher groups/
     );
+    const staleValidationInput = await getCandidatePromotionValidationInput(
+      staleCandidateId,
+      autoPolicy
+    );
+    assert(staleValidationInput);
     await assert.rejects(
       () =>
         promoteNarrativeCandidate({
@@ -405,9 +429,10 @@ test(
             minimumPublisherOwners: 3,
             evidenceWindowDays: 7,
             excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"]
-          }
+          },
+          promotionValidation: eligibleValidation(staleValidationInput)
         }),
-      /independent publisher groups/
+      /breadth policy|independent publisher groups/
     );
 
     const queue = await getNarrativeCandidateQueue(
@@ -517,6 +542,36 @@ test(
         (item) => item.id === `auto-promoted-reclassification:${suffix}`
       )?.reviewStatus,
       "pending"
+    );
+    const definitionId = result.promotedDefinitionIds[0];
+    await retractNarrativeDefinition({
+      id: definitionId,
+      reason: "Integration test contract violation."
+    });
+    const retractedBoard = await getNarrativeBoardStatus(
+      process.env.DATABASE_URL,
+      autoClassificationPrompt
+    );
+    assert.equal(
+      retractedBoard.narratives.some((item) => item.id === definitionId),
+      false
+    );
+    const retractedHomepage = await getNarrativeHomepageStatus(
+      process.env.DATABASE_URL,
+      autoClassificationPrompt
+    );
+    assert.equal(
+      retractedHomepage.narratives.some((item) => item.id === definitionId),
+      false
+    );
+    const retractedQueue = await getNarrativeCandidateQueue(
+      process.env.DATABASE_URL,
+      discoveryPromptVersion
+    );
+    assert.equal(
+      retractedQueue.candidates.find((item) => item.id === candidateId)
+        ?.promotedDefinitionStatus,
+      "inactive"
     );
   }
 );
@@ -860,6 +915,47 @@ function fixtureTextHash(quote: string, suffix: string) {
   return createHash("sha256").update(`${quote} ${suffix}`).digest("hex");
 }
 
+function eligibleValidation(
+  input: CandidatePromotionValidationInput
+): CandidatePromotionValidation {
+  const evidence = input.evidence.map((item, index) => ({
+    evidenceId: item.evidenceId,
+    documentId: item.documentId,
+    verdict: "support" as const,
+    reason: "Integration validator confirms direct support.",
+    eventKey: `event-${index + 1}`,
+    primaryEntityKey: `entity-${index + 1}`,
+    storyFingerprint: item.nearDuplicateKey ?? `story-${index + 1}`,
+    sourceTextHash: item.sourceTextHash
+  }));
+  return {
+    candidateId: input.candidate.id,
+    status: "eligible",
+    candidateKind: "structural",
+    eventLabel: null,
+    summaryReason: "Integration validation passed.",
+    reasons: [],
+    supportedEvidenceIds: evidence.map((item) => item.evidenceId),
+    breadth: {
+      storyBreadth: new Set(evidence.map((item) => item.storyFingerprint)).size,
+      eventBreadth: new Set(evidence.map((item) => item.eventKey)).size,
+      primaryEntityBreadth: new Set(
+        evidence.map((item) => item.primaryEntityKey)
+      ).size,
+      publisherOwnerBreadth: new Set(
+        input.evidence.map((item) => item.publisherOwner.trim().toLowerCase())
+      ).size,
+      sourceClassBreadth: new Set(
+        input.evidence.map((item) => item.sourceClass)
+      ).size
+    },
+    evidence,
+    promptVersion: "integration-validation-v1",
+    model: "integration-validator",
+    evaluatedAt: new Date().toISOString()
+  };
+}
+
 async function persistFixtureDocument({
   id,
   suffix,
@@ -927,6 +1023,11 @@ async function cleanupCandidateFixtures(suffix: string) {
       [classificationPromptVersion]
     );
     if (definitionIds.length > 0) {
+      await client.query(
+        `delete from narrative_definition_events
+         where narrative_definition_id = any($1::text[])`,
+        [definitionIds]
+      );
       await client.query(
         `delete from narrative_trends
          where narrative_definition_id = any($1::text[])`,

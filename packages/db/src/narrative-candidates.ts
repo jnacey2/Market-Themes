@@ -2,10 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { createDatabaseClient } from "./persistence";
 import type {
   AnalysisDocument,
+  CandidatePromotionPolicy,
+  CandidatePromotionValidation,
+  CandidatePromotionValidationInput,
   NarrativeBacklogSummary,
   NarrativeCandidateContext,
   NarrativeCandidateEvidence,
   NarrativeCandidateInput,
+  NarrativeCandidateKind,
   NarrativeCandidateQueue,
   NarrativeCandidateStatus,
   NarrativeCandidateSummary,
@@ -41,8 +45,12 @@ type CandidateRow = {
   inclusion_guidance: string;
   exclusion_guidance: string;
   status: NarrativeCandidateStatus;
+  kind: NarrativeCandidateKind;
+  event_label: string | null;
+  promotion_validation: CandidatePromotionValidation | Record<string, never>;
   merged_into_candidate_id: string | null;
   promoted_definition_id: string | null;
+  promoted_definition_status: string | null;
   model: string;
   prompt_version: string;
   review_note: string | null;
@@ -78,6 +86,8 @@ type PromotionEvidenceRow = CandidateEvidenceRow & {
   current_text: string;
   evidence_prompt_version: string;
   evidence_model: string;
+  near_duplicate_key: string | null;
+  tickers: string[];
 };
 
 export async function selectDocumentsForNarrativeDiscovery(
@@ -499,10 +509,19 @@ export async function completeNarrativeDiscoveryRun(
       }>(
         `insert into narrative_candidates (
            id, cluster_key, name, proposition, category,
-           inclusion_guidance, exclusion_guidance, model, prompt_version, metadata
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+           inclusion_guidance, exclusion_guidance, kind, event_label,
+           model, prompt_version, metadata
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
          on conflict (cluster_key, prompt_version) do update set
            model = excluded.model,
+           kind = case
+             when narrative_candidates.status = 'pending' then excluded.kind
+             else narrative_candidates.kind
+           end,
+           event_label = case
+             when narrative_candidates.status = 'pending' then excluded.event_label
+             else narrative_candidates.event_label
+           end,
            metadata = narrative_candidates.metadata || excluded.metadata,
            updated_at = now()
          returning id, status, merged_into_candidate_id`,
@@ -514,6 +533,8 @@ export async function completeNarrativeDiscoveryRun(
           candidate.category,
           candidate.inclusionGuidance,
           candidate.exclusionGuidance,
+          candidate.kind ?? "structural",
+          candidate.eventLabel ?? null,
           candidate.model,
           candidate.promptVersion,
           JSON.stringify(candidate.metadata ?? {})
@@ -714,6 +735,14 @@ export async function getNarrativeCandidateQueue(
         evidenceWindowDays
       ]
     );
+    const autoEligibleCount = await client.query<{ count: string }>(
+      `select count(*)::text as count
+       from narrative_candidates
+       where prompt_version = $1
+         and status = 'pending'
+         and promotion_validation->>'status' = 'eligible'`,
+      [promptVersion]
+    );
     const candidateResult = await client.query<CandidateRow>(
       `with recent_breadth as (
          select ce.candidate_id,
@@ -731,11 +760,15 @@ export async function getNarrativeCandidateQueue(
        )
        select nc.id, nc.cluster_key, nc.name, nc.proposition, nc.category,
               nc.inclusion_guidance, nc.exclusion_guidance, nc.status,
+              nc.kind, nc.event_label, nc.promotion_validation,
               nc.merged_into_candidate_id, nc.promoted_definition_id,
+              promoted.status as promoted_definition_status,
               nc.model, nc.prompt_version, nc.review_note, nc.reviewed_at::text,
               nc.created_at::text, nc.updated_at::text
        from narrative_candidates nc
        left join recent_breadth rb on rb.candidate_id = nc.id
+       left join narrative_definitions promoted
+         on promoted.id = nc.promoted_definition_id
        where nc.prompt_version = $1
          and nc.status in ('pending', 'approved')
        order by
@@ -812,6 +845,7 @@ export async function getNarrativeCandidateQueue(
       promptVersion,
       pendingCount: countFor("pending"),
       qualifiedCount: Number(qualifiedCount.rows[0]?.count ?? 0),
+      autoEligibleCount: Number(autoEligibleCount.rows[0]?.count ?? 0),
       approvedCount: countFor("approved"),
       rejectedCount: countFor("rejected"),
       mergedCount: countFor("merged"),
@@ -927,13 +961,7 @@ export async function mergeNarrativeCandidate(
   }
 }
 
-export type NarrativeCandidateAutomaticPolicy = {
-  minimumMatchScore: number;
-  minimumDocuments: number;
-  minimumPublisherOwners: number;
-  evidenceWindowDays: number;
-  excludedPublisherOwners: string[];
-};
+export type NarrativeCandidateAutomaticPolicy = CandidatePromotionPolicy;
 
 type NarrativeCandidatePromotionInput = {
   id: string;
@@ -953,6 +981,7 @@ type NarrativeCandidatePromotionInput = {
       reviewActorType: "automatic";
       reviewMetadata?: Record<string, unknown>;
       automaticPolicy: NarrativeCandidateAutomaticPolicy;
+      promotionValidation: CandidatePromotionValidation;
     }
 );
 
@@ -966,7 +995,134 @@ export type NarrativeCandidateAutoPromotionOptions = {
   evidenceWindowDays?: number;
   excludedPublisherOwners?: string[];
   limit?: number;
+  validateCandidate?: (
+    input: CandidatePromotionValidationInput
+  ) => Promise<CandidatePromotionValidation>;
 };
+
+export async function getCandidatePromotionValidationInput(
+  candidateId: string,
+  policy: CandidatePromotionPolicy,
+  databaseUrl = process.env.DATABASE_URL
+): Promise<CandidatePromotionValidationInput | null> {
+  const normalizedPolicy = normalizeAutomaticPromotionPolicy(policy);
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const candidateResult = await client.query<CandidateRow>(
+      `select id, cluster_key, name, proposition, category,
+              inclusion_guidance, exclusion_guidance, status,
+              kind, event_label, promotion_validation,
+              merged_into_candidate_id, promoted_definition_id,
+              model, prompt_version, review_note, reviewed_at::text,
+              created_at::text, updated_at::text
+       from narrative_candidates
+       where id = $1`,
+      [candidateId]
+    );
+    const candidate = candidateResult.rows[0];
+    if (!candidate || candidate.status !== "pending") return null;
+    const evidenceResult = await client.query<PromotionEvidenceRow>(
+      `select ce.id, ce.candidate_id, ce.document_id,
+              d.title, d.publisher,
+              coalesce(nullif(btrim(d.publisher_id), ''), btrim(d.publisher))
+                as publisher_id,
+              coalesce(
+                nullif(btrim(d.publisher_owner), ''),
+                nullif(btrim(d.publisher_id), ''),
+                btrim(d.publisher)
+              ) as publisher_owner,
+              d.source_class, d.published_at::text, d.url,
+              ce.evidence_snippet, ce.interpretation, ce.stance,
+              ce.risk_tone::float, ce.bullish_tone::float,
+              ce.affected_entities, ce.match_score::float,
+              d.metadata as document_metadata,
+              ce.metadata as evidence_metadata,
+              dt.content_hash as current_text_hash,
+              dt.content as current_text,
+              ce.prompt_version as evidence_prompt_version,
+              ce.model as evidence_model,
+              d.near_duplicate_key,
+              d.tickers
+       from narrative_candidate_evidence ce
+       join documents d on d.id = ce.document_id
+       join document_texts dt on dt.document_id = d.id
+       where ce.candidate_id = $1
+       order by d.published_at desc, ce.match_score desc`,
+      [candidateId]
+    );
+    const evidence = evidenceResult.rows
+      .filter((row) =>
+        isAllowedAutomaticPromotionEvidence(
+          row,
+          candidate,
+          normalizedPolicy
+        )
+      )
+      .map((row) => ({
+        evidenceId: row.id,
+        documentId: row.document_id,
+        title: row.title,
+        publisher: row.publisher,
+        publisherOwner: row.publisher_owner,
+        sourceClass: row.source_class,
+        publishedAt: row.published_at,
+        url: row.url,
+        tickers: row.tickers,
+        nearDuplicateKey: row.near_duplicate_key,
+        affectedEntities: row.affected_entities,
+        matchScore: Number(row.match_score),
+        evidenceSnippet: row.evidence_snippet,
+        interpretation: row.interpretation,
+        currentText: row.current_text,
+        sourceTextHash: row.current_text_hash
+      }));
+    return {
+      candidate: {
+        id: candidate.id,
+        name: candidate.name,
+        proposition: candidate.proposition,
+        category: candidate.category,
+        inclusionGuidance: candidate.inclusion_guidance,
+        exclusionGuidance: candidate.exclusion_guidance
+      },
+      policy: normalizedPolicy,
+      evidence
+    };
+  } finally {
+    await client.end();
+  }
+}
+
+export async function persistCandidatePromotionValidation(
+  candidateId: string,
+  validation: CandidatePromotionValidation,
+  databaseUrl = process.env.DATABASE_URL
+) {
+  if (validation.candidateId !== candidateId) {
+    throw new Error("Candidate promotion validation id does not match.");
+  }
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query(
+      `update narrative_candidates
+       set promotion_validation = $2::jsonb,
+           kind = $3,
+           event_label = $4
+       where id = $1 and status = 'pending'`,
+      [
+        candidateId,
+        JSON.stringify(validation),
+        validation.candidateKind,
+        validation.eventLabel
+      ]
+    );
+    return { updated: (result.rowCount ?? 0) === 1 };
+  } finally {
+    await client.end();
+  }
+}
 
 export async function autoPromoteNarrativeCandidates(
   options: NarrativeCandidateAutoPromotionOptions = {},
@@ -1051,6 +1207,13 @@ export async function autoPromoteNarrativeCandidates(
        join document_texts dt on dt.document_id = d.id
        where nc.status = 'pending'
          and nc.prompt_version = $1
+         and (
+           coalesce(nc.promotion_validation->>'status', '') = ''
+           or nc.promotion_validation->>'status' = 'eligible'
+           or nullif(nc.promotion_validation->>'evaluatedAt', '') is null
+           or nc.updated_at >
+             (nc.promotion_validation->>'evaluatedAt')::timestamptz
+         )
          and ce.prompt_version = nc.prompt_version
          and ce.match_score >= $2
          and ce.metadata->>'textHash' = dt.content_hash
@@ -1096,16 +1259,19 @@ export async function autoPromoteNarrativeCandidates(
     await client.end();
   }
 
-  const policy = {
-    policyName: "candidate_auto_promotion_v1",
-    discoveryPromptVersion,
-    classificationModel,
-    classificationPromptVersion,
+  const automaticPolicy: CandidatePromotionPolicy = {
     minimumMatchScore,
     minimumDocuments,
     minimumPublisherOwners,
     evidenceWindowDays,
     excludedPublisherOwners
+  };
+  const policy = {
+    policyName: "candidate_auto_promotion_v1",
+    discoveryPromptVersion,
+    classificationModel,
+    classificationPromptVersion,
+    ...automaticPolicy
   };
   const note =
     `Auto-promoted: score >= ${minimumMatchScore}; corroborated by >= ` +
@@ -1115,8 +1281,33 @@ export async function autoPromoteNarrativeCandidates(
   const failures: Array<{ candidateId: string; error: string }> = [];
   let observationsCreated = 0;
   let candidatesSkippedAlreadyPromoted = 0;
+  let candidatesBlocked = 0;
   for (const candidate of candidates) {
     try {
+      if (!options.validateCandidate) {
+        throw new Error("Automatic candidate promotion validator is not configured.");
+      }
+      const validationInput = await getCandidatePromotionValidationInput(
+        candidate.id,
+        automaticPolicy,
+        databaseUrl
+      );
+      if (!validationInput) {
+        candidatesSkippedAlreadyPromoted += 1;
+        continue;
+      }
+      const promotionValidation = await options.validateCandidate(
+        validationInput
+      );
+      await persistCandidatePromotionValidation(
+        candidate.id,
+        promotionValidation,
+        databaseUrl
+      );
+      if (promotionValidation.status !== "eligible") {
+        candidatesBlocked += 1;
+        continue;
+      }
       const promoted = await promoteNarrativeCandidate(
         {
           id: candidate.id,
@@ -1128,13 +1319,8 @@ export async function autoPromoteNarrativeCandidates(
           evidenceWindowDays,
           reviewActorType: "automatic",
           reviewMetadata: policy,
-          automaticPolicy: {
-            minimumMatchScore,
-            minimumDocuments,
-            minimumPublisherOwners,
-            evidenceWindowDays,
-            excludedPublisherOwners
-          }
+          automaticPolicy,
+          promotionValidation
         },
         databaseUrl
       );
@@ -1154,6 +1340,7 @@ export async function autoPromoteNarrativeCandidates(
   return {
     candidatesEvaluated: candidates.length,
     candidatesPromoted: promotedDefinitionIds.length,
+    candidatesBlocked,
     observationsCreated,
     candidatesSkippedAlreadyPromoted,
     promotedDefinitionIds,
@@ -1172,6 +1359,15 @@ export async function promoteNarrativeCandidate(
       "Automatic candidate promotion requires its complete safety policy."
     );
   }
+  if (
+    input.reviewActorType === "automatic" &&
+    (
+      input.promotionValidation.candidateId !== input.id ||
+      input.promotionValidation.status !== "eligible"
+    )
+  ) {
+    throw new Error("Automatic candidate promotion requires eligible semantic validation.");
+  }
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -1179,6 +1375,7 @@ export async function promoteNarrativeCandidate(
     const candidateResult = await client.query<CandidateRow>(
       `select id, cluster_key, name, proposition, category,
               inclusion_guidance, exclusion_guidance, status,
+              kind, event_label, promotion_validation,
               merged_into_candidate_id, promoted_definition_id,
               model, prompt_version, review_note, reviewed_at::text,
               created_at::text, updated_at::text
@@ -1200,6 +1397,16 @@ export async function promoteNarrativeCandidate(
     }
     if (candidate.status !== "pending") {
       throw new Error("Only pending narrative candidates can be promoted.");
+    }
+    if (
+      input.reviewActorType !== "automatic" &&
+      isPromotionValidation(candidate.promotion_validation) &&
+      candidate.promotion_validation.status === "ineligible" &&
+      !input.note?.trim()
+    ) {
+      throw new Error(
+        "Manual promotion requires an explicit override reason for validation blockers."
+      );
     }
     const automaticPolicy = input.automaticPolicy
       ? normalizeAutomaticPromotionPolicy(input.automaticPolicy)
@@ -1224,7 +1431,9 @@ export async function promoteNarrativeCandidate(
               dt.content_hash as current_text_hash,
               dt.content as current_text,
               ce.prompt_version as evidence_prompt_version,
-              ce.model as evidence_model
+              ce.model as evidence_model,
+              d.near_duplicate_key,
+              d.tickers
        from narrative_candidate_evidence ce
        join documents d on d.id = ce.document_id
        join document_texts dt on dt.document_id = d.id
@@ -1233,7 +1442,7 @@ export async function promoteNarrativeCandidate(
        for share of ce, d, dt`,
       [candidate.id]
     );
-    const selectedRows = automaticPolicy
+    const mechanicallyAllowedRows = automaticPolicy
       ? evidenceResult.rows.filter((row) =>
           isAllowedAutomaticPromotionEvidence(
             row,
@@ -1242,6 +1451,24 @@ export async function promoteNarrativeCandidate(
           )
         )
       : evidenceResult.rows;
+    const validationEvidence =
+      input.reviewActorType === "automatic"
+        ? new Map(
+            input.promotionValidation.evidence.map((item) => [
+              item.evidenceId,
+              item
+            ])
+          )
+        : null;
+    const selectedRows = validationEvidence
+      ? mechanicallyAllowedRows.filter((row) => {
+          const validated = validationEvidence.get(row.id);
+          return (
+            validated?.verdict === "support" &&
+            validated.sourceTextHash === row.current_text_hash
+          );
+        })
+      : mechanicallyAllowedRows;
     const evidence = selectedRows.map(mapEvidence);
     const evidenceWindowDays =
       automaticPolicy?.evidenceWindowDays ??
@@ -1272,6 +1499,18 @@ export async function promoteNarrativeCandidate(
         `Candidate needs at least ${minimumDocuments} documents from ${minimumPublisherOwners} independent publisher groups before promotion.`
       );
     }
+    if (
+      input.reviewActorType === "automatic" &&
+      (
+        input.promotionValidation.breadth.storyBreadth < minimumDocuments ||
+        input.promotionValidation.breadth.publisherOwnerBreadth <
+          minimumPublisherOwners ||
+        input.promotionValidation.supportedEvidenceIds.length <
+          minimumDocuments
+      )
+    ) {
+      throw new Error("Semantic validation does not meet automatic breadth policy.");
+    }
 
     const slug = slugifyNarrativeCandidate(candidate.cluster_key || candidate.name);
     const activeCollision = await client.query(
@@ -1289,12 +1528,25 @@ export async function promoteNarrativeCandidate(
     );
     const version = Number(versionResult.rows[0]?.version ?? 1);
     const definitionId = `narrative:def:${slug}:v${version}`;
+    const semanticValidation =
+      input.reviewActorType === "automatic"
+        ? input.promotionValidation
+        : null;
+    const promotionKind =
+      semanticValidation?.candidateKind ?? candidate.kind;
+    const promotionEventLabel =
+      promotionKind === "event"
+        ? semanticValidation?.eventLabel ?? candidate.event_label
+        : null;
     await client.query(
       `insert into narrative_definitions (
          id, slug, version, name, proposition, category,
          inclusion_guidance, exclusion_guidance, positive_examples,
-         negative_examples, status
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'active')`,
+         negative_examples, status, kind, event_label, metadata
+       ) values (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'active',
+         $10, $11, $12::jsonb
+       )`,
       [
         definitionId,
         slug,
@@ -1304,7 +1556,13 @@ export async function promoteNarrativeCandidate(
         candidate.category,
         candidate.inclusion_guidance,
         candidate.exclusion_guidance,
-        evidence.slice(0, 5).map((item) => item.evidenceSnippet)
+        evidence.slice(0, 5).map((item) => item.evidenceSnippet),
+        promotionKind,
+        promotionEventLabel,
+        JSON.stringify({
+          candidateId: candidate.id,
+          promotionValidation: semanticValidation
+        })
       ]
     );
 
@@ -1318,25 +1576,35 @@ export async function promoteNarrativeCandidate(
       "narrative_classification_v5";
     const reviewActorType = input.reviewActorType ?? "human";
     const reviewedAt = new Date().toISOString();
-    const qualifyingEvidence = selectedRows.map((row) => ({
-      evidenceId: row.id,
-      documentId: row.document_id,
-      publisherOwner: normalizePublisherOwner(row.publisher_owner),
-      matchScore: Number(row.match_score),
-      publishedAt: row.published_at,
-      url: row.url,
-      hostname: canonicalHostname(row.url),
-      textHash: row.current_text_hash,
-      evidenceSnippetHash: createHash("sha256")
-        .update(row.evidence_snippet)
-        .digest("hex"),
-      discoveryModel: row.evidence_model,
-      discoveryPromptVersion: row.evidence_prompt_version
-    }));
+    const qualifyingEvidence = selectedRows.map((row) => {
+      const validated = semanticValidation?.evidence.find(
+        (item) => item.evidenceId === row.id
+      );
+      return {
+        evidenceId: row.id,
+        documentId: row.document_id,
+        publisherOwner: normalizePublisherOwner(row.publisher_owner),
+        matchScore: Number(row.match_score),
+        publishedAt: row.published_at,
+        url: row.url,
+        hostname: canonicalHostname(row.url),
+        textHash: row.current_text_hash,
+        evidenceSnippetHash: createHash("sha256")
+          .update(row.evidence_snippet)
+          .digest("hex"),
+        storyFingerprint: validated?.storyFingerprint ?? null,
+        eventKey: validated?.eventKey ?? null,
+        primaryEntityKey: validated?.primaryEntityKey ?? null,
+        validationReason: validated?.reason ?? null,
+        discoveryModel: row.evidence_model,
+        discoveryPromptVersion: row.evidence_prompt_version
+      };
+    });
     const reviewMetadata = {
       ...(input.reviewMetadata ?? {}),
       ...(automaticPolicy ? { automaticPolicy } : {}),
       promotedDefinitionId: definitionId,
+      promotionValidation: semanticValidation,
       qualifyingEvidence
     };
     const reviewProvenance = {
@@ -1424,13 +1692,19 @@ export async function promoteNarrativeCandidate(
            review_note = nullif($3, ''),
            reviewed_at = now(),
            metadata = metadata || $4::jsonb,
+           kind = $5,
+           event_label = $6,
+           promotion_validation = $7::jsonb,
            updated_at = now()
        where id = $1`,
       [
         candidate.id,
         definitionId,
         input.note?.trim() ?? "",
-        JSON.stringify({ promotionProvenance: reviewProvenance })
+        JSON.stringify({ promotionProvenance: reviewProvenance }),
+        promotionKind,
+        promotionEventLabel,
+        JSON.stringify(semanticValidation ?? {})
       ]
     );
     await client.query("commit");
@@ -1630,8 +1904,11 @@ function mapCandidate(
     inclusionGuidance: row.inclusion_guidance,
     exclusionGuidance: row.exclusion_guidance,
     status: row.status,
+    kind: row.kind,
+    eventLabel: row.event_label,
     mergedIntoCandidateId: row.merged_into_candidate_id,
     promotedDefinitionId: row.promoted_definition_id,
+    promotedDefinitionStatus: row.promoted_definition_status ?? null,
     model: row.model,
     promptVersion: row.prompt_version,
     reviewNote: row.review_note,
@@ -1644,8 +1921,23 @@ function mapCandidate(
       minimumDocuments,
       minimumPublisherOwners
     ),
+    promotionValidation: isPromotionValidation(row.promotion_validation)
+      ? row.promotion_validation
+      : null,
     evidence
   };
+}
+
+function isPromotionValidation(
+  value: CandidatePromotionValidation | Record<string, never>
+): value is CandidatePromotionValidation {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "candidateId" in value &&
+    "status" in value &&
+    "breadth" in value
+  );
 }
 
 function candidateBreadth(evidence: NarrativeCandidateEvidence[]) {
@@ -1715,6 +2007,7 @@ function emptyCandidateQueue(promptVersion: string): NarrativeCandidateQueue {
     promptVersion,
     pendingCount: 0,
     qualifiedCount: 0,
+    autoEligibleCount: 0,
     approvedCount: 0,
     rejectedCount: 0,
     mergedCount: 0,

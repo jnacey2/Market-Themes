@@ -25,6 +25,8 @@ type RawCandidate = {
   category?: unknown;
   inclusionGuidance?: unknown;
   exclusionGuidance?: unknown;
+  candidateKind?: unknown;
+  eventLabel?: unknown;
   stance?: unknown;
   riskTone?: unknown;
   bullishTone?: unknown;
@@ -217,6 +219,10 @@ function normalizeCandidate(
       )
     );
   const clusterKey = existing?.clusterKey ?? requestedKey;
+  const kind = raw.candidateKind === "event" ? "event" : "structural";
+  const eventLabel =
+    kind === "event" ? cleanString(raw.eventLabel, 160) : null;
+  if (kind === "event" && !eventLabel) return null;
   const candidateId = `narrative:candidate:${createHash("sha256")
     .update(`${options.promptVersion}:${clusterKey}`)
     .digest("hex")
@@ -238,6 +244,8 @@ function normalizeCandidate(
     exclusionGuidance:
       cleanString(raw.exclusionGuidance, 500) ||
       "Exclude generic topic mentions and isolated events without a directional signal.",
+    kind,
+    eventLabel,
     model: options.model,
     promptVersion: options.promptVersion,
     metadata: {

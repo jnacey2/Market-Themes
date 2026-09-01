@@ -49,7 +49,9 @@ export default async function TrendsPage() {
             key={narrative.id}
           >
             <div className="current-name">
-              <span className="label">{narrative.category}</span>
+              <span className="label">
+                {narrative.category} · {narrative.kind ?? "structural"}
+              </span>
               <strong>{narrative.name}</strong>
               <small>{narrative.proposition}</small>
             </div>

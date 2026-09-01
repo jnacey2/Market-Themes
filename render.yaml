@@ -487,6 +487,8 @@ services:
         fromDatabase:
           name: themes-postgres
           property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-5-20250929
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
@@ -517,6 +519,12 @@ services:
         value: "7"
       - key: NARRATIVE_AUTO_PROMOTE_MAX_CANDIDATES
         value: "5"
+      - key: NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION
+        value: candidate_promotion_validation_v1
+      - key: NARRATIVE_PROMOTION_VALIDATION_MAX_EVIDENCE
+        value: "10"
+      - key: NARRATIVE_PROMOTION_VALIDATION_MAX_TOKENS
+        value: "2500"
 
   - type: cron
     name: recompute-narrative-trends

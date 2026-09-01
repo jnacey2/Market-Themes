@@ -465,6 +465,8 @@ export type NarrativeDefinition = {
   positiveExamples: string[];
   negativeExamples: string[];
   status: string;
+  kind?: NarrativeCandidateKind;
+  eventLabel?: string | null;
 };
 
 export type NarrativeCandidateStatus =
@@ -472,6 +474,78 @@ export type NarrativeCandidateStatus =
   | "approved"
   | "rejected"
   | "merged";
+
+export type NarrativeCandidateKind = "event" | "structural";
+
+export type CandidatePromotionPolicy = {
+  minimumMatchScore: number;
+  minimumDocuments: number;
+  minimumPublisherOwners: number;
+  evidenceWindowDays: number;
+  excludedPublisherOwners: string[];
+};
+
+export type CandidatePromotionValidationEvidence = {
+  evidenceId: string;
+  documentId: string;
+  verdict: "support" | "reject";
+  reason: string;
+  eventKey: string | null;
+  primaryEntityKey: string | null;
+  storyFingerprint: string;
+  sourceTextHash: string;
+};
+
+export type CandidatePromotionValidation = {
+  candidateId: string;
+  status: "eligible" | "ineligible" | "manual_review";
+  candidateKind: NarrativeCandidateKind;
+  eventLabel: string | null;
+  summaryReason: string;
+  reasons: string[];
+  supportedEvidenceIds: string[];
+  breadth: {
+    storyBreadth: number;
+    eventBreadth: number;
+    primaryEntityBreadth: number;
+    publisherOwnerBreadth: number;
+    sourceClassBreadth: number;
+  };
+  evidence: CandidatePromotionValidationEvidence[];
+  promptVersion: string;
+  model: string;
+  evaluatedAt: string;
+};
+
+export type CandidatePromotionValidationInput = {
+  candidate: {
+    id: string;
+    name: string;
+    proposition: string;
+    category: string;
+    inclusionGuidance: string;
+    exclusionGuidance: string;
+  };
+  policy: CandidatePromotionPolicy;
+  evidence: Array<{
+    evidenceId: string;
+    documentId: string;
+    title: string;
+    publisher: string;
+    publisherOwner: string;
+    sourceClass: SourceClass;
+    publishedAt: string;
+    url: string;
+    tickers: string[];
+    nearDuplicateKey: string | null;
+    affectedEntities: string[];
+    matchScore: number;
+    evidenceSnippet: string;
+    interpretation: string;
+    currentText: string;
+    sourceTextHash: string;
+  }>;
+};
 
 export type NarrativeCandidateEvidenceInput = {
   id: string;
@@ -496,6 +570,8 @@ export type NarrativeCandidateInput = {
   category: string;
   inclusionGuidance: string;
   exclusionGuidance: string;
+  kind?: NarrativeCandidateKind;
+  eventLabel?: string | null;
   model: string;
   promptVersion: string;
   evidence: NarrativeCandidateEvidenceInput[];
@@ -536,8 +612,11 @@ export type NarrativeCandidateSummary = {
   inclusionGuidance: string;
   exclusionGuidance: string;
   status: NarrativeCandidateStatus;
+  kind: NarrativeCandidateKind;
+  eventLabel: string | null;
   mergedIntoCandidateId: string | null;
   promotedDefinitionId: string | null;
+  promotedDefinitionStatus: string | null;
   model: string;
   promptVersion: string;
   reviewNote: string | null;
@@ -550,6 +629,7 @@ export type NarrativeCandidateSummary = {
   sourceClassBreadth: number;
   entityBreadth: number;
   qualified: boolean;
+  promotionValidation: CandidatePromotionValidation | null;
   evidence: NarrativeCandidateEvidence[];
 };
 
@@ -558,6 +638,7 @@ export type NarrativeCandidateQueue = {
   promptVersion: string;
   pendingCount: number;
   qualifiedCount: number;
+  autoEligibleCount: number;
   approvedCount: number;
   rejectedCount: number;
   mergedCount: number;

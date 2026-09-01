@@ -123,10 +123,9 @@ export const narrativeDiscoverySystemPrompt = `You discover emerging, repeatable
 
 Return only valid JSON. Do not include markdown, commentary, or code fences.
 
-A candidate narrative is a testable directional proposition that could recur across
-companies or independent publishers. It is not a topic, keyword, article summary,
-company-specific event, trade recommendation, or restatement of an already tracked
-narrative.
+A candidate narrative is a testable directional proposition. It is not a topic,
+keyword, article summary, trade recommendation, or restatement of an already
+tracked narrative.
 
 Rules:
 - Return at most three candidates. Return an empty candidates array when the document
@@ -139,10 +138,15 @@ Rules:
 - evidenceSnippet must be copied exactly from the source text and independently support
   the proposition. Do not combine separate passages or add facts.
 - inclusionGuidance and exclusionGuidance must make later classification falsifiable.
+- candidateKind is "structural" only for repeatable cross-company, sector, or macro
+  changes supported beyond one underlying event. Use "event" for a dated incident,
+  lawsuit, transaction, conflict, policy action, or single-company development.
+- eventLabel must name the underlying incident precisely for event candidates and
+  must be null for structural candidates.
 - Prefer candidates that another independent source could confirm.
 - matchScore must be 75-100. When confidence is lower, omit the candidate.
 - affectedEntities contains companies, sectors, commodities, regions, or macro variables.
-- Do not infer a broad narrative from an isolated transaction or unsupported prediction.
+- Do not generalize one company or one event into a plural sector proposition.
 
 Return this JSON shape:
 {
@@ -154,6 +158,8 @@ Return this JSON shape:
       "category": "Technology | Consumer | Credit | Financials | Energy | Capital Markets | Cross-sector | Macro | Other",
       "inclusionGuidance": "What later evidence must show.",
       "exclusionGuidance": "Nearby claims that do not qualify.",
+      "candidateKind": "event | structural",
+      "eventLabel": "Specific underlying event or null",
       "stance": "risk | bullish | mixed | neutral",
       "riskTone": 0,
       "bullishTone": 0,
@@ -164,6 +170,39 @@ Return this JSON shape:
     }
   ]
 }`;
+
+export const candidatePromotionValidationPromptVersion =
+  "candidate_promotion_validation_v1";
+
+export const candidatePromotionValidationSystemPrompt = `You are the final quality gate before a discovered market narrative is published.
+
+Return only the requested structured output.
+
+Classify the candidate:
+- "event" for one dated incident, lawsuit, transaction, conflict, policy action,
+  product event, or single-company development.
+- "structural" only for a recurring cross-company, sector, or macro change that
+  is supported beyond one underlying event.
+
+For every evidence item:
+- supportsProposition is true only when the exact quotation and local context
+  directly entail the candidate proposition.
+- violatesExclusion is true when the evidence falls within the candidate's
+  exclusion guidance, including single-company evidence excluded from a
+  generalized sector proposition.
+- verdict is "support" only when supportsProposition is true and
+  violatesExclusion is false.
+- eventKey is a stable short kebab-case identifier for the underlying real-world
+  event. Reports about the same lawsuit, IPO, deal, conflict, or announcement
+  must receive the same eventKey.
+- primaryEntityKey is the main company, sector, commodity, region, or macro
+  entity in kebab-case.
+
+promotionDecision is "approve" only when the proposition is worded consistently
+with the evidence and its inclusion/exclusion contract. Use "reject" for a clear
+contract violation and "manual_review" for ambiguity. Event candidates require
+a precise eventLabel. Structural candidates must not be generalized from one
+company or one event. Never make a trade recommendation.`;
 
 export const storyboardSystemPrompt = `You generate market narrative storyboards.
 

@@ -8,10 +8,12 @@ type CandidateAction = "promote" | "reject" | "merge";
 export function CandidateActions({
   id,
   qualified,
+  requiresOverrideNote,
   mergeTargets
 }: {
   id: string;
   qualified: boolean;
+  requiresOverrideNote: boolean;
   mergeTargets: Array<{ id: string; name: string }>;
 }) {
   const router = useRouter();
@@ -21,6 +23,10 @@ export function CandidateActions({
   const [error, setError] = useState<string | null>(null);
 
   async function submit(action: CandidateAction) {
+    if (action === "promote" && requiresOverrideNote && !note.trim()) {
+      setError("Explain why the automatic validation blockers should be overridden.");
+      return;
+    }
     setPending(action);
     setError(null);
     try {
@@ -66,7 +72,11 @@ export function CandidateActions({
           onClick={() => submit("promote")}
           type="button"
         >
-          {pending === "promote" ? "Promoting…" : "Approve & track"}
+          {pending === "promote"
+            ? "Promoting…"
+            : requiresOverrideNote
+              ? "Promote with override"
+              : "Approve & track"}
         </button>
         <button
           className="button danger"
@@ -80,6 +90,12 @@ export function CandidateActions({
       {!qualified ? (
         <p className="warning-text">
           Promotion unlocks after evidence from two independent publisher groups.
+        </p>
+      ) : null}
+      {requiresOverrideNote ? (
+        <p className="warning-text">
+          Automatic validation blocked this candidate. Manual promotion requires
+          an explicit override reason.
         </p>
       ) : null}
       {mergeTargets.length > 0 ? (

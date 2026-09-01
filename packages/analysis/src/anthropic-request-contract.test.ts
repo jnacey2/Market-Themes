@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const requestModules = [
+  "candidate-promotion-validation.ts",
   "extraction.ts",
   "theme-normalization.ts",
   "narrative-classification.ts",

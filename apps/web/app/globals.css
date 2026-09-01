@@ -855,6 +855,25 @@ h3 {
   margin-top: 18px;
 }
 
+.eligibility-panel {
+  background: rgba(125, 211, 252, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  margin-top: 18px;
+  padding: 16px;
+}
+
+.eligibility-panel p {
+  margin: 12px 0 0;
+}
+
+.blocker-list {
+  color: var(--warning);
+  line-height: 1.7;
+  margin-bottom: 0;
+  padding-left: 20px;
+}
+
 .candidate-evidence blockquote {
   border-left: 2px solid var(--accent);
   color: var(--text);
@@ -885,6 +904,14 @@ h3 {
 }
 
 .candidate-merge {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 20px;
+}
+
+.candidate-retraction {
   border-top: 1px solid var(--line);
   display: grid;
   gap: 12px;

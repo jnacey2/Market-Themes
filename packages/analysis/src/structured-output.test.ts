@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  candidatePromotionValidationOutputFormat,
   narrativeClassificationOutputFormat,
   narrativeDiscoveryOutputFormat,
   parseStructuredOutput,
@@ -12,6 +13,11 @@ const formats = [
   ["signal extraction", signalExtractionOutputFormat, "signals"],
   ["narrative classification", narrativeClassificationOutputFormat, "observations"],
   ["narrative discovery", narrativeDiscoveryOutputFormat, "candidates"],
+  [
+    "candidate promotion validation",
+    candidatePromotionValidationOutputFormat,
+    "evidence"
+  ],
   ["theme normalization", themeNormalizationOutputFormat, "mappings"]
 ] as const;
 
@@ -26,7 +32,12 @@ test("all analysis outputs use strict top-level JSON schemas", () => {
     assert.equal(format.type, "json_schema", name);
     assert.equal(schema.type, "object", name);
     assert.equal(schema.additionalProperties, false, name);
-    assert.deepEqual(schema.required, [requiredProperty], name);
+    assert.equal(
+      Array.isArray(schema.required) &&
+        schema.required.includes(requiredProperty),
+      true,
+      name
+    );
     assert.equal(
       typeof schema.properties?.[requiredProperty],
       "object",

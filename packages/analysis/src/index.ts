@@ -1,3 +1,4 @@
+export * from "./candidate-promotion-validation";
 export * from "./extraction";
 export * from "./narrative-classification";
 export * from "./narrative-discovery";

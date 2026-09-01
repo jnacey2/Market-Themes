@@ -106,7 +106,11 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
     review,
     /key: NARRATIVE_AUTO_PROMOTE_MIN_PUBLISHER_OWNERS\s+value: "3"/
   );
-  assert.doesNotMatch(review, /ANTHROPIC_API_KEY/);
+  assert.match(review, /key: ANTHROPIC_API_KEY/);
+  assert.match(
+    review,
+    /key: NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION\s+value: candidate_promotion_validation_v1/
+  );
 });
 
 test("the theme cron runs normalization and trends without stage selectors", () => {

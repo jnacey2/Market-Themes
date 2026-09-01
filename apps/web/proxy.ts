@@ -36,6 +36,7 @@ export const config = {
     "/narrative-review/:path*",
     "/narrative-candidates/:path*",
     "/sources/:path*",
+    "/api/narrative-definitions/:path*",
     "/api/narrative-candidates/:path*",
     "/api/narrative-observations/:path*",
     "/api/publication-feeds/:path*",
