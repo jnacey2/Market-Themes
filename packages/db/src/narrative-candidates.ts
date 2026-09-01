@@ -1064,7 +1064,12 @@ export async function getCandidatePromotionValidationInput(
               candidate,
               normalizedPolicy
             )
-          : isAllowedPromotionEvidence(row, candidate, normalizedPolicy)
+          : isAllowedPromotionEvidence(
+              row,
+              candidate,
+              normalizedPolicy,
+              false
+            )
       )
       .map((row) => ({
         evidenceId: row.id,
@@ -1776,7 +1781,8 @@ function isAllowedAutomaticPromotionEvidence(
 function isAllowedPromotionEvidence(
   row: PromotionEvidenceRow,
   candidate: CandidateRow,
-  policy: CandidatePromotionPolicy
+  policy: CandidatePromotionPolicy,
+  requireStoredTextHash = true
 ) {
   const publishedAt = new Date(row.published_at).getTime();
   const now = Date.now();
@@ -1789,8 +1795,11 @@ function isAllowedPromotionEvidence(
     matchScore > 100 ||
     row.evidence_snippet.trim().length === 0 ||
     row.evidence_prompt_version !== candidate.prompt_version ||
-    typeof evidenceTextHash !== "string" ||
-    evidenceTextHash !== row.current_text_hash ||
+    (requireStoredTextHash &&
+      (
+        typeof evidenceTextHash !== "string" ||
+        evidenceTextHash !== row.current_text_hash
+      )) ||
     !row.current_text.includes(row.evidence_snippet) ||
     !Number.isFinite(publishedAt) ||
     publishedAt < cutoff ||
