@@ -158,7 +158,7 @@ export async function getActiveAnthropicMessageBatch(
       [workload, activeStatuses]
     );
     if (!result.rows[0]) return null;
-    return loadBatchRecord(client, result.rows[0]);
+    return await loadBatchRecord(client, result.rows[0]);
   } finally {
     await client.end();
   }
@@ -178,7 +178,7 @@ export async function getAnthropicMessageBatch(
       [id]
     );
     if (!result.rows[0]) return null;
-    return loadBatchRecord(client, result.rows[0]);
+    return await loadBatchRecord(client, result.rows[0]);
   } finally {
     await client.end();
   }
