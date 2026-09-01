@@ -129,12 +129,26 @@ test(
     assert(qualified);
     assert.equal(qualified.qualified, true);
     assert.equal(qualified.publisherOwnerBreadth, 2);
+    const manualValidationInput = await getCandidatePromotionValidationInput(
+      candidateId,
+      {
+        minimumMatchScore: 75,
+        minimumDocuments: 2,
+        minimumPublisherOwners: 2,
+        evidenceWindowDays: 30,
+        excludedPublisherOwners: []
+      },
+      process.env.DATABASE_URL,
+      "manual"
+    );
+    assert(manualValidationInput);
 
     const promoted = await promoteNarrativeCandidate({
       id: candidateId,
       note: "Two independent sources directly support this candidate.",
       classificationModel: model,
-      classificationPromptVersion
+      classificationPromptVersion,
+      promotionValidation: eligibleValidation(manualValidationInput)
     });
     assert.equal(promoted.observationsCreated, 2);
 

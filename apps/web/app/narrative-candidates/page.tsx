@@ -134,13 +134,20 @@ function CandidateCard({
                 auto {candidate.promotionValidation.status.replaceAll("_", " ")}
               </span>
               <span className="pill">
-                {candidate.promotionValidation.breadth.storyBreadth} unique stories
+                {candidate.promotionValidation.breadth.storyBreadth} unique{" "}
+                {pluralize(candidate.promotionValidation.breadth.storyBreadth, "story")}
               </span>
               <span className="pill">
-                {candidate.promotionValidation.breadth.eventBreadth} events
+                {candidate.promotionValidation.breadth.eventBreadth}{" "}
+                {pluralize(candidate.promotionValidation.breadth.eventBreadth, "event")}
               </span>
               <span className="pill">
-                {candidate.promotionValidation.breadth.primaryEntityBreadth} primary entities
+                {candidate.promotionValidation.breadth.primaryEntityBreadth} primary{" "}
+                {pluralize(
+                  candidate.promotionValidation.breadth.primaryEntityBreadth,
+                  "entity",
+                  "entities"
+                )}
               </span>
             </div>
             <p>{candidate.promotionValidation.summaryReason}</p>
@@ -221,7 +228,10 @@ function CandidateCard({
           id={candidate.id}
           qualified={candidate.qualified}
           requiresOverrideNote={
-            candidate.promotionValidation?.status === "ineligible"
+            Boolean(
+              candidate.promotionValidation &&
+                candidate.promotionValidation.status !== "eligible"
+            )
           }
           mergeTargets={mergeTargets}
         />
@@ -262,4 +272,8 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(
     new Date(value)
   );
+}
+
+function pluralize(value: number, singular: string, plural = `${singular}s`) {
+  return value === 1 ? singular : plural;
 }

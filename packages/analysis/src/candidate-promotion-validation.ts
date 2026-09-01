@@ -248,6 +248,12 @@ export function normalizeCandidatePromotionValidation(
   if (publisherOwners.size < input.policy.minimumPublisherOwners) {
     reasons.push("INSUFFICIENT_PUBLISHER_OWNERS");
   }
+  if (supported.some((item) => !item.eventKey)) {
+    reasons.push("MISSING_EVENT_KEYS");
+  }
+  if (supported.some((item) => !item.primaryEntityKey)) {
+    reasons.push("MISSING_PRIMARY_ENTITY_KEYS");
+  }
   if (candidateKind === "event") {
     if (!eventLabel) reasons.push("EVENT_LABEL_REQUIRED");
     if (eventKeys.size !== 1) reasons.push("EVENT_KEY_MUST_BE_SINGULAR");

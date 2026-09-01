@@ -49,6 +49,7 @@ export function CandidateActions({
       setError(
         reviewError instanceof Error ? reviewError.message : String(reviewError)
       );
+      router.refresh();
     } finally {
       setPending(null);
     }

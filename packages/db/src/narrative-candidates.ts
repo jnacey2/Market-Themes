@@ -976,6 +976,7 @@ type NarrativeCandidatePromotionInput = {
       reviewActorType?: "human";
       reviewMetadata?: Record<string, unknown>;
       automaticPolicy?: never;
+      promotionValidation?: CandidatePromotionValidation;
     }
   | {
       reviewActorType: "automatic";
@@ -1003,9 +1004,13 @@ export type NarrativeCandidateAutoPromotionOptions = {
 export async function getCandidatePromotionValidationInput(
   candidateId: string,
   policy: CandidatePromotionPolicy,
-  databaseUrl = process.env.DATABASE_URL
+  databaseUrl = process.env.DATABASE_URL,
+  mode: "automatic" | "manual" = "automatic"
 ): Promise<CandidatePromotionValidationInput | null> {
-  const normalizedPolicy = normalizeAutomaticPromotionPolicy(policy);
+  const normalizedPolicy =
+    mode === "automatic"
+      ? normalizeAutomaticPromotionPolicy(policy)
+      : normalizeManualPromotionPolicy(policy);
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -1053,11 +1058,13 @@ export async function getCandidatePromotionValidationInput(
     );
     const evidence = evidenceResult.rows
       .filter((row) =>
-        isAllowedAutomaticPromotionEvidence(
-          row,
-          candidate,
-          normalizedPolicy
-        )
+        mode === "automatic"
+          ? isAllowedAutomaticPromotionEvidence(
+              row,
+              candidate,
+              normalizedPolicy
+            )
+          : isAllowedPromotionEvidence(row, candidate, normalizedPolicy)
       )
       .map((row) => ({
         evidenceId: row.id,
@@ -1363,7 +1370,7 @@ export async function promoteNarrativeCandidate(
     input.reviewActorType === "automatic" &&
     (
       input.promotionValidation.candidateId !== input.id ||
-      input.promotionValidation.status !== "eligible"
+      !isAutomaticPromotionValidationEligible(input.promotionValidation)
     )
   ) {
     throw new Error("Automatic candidate promotion requires eligible semantic validation.");
@@ -1398,10 +1405,21 @@ export async function promoteNarrativeCandidate(
     if (candidate.status !== "pending") {
       throw new Error("Only pending narrative candidates can be promoted.");
     }
+    const semanticValidation =
+      input.promotionValidation ??
+      (isPromotionValidation(candidate.promotion_validation)
+        ? candidate.promotion_validation
+        : null);
+    if (
+      semanticValidation &&
+      semanticValidation.candidateId !== candidate.id
+    ) {
+      throw new Error("Candidate promotion validation id does not match.");
+    }
     if (
       input.reviewActorType !== "automatic" &&
-      isPromotionValidation(candidate.promotion_validation) &&
-      candidate.promotion_validation.status === "ineligible" &&
+      semanticValidation &&
+      semanticValidation.status !== "eligible" &&
       !input.note?.trim()
     ) {
       throw new Error(
@@ -1451,15 +1469,14 @@ export async function promoteNarrativeCandidate(
           )
         )
       : evidenceResult.rows;
-    const validationEvidence =
-      input.reviewActorType === "automatic"
-        ? new Map(
-            input.promotionValidation.evidence.map((item) => [
-              item.evidenceId,
-              item
-            ])
-          )
-        : null;
+    const validationEvidence = semanticValidation
+      ? new Map(
+          semanticValidation.evidence.map((item) => [
+            item.evidenceId,
+            item
+          ])
+        )
+      : null;
     const selectedRows = validationEvidence
       ? mechanicallyAllowedRows.filter((row) => {
           const validated = validationEvidence.get(row.id);
@@ -1499,6 +1516,11 @@ export async function promoteNarrativeCandidate(
         `Candidate needs at least ${minimumDocuments} documents from ${minimumPublisherOwners} independent publisher groups before promotion.`
       );
     }
+    if (!semanticValidation) {
+      throw new Error(
+        "Candidate promotion requires quotation-level semantic validation."
+      );
+    }
     if (
       input.reviewActorType === "automatic" &&
       (
@@ -1528,10 +1550,6 @@ export async function promoteNarrativeCandidate(
     );
     const version = Number(versionResult.rows[0]?.version ?? 1);
     const definitionId = `narrative:def:${slug}:v${version}`;
-    const semanticValidation =
-      input.reviewActorType === "automatic"
-        ? input.promotionValidation
-        : null;
     const promotionKind =
       semanticValidation?.candidateKind ?? candidate.kind;
     const promotionEventLabel =
@@ -1748,6 +1766,18 @@ function isAllowedAutomaticPromotionEvidence(
   candidate: CandidateRow,
   policy: NarrativeCandidateAutomaticPolicy
 ) {
+  return isAllowedPromotionEvidence(
+    row,
+    candidate,
+    normalizeAutomaticPromotionPolicy(policy)
+  );
+}
+
+function isAllowedPromotionEvidence(
+  row: PromotionEvidenceRow,
+  candidate: CandidateRow,
+  policy: CandidatePromotionPolicy
+) {
   const publishedAt = new Date(row.published_at).getTime();
   const now = Date.now();
   const cutoff = now - policy.evidenceWindowDays * 24 * 60 * 60 * 1_000;
@@ -1805,6 +1835,32 @@ function isAllowedAutomaticPromotionEvidence(
     return false;
   }
   return true;
+}
+
+function normalizeManualPromotionPolicy(
+  policy: CandidatePromotionPolicy
+): CandidatePromotionPolicy {
+  return {
+    minimumMatchScore: Math.max(
+      75,
+      Math.min(100, finiteNumber(policy.minimumMatchScore, 75))
+    ),
+    minimumDocuments: Math.max(
+      2,
+      finiteInteger(policy.minimumDocuments, 2)
+    ),
+    minimumPublisherOwners: Math.max(
+      2,
+      finiteInteger(policy.minimumPublisherOwners, 2)
+    ),
+    evidenceWindowDays: Math.max(
+      1,
+      Math.min(30, finiteInteger(policy.evidenceWindowDays, 30))
+    ),
+    excludedPublisherOwners: policy.excludedPublisherOwners.map((value) =>
+      value.trim().toLowerCase()
+    )
+  };
 }
 
 function normalizeAutomaticPromotionPolicy(
@@ -1937,6 +1993,27 @@ function isPromotionValidation(
     "candidateId" in value &&
     "status" in value &&
     "breadth" in value
+  );
+}
+
+function isAutomaticPromotionValidationEligible(
+  validation: CandidatePromotionValidation
+) {
+  if (
+    validation.status !== "eligible" ||
+    validation.reasons.length > 0 ||
+    validation.supportedEvidenceIds.length === 0
+  ) {
+    return false;
+  }
+  if (validation.candidateKind === "event") {
+    return Boolean(validation.eventLabel) && validation.breadth.eventBreadth === 1;
+  }
+  return (
+    (validation.breadth.eventBreadth >= 2 ||
+      validation.breadth.primaryEntityBreadth >= 2) &&
+    (validation.breadth.sourceClassBreadth >= 2 ||
+      validation.breadth.eventBreadth >= 2)
   );
 }
 
