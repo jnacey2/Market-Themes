@@ -26,7 +26,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
         value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
@@ -58,7 +58,7 @@ services:
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
         value: narrative_discovery_v1
       - key: NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS
@@ -128,7 +128,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
@@ -228,7 +228,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
@@ -310,7 +310,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_LOOKBACK_DAYS
@@ -398,7 +398,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: THEME_NORMALIZATION_PROMPT_VERSION
         value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE
@@ -420,13 +420,15 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
+      - key: ANTHROPIC_PROMPT_CACHING
+        value: "true"
       - key: DB_QUERY_TIMEOUT_MS
         value: "120000"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
         value: "10"
       - key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS
@@ -452,7 +454,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: DB_QUERY_TIMEOUT_MS
         value: "120000"
       - key: NODE_OPTIONS
@@ -492,11 +494,11 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
         value: claude-haiku-4-5-20251001
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
         value: narrative_discovery_v1
       - key: NARRATIVE_AUTO_REVIEW_ENABLED
@@ -546,7 +548,7 @@ services:
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v5
+        value: narrative_classification_v6
       - key: NARRATIVE_TREND_LOOKBACK_DAYS
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS

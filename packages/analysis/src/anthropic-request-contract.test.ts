@@ -35,3 +35,14 @@ test("every Anthropic analysis request sends a structured output schema", () => 
     assert.match(source, /output_config:\s*\{\s*format:/, moduleName);
   }
 });
+
+test("every Anthropic analysis request records token and cache usage", () => {
+  for (const moduleName of requestModules) {
+    const source = readFileSync(
+      fileURLToPath(new URL(moduleName, import.meta.url)),
+      "utf8"
+    );
+    assert.match(source, /logAnthropicUsage\(/, moduleName);
+    assert.match(source, /message\.usage/, moduleName);
+  }
+});

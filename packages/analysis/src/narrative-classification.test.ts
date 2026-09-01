@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AnalysisDocument, NarrativeDefinition } from "@market-themes/db";
 import {
+  buildNarrativeClassificationContent,
   normalizeObservation,
   passesDefinitionGuard
 } from "./narrative-classification";
@@ -86,6 +87,54 @@ test("rejects low-confidence semantic adjacency despite an exact quote", () => {
   assert.equal(adjacent.matched, false);
   assert.equal(adjacent.matchScore, 62);
   assert.equal(adjacent.evidenceSnippet, "");
+});
+
+test("records omitted sparse-output definitions as non-matches", () => {
+  const omitted = normalizeObservation(
+    undefined,
+    definition,
+    document,
+    "model",
+    "prompt"
+  );
+
+  assert.equal(omitted.matched, false);
+  assert.equal(omitted.matchScore, 0);
+  assert.equal(omitted.evidenceSnippet, "");
+});
+
+test("caches only the stable definition prefix", () => {
+  const changedDocument = {
+    ...document,
+    id: "document:changed",
+    text: "A completely different source document."
+  };
+  const first = buildNarrativeClassificationContent(
+    document,
+    [definition],
+    document.text,
+    true
+  );
+  const second = buildNarrativeClassificationContent(
+    changedDocument,
+    [definition],
+    changedDocument.text,
+    true
+  );
+  const uncached = buildNarrativeClassificationContent(
+    document,
+    [definition],
+    document.text,
+    false
+  );
+
+  assert.deepEqual(first[0], second[0]);
+  assert.notDeepEqual(first[1], second[1]);
+  assert.deepEqual(
+    "cache_control" in first[0] ? first[0].cache_control : undefined,
+    { type: "ephemeral" }
+  );
+  assert.equal("cache_control" in uncached[0], false);
 });
 
 test("applies strict proposition-specific evidence guards", () => {

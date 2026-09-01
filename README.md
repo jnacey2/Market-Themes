@@ -343,13 +343,21 @@ The first live Claude integration extracts market signals from SEC/FMP documents
 
 - Uses full-document analysis where practical.
 - Splits oversized documents into sections and merges/dedupes the outputs.
-- Defaults to Sonnet via `ANTHROPIC_MODEL`.
-- Uses Haiku 4.5 by default for the bounded promotion-quality pass via
-  `NARRATIVE_PROMOTION_VALIDATION_MODEL`, without changing classifier identity.
+- Defaults every live analysis workload to Haiku 4.5 via `ANTHROPIC_MODEL`.
+- Keeps a separate `NARRATIVE_PROMOTION_VALIDATION_MODEL` override for the
+  bounded promotion-quality pass.
 - Tracks idempotency by document, model, and `CLAUDE_PROMPT_VERSION`.
 - Stores exact evidence snippets capped by `CLAUDE_MAX_EVIDENCE_CHARS`.
 - Stores parsed structured fields only, not raw Claude responses by default.
 - Leaves extracted themes as `emerging` until later trend/storyboard promotion.
+
+Narrative classification returns only positive matches and deterministically
+persists omitted definitions as non-matches, avoiding repeated negative output
+tokens. Its stable definition prefix has a five-minute ephemeral cache breakpoint
+when `ANTHROPIC_PROMPT_CACHING` is not `false`. Haiku 4.5 only creates a cache
+entry when that reusable prefix reaches 4,096 tokens, so shorter prefixes continue
+uncached without error. Each request logs uncached input, cache-write input,
+cache-read input, and output token counts under `[anthropic-usage]`.
 
 Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
@@ -392,9 +400,10 @@ Copy `.env.example` to `.env.local` for local development when needed.
 ```text
 DATABASE_URL=postgres://user:password@host:5432/market_themes
 ANTHROPIC_API_KEY=sk-ant-api03-example
-ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+ANTHROPIC_PROMPT_CACHING=true
 NARRATIVE_PROMOTION_VALIDATION_MODEL=claude-haiku-4-5-20251001
-CLAUDE_PROMPT_VERSION=market_signal_extraction_v1
+CLAUDE_PROMPT_VERSION=market_signal_extraction_v2
 CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
 CLAUDE_EXTRACTION_BATCH_SIZE=25
 CLAUDE_EXTRACTION_MAX_BATCHES=1
@@ -406,9 +415,10 @@ CLAUDE_ANALYSIS_MAX_ATTEMPTS=5
 CLAUDE_MAX_EVIDENCE_CHARS=800
 CLAUDE_EXCLUDED_SEC_CATEGORIES=capital_markets
 BACKFILL_WORKER_POLL_INTERVAL_MS=45000
-THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v2
+THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v3
 THEME_NORMALIZATION_BATCH_SIZE=25
 THEME_NORMALIZATION_MAX_BATCHES=100
+NARRATIVE_CLASSIFICATION_PROMPT_VERSION=narrative_classification_v6
 TREND_LOOKBACK_DAYS=120
 TREND_LOW_HISTORY_DAYS=14
 TREND_STORAGE_DAYS=45

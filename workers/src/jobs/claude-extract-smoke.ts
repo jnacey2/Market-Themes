@@ -10,7 +10,7 @@ export async function runClaudeExtractionSmoke() {
   );
   const result = await runClaudeExtractionBackfill({
     model:
-      process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+      process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001",
     promptVersion:
       process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion,
     batchSize: documentLimit,

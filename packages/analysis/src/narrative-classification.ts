@@ -10,8 +10,9 @@ import {
   narrativeClassificationOutputFormat,
   parseStructuredOutput
 } from "./structured-output";
+import { logAnthropicUsage } from "./anthropic-usage";
 
-export const narrativeClassificationPromptVersion = "narrative_classification_v5";
+export const narrativeClassificationPromptVersion = "narrative_classification_v6";
 
 type RawObservation = {
   narrativeDefinitionId?: string;
@@ -32,23 +33,32 @@ export async function classifyDocumentNarratives(
     apiKey?: string;
     model?: string;
     promptVersion?: string;
+    maxTokens?: number;
     maxDocumentChars?: number;
+    promptCaching?: boolean;
     signal?: AbortSignal;
   } = {}
 ): Promise<NarrativeObservationInput[]> {
-  const model = options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+  const model =
+    options.model ??
+    process.env.ANTHROPIC_MODEL ??
+    "claude-haiku-4-5-20251001";
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
     narrativeClassificationPromptVersion;
   const client = new Anthropic({ apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY });
   const sourceText = document.text.slice(0, options.maxDocumentChars ?? 120_000);
+  const promptCaching =
+    options.promptCaching ??
+    process.env.ANTHROPIC_PROMPT_CACHING !== "false";
   const message = await client.messages.create(
     {
       model,
-      max_tokens: 8_000,
+      max_tokens: options.maxTokens ?? 4_000,
       system: `Classify a source document against stable market-narrative propositions.
-Return only JSON with an "observations" array containing exactly one item per definition.
+Evaluate every definition, but return observations only for definitions that match.
+Omit non-matches; the caller records omitted definitions as matched=false.
 Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.
 Set matched=true only when the exact quoted evidence directly entails the proposition.
 Topic, sector, company, or keyword adjacency is not a match.
@@ -58,55 +68,29 @@ Do not infer AI-driven demand from data-center adjacency without explicit AI lan
 industry maturity, circular financing, or the word "compute" alone. Require a concrete
 demand, capacity, backlog, order, load, infrastructure-investment, or revenue-growth fact.
 Do not infer structural energy-demand growth from short-term weather-driven consumption.
-For directional propositions, contradictory evidence is matched=false, not supporting evidence.
+For directional propositions, contradictory evidence is not supporting evidence; omit the definition.
 The evidenceSnippet must independently support the match without facts added from elsewhere.
 Interpretation may explain the quote but must not introduce facts absent from it.
-For matched=false use matchScore 0-69 and empty evidenceSnippet.
-For matched=true use matchScore 70-100 and copy evidenceSnippet exactly from the source.
-When uncertain, return matched=false. Do not make trade recommendations.
+Every returned observation must use matched=true, matchScore 70-100, and an
+evidenceSnippet copied exactly from the source. Return an empty observations array
+when no definitions match. When uncertain, omit the definition. Do not make trade recommendations.
 Stance is risk, bullish, mixed, or neutral.`,
       output_config: { format: narrativeClassificationOutputFormat },
       messages: [
         {
           role: "user",
-          content: JSON.stringify({
-            document: {
-              id: document.id,
-              title: document.title,
-              publisher: document.publisher,
-              publishedAt: document.publishedAt,
-              text: sourceText
-            },
-            definitions: definitions.map((definition) => ({
-              id: definition.id,
-              name: definition.name,
-              proposition: definition.proposition,
-              inclusionGuidance: definition.inclusionGuidance,
-              exclusionGuidance: definition.exclusionGuidance,
-              positiveExamples: definition.positiveExamples,
-              negativeExamples: definition.negativeExamples
-            })),
-            outputShape: {
-              observations: [
-                {
-                  narrativeDefinitionId: "string",
-                  matched: true,
-                  matchScore: 0,
-                  stance: "risk | bullish | mixed | neutral",
-                  riskTone: 0,
-                  bullishTone: 0,
-                  evidenceSnippet: "exact source quote or empty",
-                  interpretation: "short sourced interpretation",
-                  affectedEntities: ["string"]
-                }
-              ]
-            }
-          })
+          content: buildNarrativeClassificationContent(
+            document,
+            definitions,
+            sourceText,
+            promptCaching
+          )
         }
       ]
     },
     options.signal ? { signal: options.signal } : undefined
   );
+  logAnthropicUsage("narrative-classification", model, message.usage);
   const parsed = parseStructuredOutput<{ observations: RawObservation[] }>(
     message,
     "Narrative classification"
@@ -127,6 +111,51 @@ Stance is risk, bullish, mixed, or neutral.`,
       promptVersion
     )
   );
+}
+
+export function buildNarrativeClassificationContent(
+  document: AnalysisDocument,
+  definitions: NarrativeDefinition[],
+  sourceText = document.text,
+  promptCaching = true
+) {
+  const referenceText = JSON.stringify({
+    definitions: definitions.map((definition) => ({
+      id: definition.id,
+      name: definition.name,
+      proposition: definition.proposition,
+      inclusionGuidance: definition.inclusionGuidance,
+      exclusionGuidance: definition.exclusionGuidance,
+      positiveExamples: definition.positiveExamples,
+      negativeExamples: definition.negativeExamples
+    }))
+  });
+  const referenceBlock = promptCaching
+    ? {
+        type: "text" as const,
+        text: referenceText,
+        cache_control: { type: "ephemeral" as const }
+      }
+    : {
+        type: "text" as const,
+        text: referenceText
+      };
+
+  return [
+    referenceBlock,
+    {
+      type: "text" as const,
+      text: JSON.stringify({
+        document: {
+          id: document.id,
+          title: document.title,
+          publisher: document.publisher,
+          publishedAt: document.publishedAt,
+          text: sourceText
+        }
+      })
+    }
+  ];
 }
 
 export function normalizeObservation(

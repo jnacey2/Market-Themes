@@ -40,7 +40,7 @@ export async function classifyNarrativeBatches(
     );
     if (!lock.rows[0]?.acquired) {
       const model =
-        process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+        process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
       const promptVersion =
         process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
         narrativeClassificationPromptVersion;
@@ -73,7 +73,7 @@ export async function classifyNarrativeBatches(
 }
 
 async function runClassification(options: ClassificationOptions) {
-  const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+  const model = process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
   const promptVersion =
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
     narrativeClassificationPromptVersion;

@@ -534,11 +534,11 @@ export async function autoApproveNarrativeObservations(
   const model =
     options.model ??
     process.env.ANTHROPIC_MODEL ??
-    "claude-sonnet-4-5-20250929";
+    "claude-haiku-4-5-20251001";
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-    "narrative_classification_v5";
+    "narrative_classification_v6";
   const minimumMatchScore =
     options.minimumMatchScore ??
     Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_SCORE ?? 90);
@@ -704,7 +704,7 @@ export async function getNarrativeReviewQueue(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeReviewQueue> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v5";
+    configuredPromptVersion ?? "narrative_classification_v6";
   if (!databaseUrl) {
     return {
       databaseConfigured: false,
@@ -824,7 +824,7 @@ export async function recomputeNarrativeTrends(
     const promptVersion =
       options.promptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v5";
+      "narrative_classification_v6";
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -983,7 +983,7 @@ export async function getNarrativeHomepageStatus(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeHomepageStatus> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v5";
+    configuredPromptVersion ?? "narrative_classification_v6";
   if (!databaseUrl) {
     return emptyNarrativeHomepageStatus(false);
   }
@@ -1220,7 +1220,7 @@ export async function getNarrativeBoardStatus(
   if (!databaseUrl) return { databaseConfigured: false, latestDate: null, narratives: [] };
   const definitions = await getActiveNarrativeDefinitions(databaseUrl);
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v5";
+    configuredPromptVersion ?? "narrative_classification_v6";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {

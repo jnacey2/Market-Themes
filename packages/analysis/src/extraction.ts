@@ -9,8 +9,9 @@ import {
   parseStructuredOutput,
   signalExtractionOutputFormat
 } from "./structured-output";
+import { logAnthropicUsage } from "./anthropic-usage";
 
-const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
+const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS = 8_000;
 const DEFAULT_MAX_DOCUMENT_CHARS = 120_000;
 const DEFAULT_SECTION_CHARS = 60_000;
@@ -87,6 +88,7 @@ async function extractSignalsFromText(
     },
     options.signal ? { signal: options.signal } : undefined
   );
+  logAnthropicUsage("signal-extraction", options.model, message.usage);
   const parsed = parseStructuredOutput(message, "Claude extraction");
   const maxEvidenceChars = options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS;
 

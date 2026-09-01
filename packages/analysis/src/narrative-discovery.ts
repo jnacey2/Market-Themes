@@ -15,6 +15,7 @@ import {
   narrativeDiscoveryOutputFormat,
   parseStructuredOutput
 } from "./structured-output";
+import { logAnthropicUsage } from "./anthropic-usage";
 
 export const narrativeCandidateAnalysisType = "narrative_candidate_discovery";
 
@@ -55,7 +56,7 @@ export async function discoverNarrativeCandidates(
   const model =
     options.model ??
     process.env.ANTHROPIC_MODEL ??
-    "claude-sonnet-4-5-20250929";
+    "claude-haiku-4-5-20251001";
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_DISCOVERY_PROMPT_VERSION ??
@@ -96,6 +97,7 @@ export async function discoverNarrativeCandidates(
     },
     options.signal ? { signal: options.signal } : undefined
   );
+  logAnthropicUsage("narrative-discovery", model, message.usage);
   return normalizeNarrativeDiscoveryResponse(
     parseStructuredOutput(message, "Narrative discovery"),
     document,

@@ -579,7 +579,7 @@ export async function createBackfillJob(
         options.staleAfterMinutes ?? 90,
         options.lookbackDays ?? null,
         options.excludedSecFilingCategories ?? ["capital_markets"],
-        options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+        options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001",
         options.promptVersion ?? process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1",
         JSON.stringify(options.metadata ?? {}),
         "Queued Claude extraction backfill."
@@ -1148,7 +1148,7 @@ export async function getAnalysisStatus(
 
   try {
     const analysisModel =
-      process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+      process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
     const analysisPromptVersion =
       process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1";
     const maxAnalysisAttempts = Number(

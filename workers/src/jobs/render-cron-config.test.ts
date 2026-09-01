@@ -16,6 +16,14 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
     /startCommand: npm run narratives:classify --workspace @market-themes\/workers/
   );
   assert.match(classification, /key: ANTHROPIC_API_KEY/);
+  assert.match(
+    classification,
+    /key: ANTHROPIC_MODEL\s+value: claude-haiku-4-5-20251001/
+  );
+  assert.match(
+    classification,
+    /key: ANTHROPIC_PROMPT_CACHING\s+value: "true"/
+  );
   assert.match(classification, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
 
   const discovery = serviceBlock("discover-narratives");
@@ -109,7 +117,7 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
   assert.match(review, /key: ANTHROPIC_API_KEY/);
   assert.match(
     review,
-    /key: ANTHROPIC_MODEL\s+value: claude-sonnet-4-5-20250929/
+    /key: ANTHROPIC_MODEL\s+value: claude-haiku-4-5-20251001/
   );
   assert.match(
     review,
@@ -118,6 +126,18 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
   assert.match(
     review,
     /key: NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION\s+value: candidate_promotion_validation_v1/
+  );
+});
+
+test("uses Haiku for every configured Anthropic workload", () => {
+  const configuredModels = [
+    ...renderYaml.matchAll(/key: ANTHROPIC_MODEL\s+value: (\S+)/g)
+  ].map((match) => match[1]);
+
+  assert.ok(configuredModels.length > 0);
+  assert.deepEqual(
+    new Set(configuredModels),
+    new Set(["claude-haiku-4-5-20251001"])
   );
 });
 
