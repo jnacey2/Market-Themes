@@ -344,6 +344,8 @@ The first live Claude integration extracts market signals from SEC/FMP documents
 - Uses full-document analysis where practical.
 - Splits oversized documents into sections and merges/dedupes the outputs.
 - Defaults to Sonnet via `ANTHROPIC_MODEL`.
+- Uses Haiku 4.5 by default for the bounded promotion-quality pass via
+  `NARRATIVE_PROMOTION_VALIDATION_MODEL`, without changing classifier identity.
 - Tracks idempotency by document, model, and `CLAUDE_PROMPT_VERSION`.
 - Stores exact evidence snippets capped by `CLAUDE_MAX_EVIDENCE_CHARS`.
 - Stores parsed structured fields only, not raw Claude responses by default.
@@ -389,6 +391,7 @@ Copy `.env.example` to `.env.local` for local development when needed.
 DATABASE_URL=postgres://user:password@host:5432/market_themes
 ANTHROPIC_API_KEY=sk-ant-api03-example
 ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+NARRATIVE_PROMOTION_VALIDATION_MODEL=claude-haiku-4-5-20251001
 CLAUDE_PROMPT_VERSION=market_signal_extraction_v1
 CLAUDE_EXTRACTION_DOCUMENT_LIMIT=20
 CLAUDE_EXTRACTION_BATCH_SIZE=25

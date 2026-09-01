@@ -46,14 +46,14 @@ export type CandidatePromotionValidationOptions = {
   signal?: AbortSignal;
 };
 
+export const DEFAULT_PROMOTION_VALIDATION_MODEL =
+  "claude-haiku-4-5-20251001";
+
 export async function validateCandidateForPromotion(
   input: CandidatePromotionValidationInput,
   options: CandidatePromotionValidationOptions = {}
 ): Promise<CandidatePromotionValidation> {
-  const model =
-    options.model ??
-    process.env.ANTHROPIC_MODEL ??
-    "claude-sonnet-4-5-20250929";
+  const model = resolveCandidatePromotionValidationModel(options.model);
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION ??
@@ -121,6 +121,18 @@ export async function validateCandidateForPromotion(
     prepared,
     model,
     promptVersion
+  );
+}
+
+export function resolveCandidatePromotionValidationModel(
+  explicitModel?: string,
+  env: Record<string, string | undefined> = process.env
+) {
+  return (
+    explicitModel?.trim() ||
+    env.NARRATIVE_PROMOTION_VALIDATION_MODEL?.trim() ||
+    env.ANTHROPIC_MODEL?.trim() ||
+    DEFAULT_PROMOTION_VALIDATION_MODEL
   );
 }
 
