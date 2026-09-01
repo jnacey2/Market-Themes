@@ -473,8 +473,8 @@ export async function retractNarrativeDefinition(
          set status = 'inactive',
              metadata = metadata || jsonb_build_object(
                'retraction', jsonb_build_object(
-                 'actorType', $2,
-                 'reason', $3,
+                 'actorType', $2::text,
+                 'reason', $3::text,
                  'at', now()
                )
              ),
@@ -497,8 +497,8 @@ export async function retractNarrativeDefinition(
         `update narrative_candidates
          set metadata = metadata || jsonb_build_object(
                'retraction', jsonb_build_object(
-                 'actorType', $2,
-                 'reason', $3,
+                 'actorType', $2::text,
+                 'reason', $3::text,
                  'at', now()
                )
              ),
