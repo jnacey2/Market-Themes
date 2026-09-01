@@ -654,16 +654,16 @@ export async function requestBackfillStop(
 }
 
 export async function getBackfillControlStatus(
-  databaseUrl = process.env.DATABASE_URL
+  databaseUrl = process.env.DATABASE_URL,
+  options: { onError?: (error: unknown) => void } = {}
 ): Promise<BackfillControlStatus> {
   if (!databaseUrl) {
     return emptyBackfillControlStatus();
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     await ensureBackfillJobsSchema(client);
 
     const active = await client.query<BackfillJobRow>(
@@ -684,10 +684,16 @@ export async function getBackfillControlStatus(
       activeJob: active.rows[0] ? rowToBackfillJob(active.rows[0]) : null,
       recentJobs: recent.rows.map(rowToBackfillJob)
     };
-  } catch {
+  } catch (error) {
+    options.onError?.(error);
+    console.warn(
+      `[db] backfill control status unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
     return emptyBackfillControlStatus();
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -1106,18 +1112,72 @@ export async function getAnalysisStatus(
     return emptyAnalysisStatus(false);
   }
 
+  const status = emptyAnalysisStatus(true);
+  const unavailableSections: AnalysisStatus["unavailableSections"] = [];
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (error) {
+    logAnalysisStatusError("connection", error);
+    await closeDatabaseClient(client);
+    return {
+      ...status,
+      degraded: true,
+      unavailableSections: [
+        "summary",
+        "coverage",
+        "backfill",
+        "recentSignals",
+        "recentRuns"
+      ]
+    };
+  }
+
+  const loadSection = async <T>(
+    section: AnalysisStatus["unavailableSections"][number],
+    operation: () => Promise<T>
+  ): Promise<T | null> => {
+    try {
+      return await operation();
+    } catch (error) {
+      unavailableSections.push(section);
+      logAnalysisStatusError(section, error);
+      return null;
+    }
+  };
 
   try {
-    const analysisModel = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
-    const analysisPromptVersion = process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1";
-    const maxAnalysisAttempts = Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5);
-    const totals = await client.query<{
+    const analysisModel =
+      process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+    const analysisPromptVersion =
+      process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1";
+    const maxAnalysisAttempts = Number(
+      process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5
+    );
+    const summary = await loadSection("summary", () =>
+      client.query<{
       signal_count: string;
       theme_count: string;
       completed_runs: string;
       failed_runs: string;
+      }>(
+        `select
+           (select count(*)::text from signals) as signal_count,
+           (select count(*)::text from themes) as theme_count,
+           count(*) filter (where status = 'completed')::text as completed_runs,
+           count(*) filter (where status = 'failed')::text as failed_runs
+         from document_analysis_runs`
+      )
+    );
+    if (summary?.rows[0]) {
+      status.signalCount = Number(summary.rows[0].signal_count);
+      status.themeCount = Number(summary.rows[0].theme_count);
+      status.completedRuns = Number(summary.rows[0].completed_runs);
+      status.failedRuns = Number(summary.rows[0].failed_runs);
+    }
+
+    const coverage = await loadSection("coverage", () =>
+      client.query<{
       ingested_document_count: string;
       readable_document_count: string;
       missing_text_document_count: string;
@@ -1126,128 +1186,153 @@ export async function getAnalysisStatus(
       unread_document_count: string;
       running_document_count: string;
       failed_document_count: string;
-    }>(
-      `with in_scope_documents as (
-        select
-          d.id,
-          exists (
-            select 1
-            from document_texts dt
-            where dt.document_id = d.id
-          ) as has_full_text
-        from documents d
-        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-          and not (
-            d.source_id = 'sec-filings'
-            and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
-          )
+      }>(
+        `with in_scope_documents as (
+           select
+             d.id,
+             exists (
+               select 1
+               from document_texts dt
+               where dt.document_id = d.id
+             ) as has_full_text
+           from documents d
+           where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+             and not (
+               d.source_id = 'sec-filings'
+               and coalesce(
+                 d.metadata->>'filingCategory',
+                 'uncategorized'
+               ) = 'capital_markets'
+             )
+         )
+         select
+           count(*)::text as ingested_document_count,
+           count(*) filter (where isd.has_full_text)::text
+             as readable_document_count,
+           count(*) filter (where not isd.has_full_text)::text
+             as missing_text_document_count,
+           count(*) filter (where isd.has_full_text)::text
+             as eligible_document_count,
+           count(*) filter (
+             where isd.has_full_text and ar.status = 'completed'
+           )::text as completed_document_count,
+           count(*) filter (
+             where isd.has_full_text
+               and coalesce(ar.status, '') not in ('completed', 'running')
+               and coalesce(ar.attempt_count, 0) < $3
+           )::text as unread_document_count,
+           count(*) filter (
+             where isd.has_full_text and ar.status = 'running'
+           )::text as running_document_count,
+           count(*) filter (
+             where isd.has_full_text and ar.status = 'failed'
+           )::text as failed_document_count
+         from in_scope_documents isd
+         left join document_analysis_runs ar
+           on ar.document_id = isd.id
+          and ar.analysis_type = 'market_signal_extraction'
+          and ar.model = $1
+          and ar.prompt_version = $2`,
+        [analysisModel, analysisPromptVersion, maxAnalysisAttempts]
       )
-      select
-        (select count(*)::text from signals) as signal_count,
-        (select count(*)::text from themes) as theme_count,
-        (select count(*)::text from document_analysis_runs where status = 'completed') as completed_runs,
-        (select count(*)::text from document_analysis_runs where status = 'failed') as failed_runs,
-        count(*)::text as ingested_document_count,
-        count(*) filter (where isd.has_full_text)::text as readable_document_count,
-        count(*) filter (where not isd.has_full_text)::text as missing_text_document_count,
-        count(*) filter (where isd.has_full_text)::text as eligible_document_count,
-        count(*) filter (where isd.has_full_text and ar.status = 'completed')::text as completed_document_count,
-        count(*) filter (
-          where isd.has_full_text
-            and coalesce(ar.status, '') not in ('completed', 'running')
-            and coalesce(ar.attempt_count, 0) < $3
-        )::text as unread_document_count,
-        count(*) filter (where isd.has_full_text and ar.status = 'running')::text as running_document_count,
-        count(*) filter (where isd.has_full_text and ar.status = 'failed')::text as failed_document_count
-       from in_scope_documents isd
-       left join document_analysis_runs ar
-        on ar.document_id = isd.id
-        and ar.analysis_type = 'market_signal_extraction'
-        and ar.model = $1
-        and ar.prompt_version = $2`,
-      [analysisModel, analysisPromptVersion, maxAnalysisAttempts]
     );
+    if (coverage?.rows[0]) {
+      status.ingestedDocumentCount = Number(
+        coverage.rows[0].ingested_document_count
+      );
+      status.readableDocumentCount = Number(
+        coverage.rows[0].readable_document_count
+      );
+      status.missingTextDocumentCount = Number(
+        coverage.rows[0].missing_text_document_count
+      );
+      status.eligibleDocumentCount = Number(
+        coverage.rows[0].eligible_document_count
+      );
+      status.completedDocumentCount = Number(
+        coverage.rows[0].completed_document_count
+      );
+      status.unreadDocumentCount = Number(
+        coverage.rows[0].unread_document_count
+      );
+      status.runningDocumentCount = Number(
+        coverage.rows[0].running_document_count
+      );
+      status.failedDocumentCount = Number(
+        coverage.rows[0].failed_document_count
+      );
+    }
 
-    const recentSignals = await client.query<AnalysisSignalSummary>(
-      `select
-        s.id,
-        s.theme_id as "themeId",
-        t.label as "themeLabel",
-        s.raw_theme_label as "rawThemeLabel",
-        s.canonical_theme_label as "canonicalThemeLabel",
-        s.stance,
-        s.risk_tone::float as "riskTone",
-        s.bullish_tone::float as "bullishTone",
-        s.confidence::float as confidence,
-        s.evidence_snippet as "evidenceSnippet",
-        s.interpretation,
-        s.affected_entities as "affectedEntities",
-        s.section_label as "sectionLabel",
-        s.speaker,
-        s.prompt_version as "promptVersion",
-        s.model,
-        s.extracted_at::text as "extractedAt",
-        d.id as "documentId",
-        d.title as "documentTitle",
-        d.publisher,
-        d.url,
-        d.published_at::text as "publishedAt",
-        d.source_class as "sourceClass"
-       from signals s
-       join documents d on d.id = s.document_id
-       join themes t on t.id = s.theme_id
-       order by s.extracted_at desc
-       limit 25`
+    const recentSignals = await loadSection("recentSignals", () =>
+      client.query<AnalysisSignalSummary>(
+        `select
+           s.id,
+           s.theme_id as "themeId",
+           t.label as "themeLabel",
+           s.raw_theme_label as "rawThemeLabel",
+           s.canonical_theme_label as "canonicalThemeLabel",
+           s.stance,
+           s.risk_tone::float as "riskTone",
+           s.bullish_tone::float as "bullishTone",
+           s.confidence::float as confidence,
+           s.evidence_snippet as "evidenceSnippet",
+           s.interpretation,
+           s.affected_entities as "affectedEntities",
+           s.section_label as "sectionLabel",
+           s.speaker,
+           s.prompt_version as "promptVersion",
+           s.model,
+           s.extracted_at::text as "extractedAt",
+           d.id as "documentId",
+           d.title as "documentTitle",
+           d.publisher,
+           d.url,
+           d.published_at::text as "publishedAt",
+           d.source_class as "sourceClass"
+         from signals s
+         join documents d on d.id = s.document_id
+         join themes t on t.id = s.theme_id
+         order by s.extracted_at desc, s.id
+         limit 25`
+      )
     );
+    status.recentSignals = recentSignals?.rows ?? [];
 
-    const recentRuns = await client.query<AnalysisRunSummary>(
-      `select
-        ar.id,
-        ar.document_id as "documentId",
-        d.title as "documentTitle",
-        d.source_class as "sourceClass",
-        ar.model,
-        ar.prompt_version as "promptVersion",
-        ar.status,
-        ar.attempt_count as "attemptCount",
-        ar.error_message as "errorMessage",
-        ar.started_at::text as "startedAt",
-        ar.completed_at::text as "completedAt",
-        ar.updated_at::text as "updatedAt"
-       from document_analysis_runs ar
-       join documents d on d.id = ar.document_id
-       order by ar.updated_at desc
-       limit 25`
+    const recentRuns = await loadSection("recentRuns", () =>
+      client.query<AnalysisRunSummary>(
+        `select
+           ar.id,
+           ar.document_id as "documentId",
+           d.title as "documentTitle",
+           d.source_class as "sourceClass",
+           ar.model,
+           ar.prompt_version as "promptVersion",
+           ar.status,
+           ar.attempt_count as "attemptCount",
+           ar.error_message as "errorMessage",
+           ar.started_at::text as "startedAt",
+           ar.completed_at::text as "completedAt",
+           ar.updated_at::text as "updatedAt"
+         from document_analysis_runs ar
+         join documents d on d.id = ar.document_id
+         order by ar.updated_at desc, ar.id
+         limit 25`
+      )
     );
-
-    const row = totals.rows[0];
-
-    return {
-      databaseConfigured: true,
-      signalCount: Number(row?.signal_count ?? 0),
-      themeCount: Number(row?.theme_count ?? 0),
-      completedRuns: Number(row?.completed_runs ?? 0),
-      failedRuns: Number(row?.failed_runs ?? 0),
-      ingestedDocumentCount: Number(row?.ingested_document_count ?? 0),
-      readableDocumentCount: Number(row?.readable_document_count ?? 0),
-      missingTextDocumentCount: Number(row?.missing_text_document_count ?? 0),
-      eligibleDocumentCount: Number(row?.eligible_document_count ?? 0),
-      completedDocumentCount: Number(row?.completed_document_count ?? 0),
-      unreadDocumentCount: Number(row?.unread_document_count ?? 0),
-      runningDocumentCount: Number(row?.running_document_count ?? 0),
-      failedDocumentCount: Number(row?.failed_document_count ?? 0),
-      backfillControl: await getBackfillControlStatus(databaseUrl),
-      recentSignals: recentSignals.rows,
-      recentRuns: recentRuns.rows.map((run) => ({
+    status.recentRuns = (recentRuns?.rows ?? []).map((run) => ({
         ...run,
         status: run.status as AnalysisRunStatus
-      }))
-    };
-  } catch {
-    return emptyAnalysisStatus(true);
+    }));
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
+
+  status.backfillControl = await getBackfillControlStatus(databaseUrl, {
+    onError: () => unavailableSections.push("backfill")
+  });
+  status.degraded = unavailableSections.length > 0;
+  status.unavailableSections = unavailableSections;
+  return status;
 }
 
 export async function selectThemeGroupsForNormalization(
@@ -3212,9 +3297,19 @@ function normalizeText(text: string) {
   return text.replace(/\s+\n/g, "\n").replace(/[ \t]+/g, " ").trim();
 }
 
+function logAnalysisStatusError(section: string, error: unknown) {
+  console.warn(
+    `[db] analysis status ${section} unavailable: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
+
 function emptyAnalysisStatus(databaseConfigured: boolean): AnalysisStatus {
   return {
     databaseConfigured,
+    degraded: false,
+    unavailableSections: [],
     signalCount: 0,
     themeCount: 0,
     completedRuns: 0,

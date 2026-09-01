@@ -355,7 +355,9 @@ Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
 runs before using them in production storyboards. The same page can queue and
 stop bounded Claude extraction backfill jobs; the web app writes job requests to
-Postgres and the worker executes them cooperatively in the background.
+Postgres and the worker executes them cooperatively in the background. Status
+sections fail independently: a busy database is shown as partial data with
+unavailable values, never as false zero counts.
 
 Trend aggregation turns stored Claude signals into deterministic `theme_trends`
 rows. It computes 7-day and 30-day rolling windows from source `published_at`

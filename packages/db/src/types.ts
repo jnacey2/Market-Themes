@@ -111,6 +111,10 @@ export type AnalysisSignalSummary = {
 
 export type AnalysisStatus = {
   databaseConfigured: boolean;
+  degraded: boolean;
+  unavailableSections: Array<
+    "summary" | "coverage" | "backfill" | "recentSignals" | "recentRuns"
+  >;
   signalCount: number;
   themeCount: number;
   completedRuns: number;
