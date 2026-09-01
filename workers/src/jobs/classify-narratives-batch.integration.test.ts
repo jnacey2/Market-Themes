@@ -83,7 +83,7 @@ test(
           type: "message",
           role: "assistant",
           model,
-          content: [{ type: "text", text: '{"observations":[]"}'],
+          content: [{ type: "text", text: '{"observations":[]}' }],
           stop_reason: "end_turn",
           stop_sequence: null,
           usage: {
