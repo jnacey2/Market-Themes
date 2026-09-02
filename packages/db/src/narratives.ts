@@ -98,9 +98,12 @@ export async function selectDocumentsForNarrativeClassification(
     promptVersion: string;
     limit: number;
     excludedDocumentIds?: string[];
+    /** Only documents published within this many days are (re)classified. */
+    lookbackDays?: number;
   },
   databaseUrl = process.env.DATABASE_URL
 ): Promise<AnalysisDocument[]> {
+  const lookbackDays = resolveClassificationLookbackDays(options.lookbackDays);
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -129,6 +132,7 @@ export async function selectDocumentsForNarrativeClassification(
          from documents d
          join document_texts dt on dt.document_id = d.id
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+           and d.published_at >= now() - ($5::int * interval '1 day')
            and not (d.id = any($4::text[]))
            and not exists (
              select 1
@@ -168,7 +172,8 @@ export async function selectDocumentsForNarrativeClassification(
         options.model,
         options.promptVersion,
         options.limit,
-        options.excludedDocumentIds ?? []
+        options.excludedDocumentIds ?? [],
+        lookbackDays
       ]
     );
 
@@ -191,10 +196,27 @@ export async function selectDocumentsForNarrativeClassification(
   }
 }
 
+export const DEFAULT_NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS = 60;
+
+/**
+ * Bounds how far back the classifier revisits documents when a definition is added or a
+ * prompt version changes. Without a bound every new definition re-reads the whole corpus,
+ * which is expensive and adds little to trend detection beyond roughly two months.
+ */
+export function resolveClassificationLookbackDays(
+  value: number | string | undefined = process.env.NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS
+) {
+  const parsed = typeof value === "string" ? Number.parseInt(value, 10) : value;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEFAULT_NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS;
+}
+
 export async function countNarrativeClassificationBacklog(
-  options: { model: string; promptVersion: string },
+  options: { model: string; promptVersion: string; lookbackDays?: number },
   databaseUrl = process.env.DATABASE_URL
 ): Promise<NarrativeBacklogSummary> {
+  const lookbackDays = resolveClassificationLookbackDays(options.lookbackDays);
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -203,6 +225,7 @@ export async function countNarrativeClassificationBacklog(
        from documents d
        join document_texts dt on dt.document_id = d.id
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+         and d.published_at >= now() - ($3::int * interval '1 day')
          and not exists (
            select 1
            from anthropic_message_batch_items mbi
@@ -233,7 +256,7 @@ export async function countNarrativeClassificationBacklog(
          )
        group by d.source_class
        order by d.source_class`,
-      [options.model, options.promptVersion]
+      [options.model, options.promptVersion, lookbackDays]
     );
     const bySourceClass = result.rows.map((row) => ({
       sourceClass: row.source_class,

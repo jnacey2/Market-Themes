@@ -180,7 +180,8 @@ test(
     const seedReclassification = await selectDocumentsForNarrativeClassification({
       model,
       promptVersion: classificationPromptVersion,
-      limit: 100
+      limit: 100,
+      lookbackDays: 365
     });
     assert(
       seedReclassification.some((item) => item.id === firstDocumentId)

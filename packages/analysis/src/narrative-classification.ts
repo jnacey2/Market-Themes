@@ -190,7 +190,7 @@ export function buildNarrativeClassificationContent(
       exclusionGuidance: definition.exclusionGuidance,
       positiveExamples: definition.positiveExamples,
       negativeExamples: definition.negativeExamples,
-      evidenceContract: definition.metadata?.evidenceContract ?? null
+      evidenceContract: modelFacingEvidenceContract(definition)
     }))
   });
   const referenceBlock = promptCaching
@@ -280,12 +280,103 @@ export function normalizeObservation(
   };
 }
 
+export type EvidenceGuard = {
+  /** Case-insensitive regular expressions; every pattern must match the evidence. */
+  requiredPatterns: string[];
+  /** Case-insensitive regular expressions; no pattern may match the evidence. */
+  forbiddenPatterns: string[];
+};
+
+/**
+ * Deterministic guards for the seeded propositions. These are the source of truth used
+ * to seed `metadata.evidenceContract.requiredPatterns` / `forbiddenPatterns` (migration
+ * 021); at runtime the guard is read from each definition's metadata so it can be
+ * versioned with the definition instead of hard-coded per slug.
+ */
+export const SEEDED_EVIDENCE_GUARDS: Record<string, EvidenceGuard> = {
+  "pricing-power": {
+    requiredPatterns: [
+      "(price|pricing|average ticket|mix)",
+      "(demand|volume|transactions?|units?|traffic|elasticity)"
+    ],
+    forbiddenPatterns: [
+      "(declin|decreas|fell|falling|lower|weak).{0,45}(volume|transactions?|units?|traffic)"
+    ]
+  },
+  "deal-activity-recovery": {
+    requiredPatterns: [
+      "(pipeline|volumes?|activity|market|advisory|underwriting|issuance|ipos?|m&a)",
+      "(recover|rebound|reopen|improv|increas|accelerat|growth|stronger|higher)"
+    ],
+    forbiddenPatterns: []
+  },
+  "ai-infrastructure-demand": {
+    requiredPatterns: [
+      "(artificial intelligence|\\bai\\b)",
+      "\\b(demand|capacity|backlog|orders|load)\\b|infrastructure.{0,35}(invest|spend|build|deploy|expand)|(revenue|sales).{0,25}(grow|increas|up\\b)|(grow|increas|up\\b).{0,25}(revenue|sales)"
+    ],
+    forbiddenPatterns: []
+  },
+  "ai-capex-discipline": {
+    requiredPatterns: [
+      "(artificial intelligence|\\bai\\b|data cent(er|re))",
+      "(return|roi|utilization|discipline|restrain|moderat|efficien|budget)"
+    ],
+    forbiddenPatterns: []
+  },
+  "credit-quality-deterioration": {
+    requiredPatterns: [
+      "(delinquen|default|charge.?off|loss provision|nonperform|credit quality)",
+      "(deteriorat|worsen|increas|higher|rise|rising|stress)"
+    ],
+    forbiddenPatterns: []
+  },
+  "refinancing-risk": {
+    requiredPatterns: [
+      "(borrower|debt|maturit|refinanc)",
+      "(higher|cost|difficult|restrict|wall|pressure|risk)"
+    ],
+    forbiddenPatterns: ["(reinvestment risk|callable note)"]
+  },
+  "margin-pressure": {
+    requiredPatterns: [
+      "(gross margin|operating margin|profit margin)",
+      "(compress|pressure|declin|decreas|lower|contract)"
+    ],
+    forbiddenPatterns: []
+  },
+  "consumer-trade-down": {
+    requiredPatterns: [
+      "(consumer|customer|shopper|spending|purchase)",
+      "(trade.?down|value|afford|lower.?price|smaller|cautious|budget|selective)"
+    ],
+    forbiddenPatterns: []
+  },
+  "supply-chain-normalization": {
+    requiredPatterns: [
+      "(supply|inventory|lead time|freight|logistics|availability)",
+      "(normaliz|easing|shorter|improv|recover|rebalanc|declin)"
+    ],
+    forbiddenPatterns: ["(disruption|shortage|constraint|ransomware)"]
+  },
+  "energy-demand-growth": {
+    requiredPatterns: [
+      "(demand|load|consumption)",
+      "(accelerat|expand|growth|increas|higher|record|rising)",
+      "(economic|industrial|electrif|electric vehicle|data cent(er|re)|artificial intelligence|\\bai\\b)"
+    ],
+    forbiddenPatterns: [
+      "(weather|temperature|summer|winter|heat wave|cold snap|cooling degree|heating degree)"
+    ]
+  }
+};
+
 export function passesNarrativeEvidenceContract(
   definition: NarrativeDefinition,
   evidence: string
 ) {
-  if (!passesDefinitionGuard(definition.slug, evidence)) return false;
   const contract = definition.metadata?.evidenceContract;
+  if (!passesDefinitionGuard(readEvidenceGuard(contract), evidence)) return false;
   if (!isObject(contract)) return true;
   const groups = contract.requiredTermGroups;
   if (!Array.isArray(groups)) return true;
@@ -301,80 +392,56 @@ export function passesNarrativeEvidenceContract(
   );
 }
 
-export function passesDefinitionGuard(slug: string, evidence: string) {
-  const text = evidence.toLowerCase();
+export function readEvidenceGuard(contract: unknown): EvidenceGuard | null {
+  if (!isObject(contract)) return null;
+  const requiredPatterns = validateStringArray(contract.requiredPatterns);
+  const forbiddenPatterns = validateStringArray(contract.forbiddenPatterns);
+  if (requiredPatterns.length === 0 && forbiddenPatterns.length === 0) return null;
+  return { requiredPatterns, forbiddenPatterns };
+}
 
-  switch (slug) {
-    case "pricing-power":
-      return (
-        /(price|pricing|average ticket|mix)/.test(text) &&
-        /(demand|volume|transactions?|units?|traffic|elasticity)/.test(text) &&
-        !/(declin|decreas|fell|falling|lower|weak).{0,45}(volume|transactions?|units?|traffic)/.test(
-          text
-        )
-      );
-    case "deal-activity-recovery":
-      return (
-        /(pipeline|volumes?|activity|market|advisory|underwriting|issuance|ipos?|m&a)/.test(
-          text
-        ) && /(recover|rebound|reopen|improv|increas|accelerat|growth|stronger|higher)/.test(text)
-      );
-    case "ai-infrastructure-demand":
-      return (
-        /(artificial intelligence|\bai\b)/.test(text) &&
-        (
-          /\b(demand|capacity|backlog|orders|load)\b/.test(text) ||
-          /infrastructure.{0,35}(invest|spend|build|deploy|expand)/.test(text) ||
-          /(revenue|sales).{0,25}(grow|increas|up\b)/.test(text) ||
-          /(grow|increas|up\b).{0,25}(revenue|sales)/.test(text)
-        )
-      );
-    case "ai-capex-discipline":
-      return (
-        /(artificial intelligence|\bai\b|data cent(er|re))/.test(text) &&
-        /(return|roi|utilization|discipline|restrain|moderat|efficien|budget)/.test(text)
-      );
-    case "credit-quality-deterioration":
-      return (
-        /(delinquen|default|charge.?off|loss provision|nonperform|credit quality)/.test(text) &&
-        /(deteriorat|worsen|increas|higher|rise|rising|stress)/.test(text)
-      );
-    case "refinancing-risk":
-      return (
-        /(borrower|debt|maturit|refinanc)/.test(text) &&
-        /(higher|cost|difficult|restrict|wall|pressure|risk)/.test(text) &&
-        !/(reinvestment risk|callable note)/.test(text)
-      );
-    case "margin-pressure":
-      return (
-        /(gross margin|operating margin|profit margin)/.test(text) &&
-        /(compress|pressure|declin|decreas|lower|contract)/.test(text)
-      );
-    case "consumer-trade-down":
-      return (
-        /(consumer|customer|shopper|spending|purchase)/.test(text) &&
-        /(trade.?down|value|afford|lower.?price|smaller|cautious|budget|selective)/.test(text)
-      );
-    case "supply-chain-normalization":
-      return (
-        /(supply|inventory|lead time|freight|logistics|availability)/.test(text) &&
-        /(normaliz|easing|shorter|improv|recover|rebalanc|declin)/.test(text) &&
-        !/(disruption|shortage|constraint|ransomware)/.test(text)
-      );
-    case "energy-demand-growth":
-      return (
-        /(demand|load|consumption)/.test(text) &&
-        /(accelerat|expand|growth|increas|higher|record|rising)/.test(text) &&
-        /(economic|industrial|electrif|electric vehicle|data cent(er|re)|artificial intelligence|\bai\b)/.test(
-          text
-        ) &&
-        !/(weather|temperature|summer|winter|heat wave|cold snap|cooling degree|heating degree)/.test(
-          text
-        )
-      );
-    default:
-      return true;
+const patternCache = new Map<string, RegExp | null>();
+
+function compileGuardPattern(source: string) {
+  const cached = patternCache.get(source);
+  if (cached !== undefined) return cached;
+  let compiled: RegExp | null;
+  try {
+    compiled = new RegExp(source, "i");
+  } catch {
+    compiled = null;
   }
+  patternCache.set(source, compiled);
+  return compiled;
+}
+
+/**
+ * Applies a definition's deterministic evidence guard. Invalid patterns are ignored rather
+ * than failing classification, so a typo in metadata degrades to "no guard" for that pattern.
+ */
+export function passesDefinitionGuard(
+  guard: EvidenceGuard | null | undefined,
+  evidence: string
+) {
+  if (!guard) return true;
+  const required = guard.requiredPatterns
+    .map(compileGuardPattern)
+    .filter((pattern): pattern is RegExp => pattern !== null);
+  const forbidden = guard.forbiddenPatterns
+    .map(compileGuardPattern)
+    .filter((pattern): pattern is RegExp => pattern !== null);
+  return (
+    required.every((pattern) => pattern.test(evidence)) &&
+    !forbidden.some((pattern) => pattern.test(evidence))
+  );
+}
+
+/** The model sees term groups only; regex guards are enforced after the response. */
+function modelFacingEvidenceContract(definition: NarrativeDefinition) {
+  const contract = definition.metadata?.evidenceContract;
+  if (!isObject(contract)) return null;
+  const { requiredPatterns: _required, forbiddenPatterns: _forbidden, ...rest } = contract;
+  return Object.keys(rest).length === 0 ? null : rest;
 }
 
 function clamp(value: unknown, minimum: number, maximum: number) {

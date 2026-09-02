@@ -68,7 +68,7 @@ services:
       - key: NARRATIVE_TREND_LOOKBACK_DAYS
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
-        value: "30"
+        value: "14"
       - key: APP_BASE_URL
         sync: false
       - key: SESSION_SECRET
@@ -586,7 +586,7 @@ services:
       - key: NARRATIVE_TREND_LOOKBACK_DAYS
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
-        value: "30"
+        value: "14"
 
   - type: cron
     name: poll-fmp-news

@@ -4,7 +4,8 @@ import type {
 } from "@market-themes/db";
 import {
   buildNarrativeClassificationRequest,
-  narrativeClassificationPromptVersion
+  narrativeClassificationPromptVersion,
+  SEEDED_EVIDENCE_GUARDS
 } from "./narrative-classification";
 import type { AnthropicBatchRequest } from "./anthropic-batches";
 
@@ -34,7 +35,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude price increases accompanied by materially weaker volume or without demand evidence.",
     positiveExamples: ["Prices rose while unit demand remained stable."],
     negativeExamples: ["Prices rose and customer traffic declined."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["pricing-power"] }
   },
   {
     id: "narrative:def:ai-infrastructure-demand:eval",
@@ -50,7 +52,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude generic data-center growth, industry maturity, or AI enthusiasm without concrete demand.",
     positiveExamples: ["AI accelerator orders doubled and backlog reached a record."],
     negativeExamples: ["The compute industry is maturing."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"] }
   },
   {
     id: "narrative:def:consumer-trade-down:eval",
@@ -66,7 +69,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude ordinary promotions and premium weakness without evidence of budget-driven substitution.",
     positiveExamples: ["Budget-conscious shoppers moved to private-label products."],
     negativeExamples: ["A seasonal promotion increased store traffic."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["consumer-trade-down"] }
   },
   {
     id: "narrative:def:credit-quality-deterioration:eval",
@@ -82,7 +86,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude hypothetical risks and reserve growth caused only by balance-sheet growth.",
     positiveExamples: ["Delinquencies and net charge-offs increased from last quarter."],
     negativeExamples: ["Loan balances increased while loss rates were stable."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["credit-quality-deterioration"] }
   },
   {
     id: "narrative:def:energy-shock-inflation-rates:eval",
