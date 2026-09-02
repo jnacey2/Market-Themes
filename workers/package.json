@@ -24,6 +24,8 @@
     "narratives:bursts": "node --import tsx src/jobs/detect-attention-bursts.ts",
     "anthropic:batches:poll": "node --import tsx src/jobs/poll-anthropic-batches.ts",
     "eval:narratives": "node --import tsx src/jobs/evaluate-narrative-classifier.ts",
+    "eval:export": "node --import tsx src/jobs/export-eval-cases.ts",
+    "narratives:backtest": "node --import tsx src/jobs/backtest-narrative-emergence.ts",
     "narratives:auto-review": "node --import tsx src/jobs/auto-review-narratives.ts",
     "repair:document-texts": "node --import tsx src/jobs/repair-document-texts.ts",
     "themes:normalize": "node --import tsx src/jobs/normalize-themes.ts",
