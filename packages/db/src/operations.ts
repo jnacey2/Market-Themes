@@ -215,7 +215,7 @@ export async function getOperationsStatus(
     const classificationPromptVersion =
       overrides.classificationPromptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v6";
+      "narrative_classification_v7";
     const discoveryPromptVersion =
       overrides.discoveryPromptVersion ??
       process.env.NARRATIVE_DISCOVERY_PROMPT_VERSION ?? "narrative_discovery_v1";
@@ -362,7 +362,7 @@ export async function getOperationsStatus(
            and exists (
              select 1
              from narrative_definitions nd
-             where nd.status = 'active'
+             where nd.status in ('active', 'probationary')
                and not exists (
                  select 1
                  from narrative_observations no
@@ -370,6 +370,7 @@ export async function getOperationsStatus(
                    and no.document_id = d.id
                    and no.model = $1
                    and no.prompt_version = $3
+                   and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
                )
            )
          group by d.source_id

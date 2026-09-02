@@ -29,6 +29,7 @@
     "narratives:discover": "npm run narratives:discover --workspace @market-themes/workers",
     "narratives:discover:batch": "npm run narratives:discover:batch --workspace @market-themes/workers",
     "anthropic:batches:poll": "npm run anthropic:batches:poll --workspace @market-themes/workers",
+    "eval:narratives": "npm run eval:narratives --workspace @market-themes/workers --",
     "narratives:auto-review": "npm run narratives:auto-review --workspace @market-themes/workers",
     "narrative-trends:recompute": "npm run narrative-trends:recompute --workspace @market-themes/workers",
     "premium:scrape": "npm run premium:scrape --workspace @market-themes/workers",

@@ -50,7 +50,9 @@ export default async function TrendsPage() {
           >
             <div className="current-name">
               <span className="label">
-                {narrative.category} · {narrative.kind ?? "structural"}
+                {narrative.parentName
+                  ? `${narrative.parentName} · ${narrative.dimension ?? "dimension"}`
+                  : `${narrative.category} · ${narrative.kind ?? "structural"}`}
               </span>
               <strong>{narrative.name}</strong>
               <small>{narrative.proposition}</small>
@@ -58,43 +60,70 @@ export default async function TrendsPage() {
             <NarrativeSparkline points={narrative.history} label={narrative.name} />
             <div className="current-level">
               <strong>
-                {narrative.eligibleDocuments > 0 ? narrative.density.toFixed(1) : "—"}
+                {narrative.coverageStatus === "measured" ||
+                narrative.coverageStatus === "measured_zero"
+                  ? narrative.density.toFixed(1)
+                  : "—"}
               </strong>
               <span>
-                {narrative.eligibleDocuments > 0 && !narrative.lowHistory
+                {narrative.coverageStatus === "no_corpus"
+                  ? "no readable corpus"
+                  : narrative.coverageStatus === "backfill_pending"
+                  ? "classification pending"
+                  : narrative.coverageStatus === "measured_zero"
+                    ? "0 approved matches · fully classified"
+                    : narrative.eligibleDocuments > 0 && !narrative.lowHistory
                   ? `${narrative.percentileRank}th pct`
                   : narrative.eligibleDocuments > 0
                     ? "building baseline"
-                    : "no recent coverage"}
+                    : "measured zero"}
               </span>
             </div>
             <div className="current-movement">
               <strong
                 className={
-                  narrative.eligibleDocuments === 0 || narrative.lowHistory
+                  narrative.coverageStatus !== "measured" ||
+                  narrative.eligibleDocuments === 0 ||
+                  narrative.lowHistory
                     ? ""
                     : narrative.change >= 0
                       ? "rising"
                       : "fading"
                 }
               >
-                {narrative.eligibleDocuments > 0 && !narrative.lowHistory
+                {narrative.coverageStatus === "no_corpus"
+                  ? "No recent corpus"
+                  : narrative.coverageStatus === "backfill_pending"
+                  ? "Classification pending"
+                  : narrative.coverageStatus === "measured_zero"
+                    ? "Measured zero"
+                    : narrative.eligibleDocuments > 0 && !narrative.lowHistory
                   ? `${narrative.change >= 0 ? "↑" : "↓"} ${Math.abs(narrative.change).toFixed(1)}`
                   : narrative.eligibleDocuments > 0
                     ? "Baseline pending"
-                    : "Not measured"}
+                    : "Measured zero"}
               </strong>
               <span>
-                {narrative.eligibleDocuments > 0 && !narrative.lowHistory
+                {narrative.coverageStatus === "no_corpus"
+                  ? "ingest recent sources"
+                  : narrative.coverageStatus === "backfill_pending"
+                    ? "movement suppressed"
+                    : narrative.coverageStatus === "measured_zero"
+                      ? "no approved matches"
+                  : narrative.eligibleDocuments > 0 && !narrative.lowHistory
                   ? `accel ${signed(narrative.acceleration)}`
                   : narrative.eligibleDocuments > 0
                     ? "movement suppressed"
-                    : "ingest recent sources"}
+                    : "no approved matches"}
               </span>
             </div>
             <div className="current-breadth">
-              <strong>{narrative.publisherOwnerBreadth}</strong>
-              <span>publisher groups</span>
+              <strong>{narrative.storyBreadth}</strong>
+              <span>unique stories</span>
+              <small>
+                {narrative.publisherOwnerBreadth} publisher groups ·{" "}
+                {narrative.eligibleDocuments}/{narrative.corpusDocuments} documents classified
+              </small>
               {narrative.lowHistory ? <em>building baseline</em> : null}
             </div>
           </Link>
@@ -106,8 +135,11 @@ export default async function TrendsPage() {
           <p className="eyebrow">Reading the board</p>
           <p>
             “Now” is the seven-day percentage density averaged across active source
-            classes. Movement compares adjacent seven-day windows. A high reading is
-            attention—not a forecast, recommendation, or measure of agreement.
+            classes. Coverage shows classified readable documents over the current
+            seven-day corpus; pending and partial coverage are not measured zeroes.
+            Unique-story breadth deduplicates syndicated copies. Movement compares
+            adjacent seven-day windows. A high reading is attention—not a forecast,
+            recommendation, or measure of agreement.
           </p>
         </div>
       </section>

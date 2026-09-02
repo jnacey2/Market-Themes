@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createDatabaseClient,
   getActiveNarrativeDefinitions,
+  getTrackedNarrativeDefinitions,
   getNarrativeBoardStatus,
   getNarrativeHomepageStatus,
   getNarrativeReviewQueue,
@@ -46,6 +47,7 @@ test(
     assert.equal(persisted.insertedDocuments, 1);
 
     const definitions = await getActiveNarrativeDefinitions();
+    const trackedDefinitions = await getTrackedNarrativeDefinitions();
     const definition = definitions.find((item) => item.slug === "ai-infrastructure-demand");
     assert(definition);
     await persistNarrativeObservations([
@@ -198,7 +200,10 @@ test(
       lowHistoryDays: 2,
       promptVersion: "integration-v1"
     });
-    assert.equal(recomputed.definitionsProcessed, definitions.length);
+    assert.equal(
+      recomputed.definitionsProcessed,
+      trackedDefinitions.length
+    );
 
     const board = await getNarrativeBoardStatus(
       process.env.DATABASE_URL,

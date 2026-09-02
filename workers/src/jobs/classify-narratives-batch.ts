@@ -20,7 +20,7 @@ import {
 import {
   countNarrativeClassificationBacklog,
   createAnthropicMessageBatch,
-  getActiveNarrativeDefinitions,
+  getTrackedNarrativeDefinitions,
   getAnalysisDocumentsByIds,
   persistNarrativeObservations,
   recordAnthropicBatchItemResult,
@@ -110,7 +110,7 @@ async function executeNarrativeClassificationBatch(
     configuredMaxDocuments ??
     Number(process.env.NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS ?? 40);
   const maxDocuments = boundedBatchSize(configuredDocumentLimit, 40);
-  const definitions = await getActiveNarrativeDefinitions();
+  const definitions = await getTrackedNarrativeDefinitions();
   if (definitions.length === 0 || maxDocuments <= 0) {
     return classificationBatchResult("backlog_empty", reconciled);
   }

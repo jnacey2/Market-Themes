@@ -25,8 +25,8 @@ export default async function NarrativeCandidatesPage() {
           <h1>Candidate narratives.</h1>
           <p className="lede">
             New propositions found outside the fixed watchlist. Candidates need
-            exact quotations from at least two independent publisher groups
-            before they can become tracked narratives.
+            contract-complete quotations from unique stories and distinct
+            publisher groups before they can enter probation.
           </p>
         </div>
         <div className="panel">
@@ -107,6 +107,17 @@ function CandidateCard({
           {candidate.promotedDefinitionStatus === "inactive" ? (
             <span className="pill review-rejected">retracted</span>
           ) : null}
+          {candidate.promotedDefinitionStatus === "expired" ? (
+            <span className="pill review-rejected">event expired</span>
+          ) : null}
+          {candidate.promotedDefinitionStatus === "merged" ? (
+            <span className="pill warning-pill">consolidated</span>
+          ) : null}
+          {candidate.promotedDefinitionStatus === "probationary" ? (
+            <span className="pill warning-pill">
+              awaiting current-version breadth
+            </span>
+          ) : null}
           <span className="pill">{candidate.category}</span>
         </div>
         <p className="eyebrow">{candidate.clusterKey}</p>
@@ -116,10 +127,10 @@ function CandidateCard({
           <p><strong>Underlying event:</strong> {candidate.eventLabel}</p>
         ) : null}
         <div className="candidate-breadth">
+          <Metric label="Unique stories" value={candidate.storyBreadth} compact />
           <Metric label="Recent documents" value={candidate.documentBreadth} compact />
           <Metric label="Publisher groups" value={candidate.publisherOwnerBreadth} compact />
           <Metric label="Source classes" value={candidate.sourceClassBreadth} compact />
-          <Metric label="Entities" value={candidate.entityBreadth} compact />
         </div>
         {candidate.promotionValidation ? (
           <div className="eligibility-panel">
@@ -212,7 +223,7 @@ function CandidateCard({
         </div>
         {candidate.status === "approved" &&
         candidate.promotedDefinitionId &&
-        candidate.promotedDefinitionStatus !== "inactive" ? (
+        candidate.promotedDefinitionStatus === "active" ? (
           <div className="button-row">
             <Link
               className="button"
@@ -240,7 +251,9 @@ function CandidateCard({
           <span className="label">Review note</span>
           <p>{candidate.reviewNote || "Promoted from reviewed candidate evidence."}</p>
           {candidate.promotedDefinitionId &&
-          candidate.promotedDefinitionStatus === "active" ? (
+          ["active", "probationary"].includes(
+            candidate.promotedDefinitionStatus ?? ""
+          ) ? (
             <RetractNarrativeButton
               definitionId={candidate.promotedDefinitionId}
             />

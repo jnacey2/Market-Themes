@@ -79,6 +79,7 @@ type CandidateEvidenceRow = {
   bullish_tone: number;
   affected_entities: string[];
   match_score: number;
+  near_duplicate_key: string | null;
 };
 
 type PromotionEvidenceRow = CandidateEvidenceRow & {
@@ -88,7 +89,6 @@ type PromotionEvidenceRow = CandidateEvidenceRow & {
   current_text: string;
   evidence_prompt_version: string;
   evidence_model: string;
-  near_duplicate_key: string | null;
   tickers: string[];
 };
 
@@ -729,7 +729,11 @@ export async function getNarrativeCandidateQueue(
            and d.published_at >= now() - ($4::text || ' days')::interval
            and d.published_at <= now()
          group by nc.id
-         having count(distinct ce.document_id) >= $2
+         having count(distinct coalesce(
+           nullif(d.near_duplicate_key, ''),
+           nullif(d.metadata->>'wireStoryId', ''),
+           md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+         )) >= $2
             and count(distinct coalesce(
               nullif(lower(btrim(d.publisher_owner)), ''),
               nullif(lower(btrim(d.publisher_id)), ''),
@@ -755,6 +759,11 @@ export async function getNarrativeCandidateQueue(
       `with recent_breadth as (
          select ce.candidate_id,
                 count(distinct ce.document_id) as document_breadth,
+                count(distinct coalesce(
+                  nullif(d.near_duplicate_key, ''),
+                  nullif(d.metadata->>'wireStoryId', ''),
+                  md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+                )) as story_breadth,
                 count(distinct coalesce(
                   nullif(lower(btrim(d.publisher_owner)), ''),
                   nullif(lower(btrim(d.publisher_id)), ''),
@@ -782,7 +791,7 @@ export async function getNarrativeCandidateQueue(
        order by
          case nc.status when 'pending' then 0 else 1 end,
          case
-           when coalesce(rb.document_breadth, 0) >= $3
+           when coalesce(rb.story_breadth, 0) >= $3
             and coalesce(rb.publisher_owner_breadth, 0) >= $4
              then 0
            else 1
@@ -814,7 +823,8 @@ export async function getNarrativeCandidateQueue(
                   d.source_class, d.published_at::text, d.url,
                   ce.evidence_snippet, ce.interpretation, ce.stance,
                   ce.risk_tone::float, ce.bullish_tone::float,
-                  ce.affected_entities, ce.match_score::float
+                  ce.affected_entities, ce.match_score::float,
+                  d.near_duplicate_key
            from narrative_candidate_evidence ce
            join documents d on d.id = ce.document_id
            where ce.candidate_id = any($1::text[])
@@ -1159,7 +1169,7 @@ export async function autoPromoteNarrativeCandidates(
   const classificationPromptVersion =
     options.classificationPromptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-    "narrative_classification_v6";
+    "narrative_classification_v7";
   const minimumMatchScore =
     Math.max(
       90,
@@ -1256,7 +1266,11 @@ export async function autoPromoteNarrativeCandidates(
               or lower(d.url) like '%.' || blocked.value || ':%/%'
          )
        group by nc.id
-       having count(distinct ce.document_id) >= $5
+       having count(distinct coalesce(
+         nullif(d.near_duplicate_key, ''),
+         nullif(d.metadata->>'wireStoryId', ''),
+         md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+       )) >= $5
           and count(distinct coalesce(
             nullif(lower(btrim(d.publisher_owner)), ''),
             nullif(lower(btrim(d.publisher_id)), ''),
@@ -1295,7 +1309,7 @@ export async function autoPromoteNarrativeCandidates(
   };
   const note =
     `Auto-promoted: score >= ${minimumMatchScore}; corroborated by >= ` +
-    `${minimumDocuments} documents from >= ${minimumPublisherOwners} independent ` +
+    `${minimumDocuments} unique stories from >= ${minimumPublisherOwners} ` +
     `publisher groups within ${evidenceWindowDays} days.`;
   const promotedDefinitionIds: string[] = [];
   const failures: Array<{ candidateId: string; error: string }> = [];
@@ -1526,7 +1540,7 @@ export async function promoteNarrativeCandidate(
       )
     ) {
       throw new Error(
-        `Candidate needs at least ${minimumDocuments} documents from ${minimumPublisherOwners} independent publisher groups before promotion.`
+        `Candidate needs at least ${minimumDocuments} unique stories from ${minimumPublisherOwners} publisher groups before promotion.`
       );
     }
     if (!semanticValidation) {
@@ -1548,8 +1562,34 @@ export async function promoteNarrativeCandidate(
     }
 
     const slug = slugifyNarrativeCandidate(candidate.cluster_key || candidate.name);
+    const trackedDefinitions = await client.query<{
+      id: string;
+      name: string;
+      proposition: string;
+    }>(
+      `select id, name, proposition
+       from narrative_definitions
+       where status in ('active', 'probationary')`
+    );
+    const semanticCollision = trackedDefinitions.rows.find((definition) =>
+      narrativeDescriptionsOverlap(
+        candidate.name,
+        candidate.proposition,
+        definition.name,
+        definition.proposition
+      )
+    );
+    if (semanticCollision) {
+      throw new Error(
+        `Candidate overlaps tracked narrative "${semanticCollision.name}" (${semanticCollision.id}); merge or refine it instead of creating another definition.`
+      );
+    }
     const activeCollision = await client.query(
-      `select 1 from narrative_definitions where slug = $1 and status = 'active' limit 1`,
+      `select 1
+       from narrative_definitions
+       where slug = $1
+         and status in ('active', 'probationary', 'family')
+       limit 1`,
       [slug]
     );
     if ((activeCollision.rowCount ?? 0) > 0) {
@@ -1569,14 +1609,26 @@ export async function promoteNarrativeCandidate(
       promotionKind === "event"
         ? semanticValidation?.eventLabel ?? candidate.event_label
         : null;
+    const eventExpiresAt =
+      promotionKind === "event"
+        ? addDays(
+            evidence.reduce(
+              (latest, item) =>
+                item.publishedAt > latest ? item.publishedAt : latest,
+              evidence[0]?.publishedAt ?? new Date().toISOString()
+            ),
+            Number(process.env.NARRATIVE_EVENT_TTL_DAYS ?? 14)
+          )
+        : null;
     await client.query(
       `insert into narrative_definitions (
          id, slug, version, name, proposition, category,
          inclusion_guidance, exclusion_guidance, positive_examples,
-         negative_examples, status, kind, event_label, metadata
+         negative_examples, status, kind, event_label, metadata,
+         event_expires_at
        ) values (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'active',
-         $10, $11, $12::jsonb
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'probationary',
+         $10, $11, $12::jsonb, $13::timestamptz
        )`,
       [
         definitionId,
@@ -1591,9 +1643,11 @@ export async function promoteNarrativeCandidate(
         promotionKind,
         promotionEventLabel,
         JSON.stringify({
+          origin: "candidate_promotion",
           candidateId: candidate.id,
           promotionValidation: semanticValidation
-        })
+        }),
+        eventExpiresAt
       ]
     );
 
@@ -1604,7 +1658,7 @@ export async function promoteNarrativeCandidate(
     const classificationPromptVersion =
       input.classificationPromptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v6";
+      "narrative_classification_v7";
     const reviewActorType = input.reviewActorType ?? "human";
     const reviewedAt = new Date().toISOString();
     const qualifyingEvidence = selectedRows.map((row) => {
@@ -1653,7 +1707,7 @@ export async function promoteNarrativeCandidate(
            review_status, reviewed_at, review_note
          ) values (
            $1, $2, $3, true, $4, $5, $6, $7, $8, $9,
-           $10, $11, $12, $13::jsonb, 'approved', now(), $14
+           $10, $11, $12, $13::jsonb, 'pending', null, $14
          )
          on conflict (narrative_definition_id, document_id, model, prompt_version)
          do nothing`,
@@ -1677,13 +1731,15 @@ export async function promoteNarrativeCandidate(
           classificationPromptVersion,
           JSON.stringify({
             promotedFromCandidateId: candidate.id,
+            promotionSeed: true,
             discoveryPromptVersion: candidate.prompt_version,
             reviewProvenance,
             ...(reviewActorType === "automatic"
               ? { autoReview: reviewMetadata }
               : {})
           }),
-          input.note?.trim() || "Approved with discovered narrative candidate."
+          input.note?.trim() ||
+            "Seeded for fresh classification after candidate promotion."
         ]
       );
       observationsCreated += result.rowCount ?? 0;
@@ -1699,13 +1755,14 @@ export async function promoteNarrativeCandidate(
              id, observation_id, observation_key, previous_status, new_status,
              actor_type, review_note, metadata
            ) values (
-             $1, $2, $2, 'pending', 'approved', $3, $4, $5::jsonb
+             $1, $2, $2, 'pending', 'pending', $3, $4, $5::jsonb
            )`,
           [
             `narrative:review-event:${randomUUID()}`,
             observationId,
             reviewActorType,
-            input.note?.trim() || "Approved with discovered narrative candidate.",
+            input.note?.trim() ||
+              "Seeded for fresh classification after candidate promotion.",
             JSON.stringify({
               action: "candidate_promotion",
               candidateId: candidate.id,
@@ -1754,12 +1811,16 @@ export async function promoteNarrativeCandidate(
 }
 
 export function isNarrativeCandidateQualified(
-  breadth: { documentBreadth: number; publisherOwnerBreadth: number },
+  breadth: {
+    documentBreadth: number;
+    storyBreadth?: number;
+    publisherOwnerBreadth: number;
+  },
   minimumDocuments = DEFAULT_CANDIDATE_MIN_DOCUMENTS,
   minimumPublisherOwners = DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS
 ) {
   return (
-    breadth.documentBreadth >= minimumDocuments &&
+    (breadth.storyBreadth ?? breadth.documentBreadth) >= minimumDocuments &&
     breadth.publisherOwnerBreadth >= minimumPublisherOwners
   );
 }
@@ -1772,6 +1833,64 @@ export function slugifyNarrativeCandidate(value: string) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return slug || "emerging-narrative";
+}
+
+export function narrativeDescriptionsOverlap(
+  leftName: string,
+  leftProposition: string,
+  rightName: string,
+  rightProposition: string
+) {
+  return (
+    tokenSimilarity(leftName, rightName) >= 0.5 ||
+    tokenSimilarity(leftProposition, rightProposition) >= 0.55
+  );
+}
+
+function tokenSimilarity(left: string, right: string) {
+  const leftTokens = meaningfulTokens(left);
+  const rightTokens = meaningfulTokens(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const intersection = [...leftTokens].filter((token) =>
+    rightTokens.has(token)
+  ).length;
+  return intersection / new Set([...leftTokens, ...rightTokens]).size;
+}
+
+function meaningfulTokens(value: string) {
+  const stopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "because",
+    "for",
+    "from",
+    "in",
+    "is",
+    "of",
+    "or",
+    "the",
+    "to"
+  ]);
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((token) => token.length > 1 && !stopWords.has(token))
+      .map(canonicalNarrativeToken)
+  );
+}
+
+function canonicalNarrativeToken(token: string) {
+  if (["oil", "crude", "petroleum"].includes(token)) return "energy";
+  if (["rates", "hike", "hikes", "tightening"].includes(token)) {
+    return "rate";
+  }
+  if (["prices", "pricing"].includes(token)) return "price";
+  return token;
 }
 
 function isAllowedAutomaticPromotionEvidence(
@@ -1954,7 +2073,12 @@ function mapEvidence(row: CandidateEvidenceRow): NarrativeCandidateEvidence {
     riskTone: Number(row.risk_tone),
     bullishTone: Number(row.bullish_tone),
     affectedEntities: row.affected_entities,
-    matchScore: Number(row.match_score)
+    matchScore: Number(row.match_score),
+    storyFingerprint:
+      row.near_duplicate_key ??
+      createHash("sha256")
+        .update(row.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
+        .digest("hex")
   };
 }
 
@@ -2037,6 +2161,9 @@ function isAutomaticPromotionValidationEligible(
 function candidateBreadth(evidence: NarrativeCandidateEvidence[]) {
   return {
     documentBreadth: new Set(evidence.map((item) => item.documentId)).size,
+    storyBreadth: new Set(
+      evidence.map((item) => item.storyFingerprint)
+    ).size,
     publisherBreadth: new Set(
       evidence
         .map((item) => item.publisherId.trim().toLowerCase())
@@ -2093,6 +2220,16 @@ function promotedObservationId(
     .update(`${definitionId}:${documentId}:${model}:${promptVersion}`)
     .digest("hex")
     .slice(0, 32)}`;
+}
+
+function addDays(value: string, configuredDays: number) {
+  const date = new Date(value);
+  const days =
+    Number.isFinite(configuredDays) && configuredDays > 0
+      ? Math.min(Math.floor(configuredDays), 90)
+      : 14;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
 }
 
 function emptyCandidateQueue(promptVersion: string): NarrativeCandidateQueue {

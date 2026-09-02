@@ -17,7 +17,7 @@ import {
   createAnthropicMessageBatch,
   failDocumentAnalysisRun,
   failNarrativeDiscoveryRun,
-  getActiveNarrativeDefinitions,
+  getTrackedNarrativeDefinitions,
   getAnalysisDocumentsByIds,
   getNarrativeCandidateContexts,
   recordAnthropicBatchItemResult,
@@ -118,7 +118,7 @@ async function executeNarrativeDiscoveryBatch(
   }
 
   const [definitions, existingCandidates] = await Promise.all([
-    getActiveNarrativeDefinitions(),
+    getTrackedNarrativeDefinitions(),
     getNarrativeCandidateContexts(options.promptVersion)
   ]);
   const batchId = newAnthropicBatchId(narrativeDiscoveryBatchWorkload);

@@ -61,16 +61,20 @@ export default async function HomePage() {
           </p>
           <div className="metric-row">
             <div className="metric">
-              <span>Reviewed documents</span>
-              <strong>{leadNarrative?.matchedDocuments ?? "—"}</strong>
+              <span>Unique stories</span>
+              <strong>{leadNarrative?.storyBreadth ?? "—"}</strong>
             </div>
             <div className="metric">
               <span>Publisher groups</span>
               <strong>{leadNarrative?.publisherOwnerBreadth ?? "—"}</strong>
             </div>
             <div className="metric">
-              <span>Source classes</span>
-              <strong>{leadNarrative?.sourceClassBreadth ?? "—"}</strong>
+              <span>Classification coverage</span>
+              <strong>
+                {leadNarrative
+                  ? `${leadNarrative.classificationCoveragePercent}%`
+                  : "—"}
+              </strong>
             </div>
           </div>
         </div>
@@ -94,8 +98,8 @@ export default async function HomePage() {
               : `${dashboard.narratives.length} active signals`}
           </h2>
           <p>
-            Ranked by independent publisher breadth and reviewed document count,
-            not immature z-scores.
+            Ranked by unique-story breadth and source diversity, not immature
+            z-scores or raw article count.
           </p>
         </div>
         <div className="panel">
@@ -187,10 +191,21 @@ function NarrativeCard({
           <span className="pill">{narrative.kind ?? "structural"}</span>
           <span className="pill">{narrative.trendWindow}</span>
           <span className="pill">{narrative.matchedDocuments} reviewed docs</span>
+          <span className="pill">{narrative.storyBreadth} unique stories</span>
           <span className="pill">
             {narrative.publisherOwnerBreadth} publisher groups
           </span>
-          <span className="pill">{narrative.entityBreadth} entities</span>
+          {narrative.coverageStatus !== "measured" ? (
+            <span className="pill warning-pill">
+              {narrative.coverageStatus === "backfill_pending"
+                ? "classification pending"
+                : narrative.coverageStatus === "no_corpus"
+                  ? "no recent corpus"
+                  : narrative.coverageStatus === "measured_zero"
+                    ? "measured zero"
+                : `${narrative.classificationCoveragePercent}% classified`}
+            </span>
+          ) : null}
           {narrative.lowHistory ? (
             <span className="pill warning-pill">building baseline</span>
           ) : null}
@@ -242,8 +257,8 @@ function NarrativeCard({
           <strong>{narrative.density.toFixed(1)}</strong>
         </div>
         <div className="score">
-          <span className="label">Publisher groups</span>
-          <strong>{narrative.publisherOwnerBreadth}</strong>
+          <span className="label">Unique stories</span>
+          <strong>{narrative.storyBreadth}</strong>
         </div>
         <Link
           className="pill"
@@ -270,9 +285,9 @@ function buildNarrativeBrief(narratives: NarrativeHomepageItem[]) {
   return {
     headline: `${lead.name} has the broadest reviewed evidence.`,
     summary: [
-      `${lead.name} appears in ${lead.matchedDocuments} reviewed documents across ${lead.publisherOwnerBreadth} independent publisher groups.`,
+      `${lead.name} appears in ${lead.storyBreadth} unique stories across ${lead.publisherOwnerBreadth} publisher groups.`,
       context
-        ? `${context.name} is the next-broadest current narrative with ${context.publisherOwnerBreadth} publisher groups.`
+        ? `${context.name} is the next-broadest current narrative with ${context.storyBreadth} unique stories.`
         : "No second narrative currently has reviewed evidence."
     ].join(" ")
   };
@@ -281,7 +296,8 @@ function buildNarrativeBrief(narratives: NarrativeHomepageItem[]) {
 function narrativeSummary(narrative: NarrativeHomepageItem) {
   return [
     `Seven-day attention density is ${narrative.density.toFixed(1)}%.`,
-    `${narrative.matchedDocuments} reviewed documents span ${narrative.publisherOwnerBreadth} independent publisher groups and ${narrative.sourceClassBreadth} source classes.`,
+    `${narrative.storyBreadth} unique stories span ${narrative.publisherOwnerBreadth} publisher groups and ${narrative.sourceClassBreadth} source classes.`,
+    `${narrative.eligibleDocuments} of ${narrative.corpusDocuments} readable documents are classified (${narrative.classificationCoveragePercent}%).`,
     narrative.lowHistory
       ? "The historical baseline is still building."
       : "Evidence breadth, rather than the immature z-score, determines homepage priority."

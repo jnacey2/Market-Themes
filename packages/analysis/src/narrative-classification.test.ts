@@ -4,7 +4,8 @@ import type { AnalysisDocument, NarrativeDefinition } from "@market-themes/db";
 import {
   buildNarrativeClassificationContent,
   normalizeObservation,
-  passesDefinitionGuard
+  passesDefinitionGuard,
+  passesNarrativeEvidenceContract
 } from "./narrative-classification";
 
 const definition: NarrativeDefinition = {
@@ -43,6 +44,9 @@ test("requires matched evidence to be an exact source quote", () => {
       stance: "bullish",
       riskTone: 10,
       bullishTone: 80,
+      contractSatisfied: true,
+      inclusionCriteriaSatisfied: ["Direct evidence"],
+      exclusionCriteriaTriggered: [],
       evidenceSnippet: "Demand is rising quickly",
       interpretation: "Demand is accelerating.",
       affectedEntities: ["Example"]
@@ -56,6 +60,9 @@ test("requires matched evidence to be an exact source quote", () => {
     {
       matched: true,
       matchScore: 95,
+      contractSatisfied: true,
+      inclusionCriteriaSatisfied: ["Direct evidence"],
+      exclusionCriteriaTriggered: [],
       evidenceSnippet: "Invented quotation"
     },
     definition,
@@ -75,6 +82,9 @@ test("rejects low-confidence semantic adjacency despite an exact quote", () => {
     {
       matched: true,
       matchScore: 62,
+      contractSatisfied: true,
+      inclusionCriteriaSatisfied: ["Direct evidence"],
+      exclusionCriteriaTriggered: [],
       stance: "bullish",
       evidenceSnippet: "Demand is rising quickly"
     },
@@ -101,6 +111,56 @@ test("records omitted sparse-output definitions as non-matches", () => {
   assert.equal(omitted.matched, false);
   assert.equal(omitted.matchScore, 0);
   assert.equal(omitted.evidenceSnippet, "");
+});
+
+test("requires the model contract audit and every configured evidence term group", () => {
+  const contractDefinition: NarrativeDefinition = {
+    ...definition,
+    metadata: {
+      evidenceContract: {
+        requiredTermGroups: [
+          ["oil", "crude"],
+          ["inflation"],
+          ["rate hike", "tightening"]
+        ]
+      }
+    }
+  };
+  const completeEvidence =
+    "Higher crude prices lifted inflation fears and rate hike expectations.";
+
+  assert.equal(
+    passesNarrativeEvidenceContract(contractDefinition, completeEvidence),
+    true
+  );
+  assert.equal(
+    passesNarrativeEvidenceContract(
+      contractDefinition,
+      "Higher crude prices lifted inflation fears."
+    ),
+    false
+  );
+
+  const rejected = normalizeObservation(
+    {
+      matched: true,
+      matchScore: 95,
+      contractSatisfied: false,
+      inclusionCriteriaSatisfied: ["Oil", "Inflation"],
+      exclusionCriteriaTriggered: ["No explicit rates consequence"],
+      evidenceSnippet: completeEvidence
+    },
+    contractDefinition,
+    { ...document, text: completeEvidence },
+    "model",
+    "prompt"
+  );
+  assert.equal(rejected.matched, false);
+  assert.deepEqual(rejected.metadata?.contractValidation, {
+    satisfied: false,
+    inclusionCriteriaSatisfied: ["Oil", "Inflation"],
+    exclusionCriteriaTriggered: ["No explicit rates consequence"]
+  });
 });
 
 test("caches only the stable definition prefix", () => {

@@ -24,7 +24,10 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
     classification,
     /key: ANTHROPIC_PROMPT_CACHING\s+value: "true"/
   );
-  assert.match(classification, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
+  assert.match(
+    classification,
+    /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION\s+value: narrative_classification_v7/
+  );
   assert.match(
     classification,
     /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "40"/
@@ -82,7 +85,14 @@ test("publishes narrative trends twice hourly without waiting on model work", ()
     /startCommand: npm run narrative-trends:recompute --workspace @market-themes\/workers/
   );
   assert.doesNotMatch(trends, /ANTHROPIC_API_KEY/);
-  assert.match(trends, /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION/);
+  assert.match(
+    trends,
+    /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION\s+value: narrative_classification_v7/
+  );
+  assert.match(
+    trends,
+    /key: NARRATIVE_ACTIVATION_MIN_STORIES\s+value: "3"/
+  );
 });
 
 test("reconciles durable Anthropic batches every ten minutes", () => {
@@ -130,6 +140,14 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
     review,
     /key: NARRATIVE_AUTO_PROMOTE_MIN_PUBLISHER_OWNERS\s+value: "3"/
   );
+  assert.match(
+    review,
+    /key: NARRATIVE_ACTIVATION_MIN_STORIES\s+value: "3"/
+  );
+  assert.match(
+    review,
+    /key: NARRATIVE_ACTIVATION_MIN_PUBLISHER_OWNERS\s+value: "3"/
+  );
   assert.match(review, /key: ANTHROPIC_API_KEY/);
   assert.match(
     review,
@@ -141,7 +159,7 @@ test("auto-reviews only explicitly enabled corroborated matches", () => {
   );
   assert.match(
     review,
-    /key: NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION\s+value: candidate_promotion_validation_v1/
+    /key: NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION\s+value: candidate_promotion_validation_v2/
   );
 });
 
@@ -163,6 +181,7 @@ test("uses Haiku for web-triggered promotion validation", () => {
     web,
     /key: NARRATIVE_PROMOTION_VALIDATION_MODEL\s+value: claude-haiku-4-5-20251001/
   );
+  assert.match(web, /key: NARRATIVE_EVENT_TTL_DAYS\s+value: "14"/);
 });
 
 test("the theme cron runs normalization and trends without stage selectors", () => {

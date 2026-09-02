@@ -90,7 +90,8 @@ export function CandidateActions({
       </div>
       {!qualified ? (
         <p className="warning-text">
-          Promotion unlocks after evidence from two independent publisher groups.
+          Promotion unlocks after evidence from two unique stories and two
+          publisher groups.
         </p>
       ) : null}
       {requiresOverrideNote ? (
