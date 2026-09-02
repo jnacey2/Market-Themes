@@ -52,12 +52,45 @@ export async function resolveTargetTickers(
   if (options.explicit && options.explicit.length > 0) return normalize(options.explicit);
   const envOverride = parseTickers(process.env.SEC_TARGET_TICKERS);
   if (envOverride && envOverride.length > 0) return envOverride;
-  const universes = parseUniverseIds(options.universe ?? process.env.TARGET_UNIVERSE);
+  return resolveUniverseTickers(
+    options.universe ?? process.env.TARGET_UNIVERSE,
+    "TARGET_UNIVERSE",
+    options
+  );
+}
+
+/**
+ * Resolves the ticker list for FMP stock news.
+ *
+ * News is one FMP request per ticker on every poll (every 30 minutes in production),
+ * so it deliberately does not follow TARGET_UNIVERSE: the S&P 500 would be ~500 calls
+ * per run. Priority: explicit list → FMP_NEWS_TICKERS env → FMP_NEWS_UNIVERSE
+ * constituents (opt-in, same ids and fallback behaviour as TARGET_UNIVERSE) → seed list.
+ */
+export async function resolveNewsTickers(
+  options: ResolveTargetTickersOptions = {}
+): Promise<string[]> {
+  if (options.explicit && options.explicit.length > 0) return normalize(options.explicit);
+  const envOverride = parseTickers(process.env.FMP_NEWS_TICKERS);
+  if (envOverride && envOverride.length > 0) return envOverride;
+  return resolveUniverseTickers(
+    options.universe ?? process.env.FMP_NEWS_UNIVERSE,
+    "FMP_NEWS_UNIVERSE",
+    options
+  );
+}
+
+async function resolveUniverseTickers(
+  universeValue: string | null | undefined,
+  envName: string,
+  options: ResolveTargetTickersOptions
+): Promise<string[]> {
+  const universes = parseUniverseIds(universeValue);
   if (universes.every((id) => id === "seed")) return [...SEC_TARGET_TICKERS];
   const apiKey = options.apiKey ?? process.env.FMP_API_KEY;
   if (!apiKey) {
     console.warn(
-      `[ticker-universe] TARGET_UNIVERSE=${universes.join(",")} requires FMP_API_KEY; using the seed list.`
+      `[ticker-universe] ${envName}=${universes.join(",")} requires FMP_API_KEY; using the seed list.`
     );
     return [...SEC_TARGET_TICKERS];
   }
