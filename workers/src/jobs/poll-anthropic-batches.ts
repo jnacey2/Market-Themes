@@ -30,7 +30,17 @@ export async function pollAnthropicBatches(options: {
       const result = await workload.poll();
       results[workload.name] = result;
       if (result.status === "completed") batchesCompleted += 1;
-      if (result.status === "failed") failedWorkloads += 1;
+      const failedDocuments = Number(
+        "summary" in result &&
+          result.summary &&
+          typeof result.summary === "object" &&
+          "failedDocuments" in result.summary
+          ? result.summary.failedDocuments
+          : 0
+      );
+      if (result.status === "failed" || failedDocuments > 0) {
+        failedWorkloads += 1;
+      }
     } catch (error) {
       failedWorkloads += 1;
       results[workload.name] = {

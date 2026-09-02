@@ -23,6 +23,11 @@ const request: AnthropicBatchRequest = {
   }
 };
 
+const canceledResult = {
+  custom_id: "request-1",
+  result: { type: "canceled" }
+} as AnthropicBatchResult;
+
 test("builds valid stable custom ids and enforces request bytes", () => {
   const customId = anthropicBatchCustomId(
     "classification",
@@ -91,13 +96,9 @@ test("holds ambiguous submissions but releases definitive rejections", async () 
 test("reconciles terminal results exactly once before completion", async () => {
   const events: string[] = [];
   const store = fakeStore(events, batchRecord({ providerBatchId: "batch-1" }));
-  const resultEntry = {
-    custom_id: "request-1",
-    result: { type: "canceled" }
-  } as AnthropicBatchResult;
   const result = await reconcileActiveAnthropicBatch({
     workload: "classification",
-    api: fakeApi(providerBatch("ended"), undefined, [resultEntry]),
+    api: fakeApi(providerBatch("ended"), undefined, [canceledResult]),
     processResults: async (_batch, results) => {
       for await (const entry of results) {
         events.push(`result:${entry.custom_id}`);
@@ -150,7 +151,7 @@ test("leaves terminal results recoverable when application processing fails", as
   await assert.rejects(
     reconcileActiveAnthropicBatch({
       workload: "classification",
-      api: fakeApi(providerBatch("ended")),
+      api: fakeApi(providerBatch("ended"), undefined, [canceledResult]),
       processResults: async () => {
         throw new Error("database unavailable");
       },
@@ -163,6 +164,54 @@ test("leaves terminal results recoverable when application processing fails", as
     /database unavailable/
   );
   assert.deepEqual(events, ["provider:ended"]);
+});
+
+test("leaves empty and partial result streams retryable without applying them", async () => {
+  const emptyEvents: string[] = [];
+  await assert.rejects(
+    reconcileActiveAnthropicBatch({
+      workload: "classification",
+      api: fakeApi(providerBatch("ended")),
+      processResults: async () => {
+        emptyEvents.push("applied");
+        return {};
+      },
+      abandon: async () => {
+        emptyEvents.push("abandon");
+      },
+      store: fakeStore(
+        emptyEvents,
+        batchRecord({ providerBatchId: "batch-1" })
+      ),
+      now: () => new Date("2026-09-01T00:20:00.000Z").getTime()
+    }),
+    /results are incomplete: received 0\/1/
+  );
+  assert.deepEqual(emptyEvents, ["provider:ended"]);
+
+  const partialEvents: string[] = [];
+  const twoItemBatch = batchRecord({
+    providerBatchId: "batch-1",
+    requestCount: 2,
+    items: [batchItem("request-1"), batchItem("request-2")]
+  });
+  await assert.rejects(
+    reconcileActiveAnthropicBatch({
+      workload: "classification",
+      api: fakeApi(providerBatch("ended"), undefined, [canceledResult]),
+      processResults: async () => {
+        partialEvents.push("applied");
+        return {};
+      },
+      abandon: async () => {
+        partialEvents.push("abandon");
+      },
+      store: fakeStore(partialEvents, twoItemBatch),
+      now: () => new Date("2026-09-01T00:20:00.000Z").getTime()
+    }),
+    /results are incomplete: received 1\/2/
+  );
+  assert.deepEqual(partialEvents, ["provider:ended"]);
 });
 
 test("waits through the provider window before abandoning unknown submissions", async () => {
@@ -268,8 +317,24 @@ function batchRecord(
     completedAt: null,
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: "2026-09-01T00:00:00.000Z",
-    items: [],
+    items: [batchItem("request-1")],
     ...overrides
+  };
+}
+
+function batchItem(customId: string) {
+  return {
+    id: `item-${customId}`,
+    batchId: "local-batch-1",
+    customId,
+    documentId: `document-${customId}`,
+    analysisRunId: null,
+    status: "submitted",
+    errorType: null,
+    errorMessage: null,
+    usage: {},
+    metadata: {},
+    completedAt: null
   };
 }
 
