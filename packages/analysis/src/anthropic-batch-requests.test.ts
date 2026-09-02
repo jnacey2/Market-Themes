@@ -159,12 +159,48 @@ test("builds a batch-compatible discovery request with its context", () => {
     document,
     [definition],
     existing,
-    { model: "test-model" }
+    { model: "test-model", cacheTtl: "1h" }
   );
   const content = request.messages[0].content;
 
-  assert.equal(typeof content, "string");
-  assert.match(String(content), /"trackedNarratives"/);
-  assert.match(String(content), /"existingCandidates"/);
+  assert.ok(Array.isArray(content));
+  assert.equal(content.length, 2);
+  const [reference, documentBlock] = content;
+  assert.ok(reference.type === "text" && documentBlock.type === "text");
+  assert.match(reference.text, /"trackedNarratives"/);
+  assert.match(reference.text, /"existingCandidates"/);
+  assert.doesNotMatch(reference.text, /"document"/);
+  assert.match(documentBlock.text, /"document"/);
+  assert.deepEqual(
+    "cache_control" in reference ? reference.cache_control : undefined,
+    { type: "ephemeral", ttl: "1h" }
+  );
+  assert.equal("cache_control" in documentBlock, false);
   assert.ok(request.output_config?.format);
+});
+
+test("discovery requests share an identical cacheable prefix across documents", () => {
+  const other = { ...document, id: "doc-2", title: "Another", text: "Different text." };
+  const hints = [{ term: "copper", stories: 4, publisherOwners: 3, novel: true }];
+  const [first, second] = [document, other].map((entry) =>
+    buildNarrativeDiscoveryRequest(entry, [definition], [], {
+      model: "test-model",
+      corpusAttention: hints
+    })
+  );
+  const prefix = (request: typeof first) => {
+    const content = request.messages[0].content;
+    return Array.isArray(content) && content[0].type === "text" ? content[0].text : null;
+  };
+  assert.ok(prefix(first));
+  assert.equal(prefix(first), prefix(second));
+  assert.match(String(prefix(first)), /"corpusAttention"/);
+
+  const uncached = buildNarrativeDiscoveryRequest(document, [definition], [], {
+    model: "test-model",
+    promptCaching: false
+  });
+  const uncachedContent = uncached.messages[0].content;
+  assert.ok(Array.isArray(uncachedContent));
+  assert.equal("cache_control" in uncachedContent[0], false);
 });
