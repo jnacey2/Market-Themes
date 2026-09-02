@@ -17,14 +17,21 @@ export default async function StoryboardPage({
     notFound();
   }
 
-  const hasCoverage = narrative.eligibleDocuments > 0;
+  const classificationComplete =
+    narrative.coverageStatus === "measured" ||
+    narrative.coverageStatus === "measured_zero";
+  const hasSignal =
+    narrative.coverageStatus === "measured" &&
+    narrative.matchedDocuments > 0;
   const direction = narrative.change > 0 ? "rising" : narrative.change < 0 ? "fading" : "steady";
   const breadth =
-    narrative.publisherOwnerBreadth >= 3
-      ? "across several publisher groups"
-      : "with limited publisher-group breadth";
-  const whyUnusual = !hasCoverage
-    ? "No eligible documents were classified in the latest window, so movement and unusualness are not measured."
+    narrative.storyBreadth >= 3
+      ? "across several unique stories"
+      : "with limited unique-story breadth";
+  const whyUnusual = !classificationComplete
+    ? `Classification coverage is ${narrative.classificationCoveragePercent}%, so movement and unusualness remain suppressed.`
+    : narrative.coverageStatus === "measured_zero"
+      ? "The current corpus is fully classified and contains no approved matches."
     : narrative.lowHistory
     ? "The series does not yet have enough history for a reliable unusualness judgment."
     : `The current reading is in the ${narrative.percentileRank}th percentile of its own history with a z-score of ${narrative.zScore.toFixed(1)}.`;
@@ -45,11 +52,13 @@ export default async function StoryboardPage({
           <h1>{narrative.name}</h1>
           {narrative.eventLabel ? <p className="label">{narrative.eventLabel}</p> : null}
           <p className="lede">
-            {hasCoverage && !narrative.lowHistory
+            {hasSignal && !narrative.lowHistory
               ? `This narrative is ${direction} ${breadth}. Current normalized density is ${narrative.density.toFixed(1)}, a ${signed(narrative.change)} change from the prior seven-day window.`
-              : hasCoverage
+              : hasSignal
                 ? `This narrative has current evidence ${breadth}, but its historical baseline is not mature enough to interpret percentile, z-score, or movement.`
-                : "This narrative has no eligible recent-source coverage. Ingest and classify current documents before interpreting its movement."}
+                : !classificationComplete
+                  ? `This narrative is not fully measured: ${narrative.eligibleDocuments} of ${narrative.corpusDocuments} readable documents are classified.`
+                  : "The current measured corpus has no approved matches."}
           </p>
           <p className="synthesis-disclosure">
             System synthesis derived from measured observations. Evidence and model
@@ -62,13 +71,13 @@ export default async function StoryboardPage({
           <div className="metric-row">
             <Metric
               label="Z-score"
-              value={hasCoverage && !narrative.lowHistory ? narrative.zScore.toFixed(1) : "—"}
+              value={hasSignal && !narrative.lowHistory ? narrative.zScore.toFixed(1) : "—"}
             />
             <Metric
               label="Percentile"
-              value={hasCoverage && !narrative.lowHistory ? String(narrative.percentileRank) : "—"}
+              value={hasSignal && !narrative.lowHistory ? String(narrative.percentileRank) : "—"}
             />
-            <Metric label="Publisher groups" value={String(narrative.publisherOwnerBreadth)} />
+            <Metric label="Unique stories" value={String(narrative.storyBreadth)} />
           </div>
         </div>
       </section>
@@ -81,7 +90,7 @@ export default async function StoryboardPage({
       <section className="section panel">
         <p className="eyebrow">What to investigate next</p>
         <div className="grid three">
-          {followUps(narrative.name, narrative.change, narrative.publisherOwnerBreadth).map(
+          {followUps(narrative.name, narrative.change, narrative.storyBreadth).map(
             (question) => <div className="copilot-box" key={question}>{question}</div>
           )}
         </div>
@@ -90,15 +99,15 @@ export default async function StoryboardPage({
   );
 }
 
-function followUps(name: string, change: number, owners: number) {
+function followUps(name: string, change: number, stories: number) {
   return [
     `Which entities are driving the latest ${name} observations?`,
     change >= 0
       ? "Is the acceleration broadening across source classes or concentrated in one channel?"
       : "Is the decline a genuine fade or a temporary lull in source coverage?",
-    owners < 3
+    stories < 3
       ? "What independent evidence would confirm this early signal?"
-      : "Do independent publishers share the same framing and tone?"
+      : "Do the unique stories share the same framing and tone?"
   ];
 }
 

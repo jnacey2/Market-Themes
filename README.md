@@ -166,14 +166,24 @@ minimum evidence before promotion. A theme should rank highly when it has:
 New themes should start as emerging/unconfirmed and graduate into ranked alerts
 only after enough evidence, clustering stability, and baseline history.
 
-Curated narratives use a separate, stable measurement contract. Each active
-definition is evaluated against every eligible document and records both matches
-and non-matches. Daily density is the percentage of eligible unique documents
+Curated narratives use a separate, stable measurement contract. Each active or
+probationary measurement definition is evaluated against every eligible document
+and records both matches and non-matches; only active definitions are published.
+Daily density is the percentage of eligible unique documents
 matching the proposition, calculated per source class and then averaged so a
 high-volume feed cannot dominate the result. The UI reports publisher breadth
-and publisher-owner breadth separately to avoid treating syndicated copies as
-independent confirmation. Narrative movement compares adjacent windows; it
+and publisher-owner breadth separately, and uses normalized-title/connector
+fingerprints to report unique-story breadth without counting syndicated copies
+as independent confirmation. Classification coverage is shown as classified
+readable documents over the current corpus; pending or partial coverage is not
+presented as a measured zero. Narrative movement compares adjacent windows; it
 measures attention, not agreement, sentiment, or predictive performance.
+
+Candidate-origin definitions enter `probationary` status. They publish only
+after three current-classifier-version unique stories from three publisher
+groups pass review. Event definitions receive an expiry and are removed from
+the active board automatically. Related event consequences can share a
+non-classified family parent and a named measurement dimension.
 
 ## Source Strategy
 
@@ -273,7 +283,8 @@ Bloomberg, and FT RSS feeds. Those presets always use snippet retention and do
 not send publisher logins or session cookies. FMP news, RSS, GDELT, and the
 optional authenticated collector share the same publisher-owner slugs
 (`dow-jones`, `nyt`, `washington-post`, `bloomberg`, `financial-times`) so
-syndicated copies do not inflate breadth.
+syndicated copies do not inflate breadth. RSS items with explicit Reuters, AP,
+or AFP attribution are assigned to that wire owner rather than the feed host.
 
 Optional GDELT discovery stays metadata-only. When enabled, `GDELT_DOMAINS`
 defaults to `wsj.com,nytimes.com,bloomberg.com,washingtonpost.com,ft.com,reuters.com`.
@@ -355,7 +366,11 @@ The first live Claude integration extracts market signals from SEC/FMP documents
 
 Narrative classification returns only positive matches and deterministically
 persists omitted definitions as non-matches, avoiding repeated negative output
-tokens. Its stable definition prefix has an ephemeral cache breakpoint when
+tokens. Version 7 requires each returned match to include a contract audit:
+every inclusion leg must be supported by the exact quotation and no exclusion
+may be triggered. Machine-readable evidence contracts can additionally require
+specific term groups for high-risk causal claims. Its stable definition prefix
+has an ephemeral cache breakpoint when
 `ANTHROPIC_PROMPT_CACHING` is not `false`: synchronous calls use five minutes
 and batches use one hour. Haiku 4.5 only creates a cache entry when that reusable
 prefix reaches 4,096 tokens, so shorter prefixes continue uncached without error.
@@ -381,6 +396,20 @@ Changing `ANTHROPIC_MODEL` therefore makes previously analyzed documents eligibl
 for a one-time reprocessing backlog; it does not relabel old records. Scheduled
 extraction, classification, and discovery runs cap that rollout at 100, 40, and
 40 documents per submitted batch respectively.
+
+Run the human-labeled classifier evaluation through the discounted Batch API
+before changing models or autonomous approval policy:
+
+```bash
+npm run eval:narratives -- --model claude-haiku-4-5-20251001
+# Submit after reviewing the dry-run request count:
+npm run eval:narratives -- --submit --model claude-haiku-4-5-20251001
+# After the returned batch ends:
+npm run eval:narratives -- --batch-id msgbatch_... --model claude-haiku-4-5-20251001
+```
+
+The result reports precision, recall, F1, and accuracy overall and per
+definition. Submit the same set with a challenger model to compare quality.
 
 Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
@@ -443,7 +472,12 @@ BACKFILL_WORKER_POLL_INTERVAL_MS=45000
 THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v3
 THEME_NORMALIZATION_BATCH_SIZE=25
 THEME_NORMALIZATION_MAX_BATCHES=100
-NARRATIVE_CLASSIFICATION_PROMPT_VERSION=narrative_classification_v6
+NARRATIVE_CLASSIFICATION_PROMPT_VERSION=narrative_classification_v7
+NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION=candidate_promotion_validation_v2
+NARRATIVE_EVENT_TTL_DAYS=14
+NARRATIVE_ACTIVATION_MIN_STORIES=3
+NARRATIVE_ACTIVATION_MIN_PUBLISHER_OWNERS=3
+NARRATIVE_ACTIVATION_LOOKBACK_DAYS=7
 TREND_LOOKBACK_DAYS=120
 TREND_LOW_HISTORY_DAYS=14
 TREND_STORAGE_DAYS=45
@@ -522,6 +556,7 @@ npm run narratives:classify:batch
 npm run narratives:discover
 npm run narratives:discover:batch
 npm run anthropic:batches:poll
+npm run eval:narratives -- --model claude-haiku-4-5-20251001
 npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run pipeline
@@ -741,6 +776,7 @@ npm run narratives:classify:batch
 npm run narratives:discover
 npm run narratives:discover:batch
 npm run anthropic:batches:poll
+npm run eval:narratives -- --model claude-haiku-4-5-20251001
 npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run brief:daily --workspace @market-themes/workers

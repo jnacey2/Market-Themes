@@ -156,17 +156,35 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
           {narrative.eventLabel ? <p className="label">{narrative.eventLabel}</p> : null}
           <p className="lede">{narrative.proposition}</p>
           <div className="pill-row">
+            {narrative.parentName ? (
+              <span className="pill">
+                {narrative.parentName} · {narrative.dimension}
+              </span>
+            ) : null}
             <span className="pill">
-              {narrative.eligibleDocuments > 0 && !narrative.lowHistory
+              {narrative.coverageStatus === "no_corpus"
+                ? "No recent corpus"
+                : narrative.coverageStatus === "backfill_pending"
+                  ? "Classification pending"
+                  : narrative.coverageStatus === "measured_zero"
+                    ? "Measured zero"
+                    : narrative.eligibleDocuments > 0 && !narrative.lowHistory
                 ? `${narrative.percentileRank}th percentile`
                 : narrative.eligibleDocuments > 0
                   ? "Building baseline"
                   : "No recent coverage"}
             </span>
-            {narrative.eligibleDocuments > 0 && !narrative.lowHistory ? (
+            {narrative.coverageStatus === "measured" &&
+            !narrative.lowHistory ? (
               <span className="pill">z {narrative.zScore.toFixed(1)}</span>
             ) : null}
             <span className="pill">{narrative.publisherOwnerBreadth} publisher groups</span>
+            <span className="pill">{narrative.storyBreadth} unique stories</span>
+            {narrative.eventExpiresAt ? (
+              <span className="pill">
+                event expires {formatNarrativeDate(narrative.eventExpiresAt)}
+              </span>
+            ) : null}
           </div>
           <div className="button-row">
             <Link className="button" href={`/storyboards/${encodeURIComponent(narrative.slug)}`}>
@@ -179,29 +197,33 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
           <div className="metric-row">
             <Metric
               label="Density"
-              value={narrative.eligibleDocuments > 0 ? narrative.density.toFixed(1) : "—"}
+              value={
+                narrative.coverageStatus === "measured" ||
+                narrative.coverageStatus === "measured_zero"
+                  ? narrative.density.toFixed(1)
+                  : "—"
+              }
             />
             <Metric
               label="7d change"
               value={
-                narrative.eligibleDocuments > 0 && !narrative.lowHistory
+                narrative.coverageStatus === "measured" &&
+                !narrative.lowHistory
                   ? signedMetric(narrative.change)
                   : "—"
               }
             />
             <Metric
-              label="Acceleration"
-              value={
-                narrative.eligibleDocuments > 0 && !narrative.lowHistory
-                  ? signedMetric(narrative.acceleration)
-                  : "—"
-              }
+              label="Coverage"
+              value={`${narrative.classificationCoveragePercent}%`}
             />
           </div>
           <p>
-            {narrative.matchedDocuments} matched documents from{" "}
-            {narrative.publisherBreadth} publishers, {narrative.publisherOwnerBreadth} publisher
-            groups, and {narrative.entityBreadth} entities.
+            {narrative.matchedDocuments} matched documents represent{" "}
+            {narrative.storyBreadth} unique stories from{" "}
+            {narrative.publisherOwnerBreadth} publisher groups.{" "}
+            {narrative.eligibleDocuments} of {narrative.corpusDocuments} readable
+            documents are classified; coverage is {narrative.coverageStatus}.
           </p>
         </div>
       </section>
@@ -227,6 +249,12 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
 
 function signedMetric(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
+}
+
+function formatNarrativeDate(value: string) {
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(
+    new Date(value)
+  );
 }
 
 function TrendPanel({ title, trend }: { title: string; trend: TrendSummary | null }) {

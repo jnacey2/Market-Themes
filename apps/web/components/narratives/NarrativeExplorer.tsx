@@ -97,8 +97,22 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
           <strong>{active?.date ?? "No observations"}</strong>
           <span>Density {active?.density.toFixed(1) ?? "0.0"}</span>
           <span>Baseline {active?.baselineMean.toFixed(1) ?? "0.0"}</span>
-          <span>Z-score {narrative.lowHistory ? "—" : active?.zScore.toFixed(1) ?? "0.0"}</span>
-          <span>Change {narrative.lowHistory ? "—" : signed(active?.change ?? 0)}</span>
+          <span>
+            Coverage {narrative.eligibleDocuments}/{narrative.corpusDocuments} (
+            {narrative.classificationCoveragePercent}%)
+          </span>
+          <span>
+            Z-score{" "}
+            {narrative.lowHistory || narrative.coverageStatus !== "measured"
+              ? "—"
+              : active?.zScore.toFixed(1) ?? "0.0"}
+          </span>
+          <span>
+            Change{" "}
+            {narrative.lowHistory || narrative.coverageStatus !== "measured"
+              ? "—"
+              : signed(active?.change ?? 0)}
+          </span>
         </div>
       </div>
 

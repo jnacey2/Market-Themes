@@ -3,6 +3,7 @@ export * from "./anthropic-usage";
 export * from "./candidate-promotion-validation";
 export * from "./extraction";
 export * from "./narrative-classification";
+export * from "./narrative-classification-eval";
 export * from "./narrative-discovery";
 export * from "./prompts";
 export * from "./scoring";
