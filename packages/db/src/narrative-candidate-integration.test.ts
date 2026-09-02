@@ -209,6 +209,15 @@ test(
         metadata: contractValidationMetadata()
       }))
     );
+    await autoApproveNarrativeObservations({
+      model,
+      promptVersion: classificationPromptVersion,
+      minimumMatchScore: 90,
+      minimumDocuments: 2,
+      minimumPublisherOwners: 2,
+      lookbackDays: 30,
+      excludedPublisherOwners: []
+    });
     const lifecycle = await reconcileNarrativeDefinitionLifecycle({
       model,
       promptVersion: classificationPromptVersion,

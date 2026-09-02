@@ -1707,7 +1707,7 @@ export async function promoteNarrativeCandidate(
            review_status, reviewed_at, review_note
          ) values (
            $1, $2, $3, true, $4, $5, $6, $7, $8, $9,
-           $10, $11, $12, $13::jsonb, 'approved', now(), $14
+           $10, $11, $12, $13::jsonb, 'pending', null, $14
          )
          on conflict (narrative_definition_id, document_id, model, prompt_version)
          do nothing`,
@@ -1738,7 +1738,8 @@ export async function promoteNarrativeCandidate(
               ? { autoReview: reviewMetadata }
               : {})
           }),
-          input.note?.trim() || "Approved with discovered narrative candidate."
+          input.note?.trim() ||
+            "Seeded for fresh classification after candidate promotion."
         ]
       );
       observationsCreated += result.rowCount ?? 0;
@@ -1754,13 +1755,14 @@ export async function promoteNarrativeCandidate(
              id, observation_id, observation_key, previous_status, new_status,
              actor_type, review_note, metadata
            ) values (
-             $1, $2, $2, 'pending', 'approved', $3, $4, $5::jsonb
+             $1, $2, $2, 'pending', 'pending', $3, $4, $5::jsonb
            )`,
           [
             `narrative:review-event:${randomUUID()}`,
             observationId,
             reviewActorType,
-            input.note?.trim() || "Approved with discovered narrative candidate.",
+            input.note?.trim() ||
+              "Seeded for fresh classification after candidate promotion.",
             JSON.stringify({
               action: "candidate_promotion",
               candidateId: candidate.id,

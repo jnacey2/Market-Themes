@@ -34,6 +34,7 @@ test("consolidates geopolitical energy narratives into measured dimensions", () 
 
 test("re-reviews incomplete evidence and corrects the Venezuela claim", () => {
   assert.match(migration, /contract-completeness re-review/);
+  assert.match(migration, /promotion-seed-reset/);
   assert.match(migration, /US-Backed Venezuela Oil Concessions/);
   assert.match(migration, /35% parent-company stake/);
   assert.match(migration, /Exclude claims of majority US equity ownership/);

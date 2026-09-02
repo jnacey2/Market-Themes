@@ -198,6 +198,49 @@ on conflict (slug, version) do update set
   event_expires_at = excluded.event_expires_at,
   updated_at = now();
 
+with legacy_promotion_seeds as (
+  select id
+  from narrative_observations
+  where review_status = 'approved'
+    and metadata ? 'promotedFromCandidateId'
+    and metadata->'reviewProvenance' ? 'promotedDefinitionId'
+)
+insert into narrative_review_events (
+  id, observation_id, observation_key, previous_status, new_status,
+  actor_type, review_note, metadata
+)
+select
+  'narrative:review-event:promotion-seed-reset:' || md5(id),
+  id,
+  id,
+  'approved',
+  'pending',
+  'system',
+  'Promotion seed reset to pending until fresh v7 classification confirms the contract.',
+  '{"policyVersion":"narrative_signal_quality_v1"}'::jsonb
+from legacy_promotion_seeds
+on conflict (id) do nothing;
+
+update narrative_observations
+set review_status = 'pending',
+    reviewed_at = null,
+    review_note =
+      'Promotion seed awaiting fresh v7 classification and review.',
+    metadata = metadata ||
+      jsonb_build_object(
+        'promotionSeed', true,
+        'priorPromotionReview', metadata->'reviewProvenance',
+        'reviewProvenance',
+        jsonb_build_object(
+          'actorType', 'system',
+          'reviewedAt', now(),
+          'policyVersion', 'narrative_signal_quality_v1'
+        )
+      )
+where review_status = 'approved'
+  and metadata ? 'promotedFromCandidateId'
+  and metadata->'reviewProvenance' ? 'promotedDefinitionId';
+
 with invalid_observations as (
   select no.id
   from narrative_observations no
