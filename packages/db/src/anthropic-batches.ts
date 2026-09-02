@@ -360,6 +360,91 @@ export async function pruneAnthropicMessageBatches(
   }
 }
 
+export async function reopenRecentIncompleteAnthropicBatch(
+  workload: string,
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    await client.query("begin");
+    const candidate = await client.query<{ id: string }>(
+      `select b.id
+       from anthropic_message_batches b
+       where b.workload = $1
+         and b.status = 'completed'
+         and b.provider_batch_id is not null
+         and b.created_at >= now() - interval '29 days'
+         and exists (
+           select 1
+           from anthropic_message_batch_items i
+           where i.batch_id = b.id
+         )
+         and not exists (
+           select 1
+           from anthropic_message_batch_items i
+           where i.batch_id = b.id
+             and i.status <> 'missing'
+         )
+         and not exists (
+           select 1
+           from anthropic_message_batches active
+           where active.workload = b.workload
+             and active.status in (
+               'submitting',
+               'submission_unknown',
+               'in_progress',
+               'canceling',
+               'processing_results'
+             )
+         )
+       order by b.created_at desc
+       limit 1
+       for update skip locked`,
+      [workload]
+    );
+    const batchId = candidate.rows[0]?.id;
+    if (!batchId) {
+      await client.query("commit");
+      return { reopened: false, batchId: null };
+    }
+    await client.query(
+      `update anthropic_message_batches
+       set status = 'processing_results',
+           completed_at = null,
+           error_message = null,
+           metadata = metadata || jsonb_build_object(
+             'resultRecovery',
+             jsonb_build_object(
+               'reason', 'Previously completed with an empty or incomplete provider result stream.',
+               'reopenedAt', now()
+             )
+           ),
+           updated_at = now()
+       where id = $1`,
+      [batchId]
+    );
+    await client.query(
+      `update anthropic_message_batch_items
+       set status = 'submitted',
+           error_type = null,
+           error_message = null,
+           completed_at = null,
+           updated_at = now()
+       where batch_id = $1
+         and status = 'missing'`,
+      [batchId]
+    );
+    await client.query("commit");
+    return { reopened: true, batchId };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
 export async function getAnalysisDocumentsByIds(
   documentIds: string[],
   databaseUrl = process.env.DATABASE_URL

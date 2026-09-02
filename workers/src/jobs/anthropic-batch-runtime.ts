@@ -13,6 +13,7 @@ import {
   markAnthropicBatchSubmissionUnknown,
   markAnthropicBatchSubmitted,
   pruneAnthropicMessageBatches,
+  reopenRecentIncompleteAnthropicBatch,
   updateAnthropicBatchProviderState,
   type AnthropicMessageBatchRecord
 } from "@market-themes/db";
@@ -24,6 +25,7 @@ const PROVIDER_MAX_BATCH_BYTES = 256 * 1024 * 1024;
 
 type BatchRuntimeStore = {
   prune?(workload: string): Promise<unknown>;
+  reopenIncomplete?(workload: string): Promise<unknown>;
   getActive(workload: string): Promise<AnthropicMessageBatchRecord | null>;
   markSubmitted(
     id: string,
@@ -44,6 +46,8 @@ type BatchRuntimeStore = {
 
 const defaultStore: BatchRuntimeStore = {
   prune: (workload) => pruneAnthropicMessageBatches(workload),
+  reopenIncomplete: (workload) =>
+    reopenRecentIncompleteAnthropicBatch(workload),
   getActive: (workload) => getActiveAnthropicMessageBatch(workload),
   markSubmitted: (id, state) => markAnthropicBatchSubmitted(id, state),
   markSubmissionUnknown: (id, error) =>
@@ -157,6 +161,7 @@ export async function reconcileActiveAnthropicBatch(options: {
   const store = options.store ?? defaultStore;
   const now = options.now ?? Date.now;
   await store.prune?.(options.workload);
+  await store.reopenIncomplete?.(options.workload);
   const batch = await store.getActive(options.workload);
   if (!batch) return { status: "none" as const };
 
@@ -196,7 +201,14 @@ export async function reconcileActiveAnthropicBatch(options: {
 
   try {
     const results = await options.api.results(batch.providerBatchId);
-    const summary = await options.processResults(batch, results);
+    const completeResults = await collectCompleteAnthropicBatchResults(
+      batch,
+      results
+    );
+    const summary = await options.processResults(
+      batch,
+      toAsyncIterable(completeResults)
+    );
     await store.finish({
       id: batch.id,
       status: "completed",
@@ -219,6 +231,43 @@ export async function reconcileActiveAnthropicBatch(options: {
     });
     return { status: "failed" as const, batchId: batch.id };
   }
+}
+
+export async function collectCompleteAnthropicBatchResults(
+  batch: AnthropicMessageBatchRecord,
+  results: AsyncIterable<AnthropicBatchResult>
+) {
+  const expectedIds = new Set(batch.items.map((item) => item.customId));
+  if (expectedIds.size !== batch.requestCount) {
+    throw new Error(
+      `Persisted Anthropic batch manifest has ${expectedIds.size} items but expected ${batch.requestCount}.`
+    );
+  }
+  const received = new Map<string, AnthropicBatchResult>();
+  for await (const result of results) {
+    if (!expectedIds.has(result.custom_id)) {
+      throw new Error(
+        `Anthropic batch returned unknown custom_id ${result.custom_id}.`
+      );
+    }
+    if (received.has(result.custom_id)) {
+      throw new Error(
+        `Anthropic batch returned duplicate custom_id ${result.custom_id}.`
+      );
+    }
+    received.set(result.custom_id, result);
+  }
+  if (received.size !== expectedIds.size) {
+    const missing = [...expectedIds].filter((id) => !received.has(id));
+    throw new Error(
+      `Anthropic batch results are incomplete: received ${received.size}/${expectedIds.size}; missing ${missing.slice(0, 5).join(", ")}.`
+    );
+  }
+  return [...received.values()];
+}
+
+async function* toAsyncIterable<T>(items: T[]) {
+  for (const item of items) yield item;
 }
 
 export async function withAnthropicBatchAdvisoryLock<T>(

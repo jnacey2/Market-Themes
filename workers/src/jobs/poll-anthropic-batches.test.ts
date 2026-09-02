@@ -34,6 +34,13 @@ test("reconciles workloads independently when one poller fails", async () => {
           poll: async () => ({ status: "in_progress" })
         },
         {
+          name: "completed-with-item-failures",
+          poll: async () => ({
+            status: "completed",
+            summary: { failedDocuments: 2 }
+          })
+        },
+        {
           name: "broken",
           poll: async () => {
             throw new Error("provider unavailable");
@@ -42,8 +49,8 @@ test("reconciles workloads independently when one poller fails", async () => {
       ]
     });
 
-    assert.equal(result.batchesCompleted, 1);
-    assert.equal(result.failedWorkloads, 1);
+    assert.equal(result.batchesCompleted, 2);
+    assert.equal(result.failedWorkloads, 2);
     assert.deepEqual(result.workloads.broken, {
       status: "error",
       error: "provider unavailable"

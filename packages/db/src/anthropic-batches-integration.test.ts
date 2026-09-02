@@ -10,7 +10,8 @@ import {
   getAnthropicMessageBatch,
   markAnthropicBatchSubmitted,
   persistDocuments,
-  recordAnthropicBatchItemResult
+  recordAnthropicBatchItemResult,
+  reopenRecentIncompleteAnthropicBatch
 } from "./index";
 
 test(
@@ -100,6 +101,23 @@ test(
       await getActiveAnthropicMessageBatch(`integration-${suffix}`),
       null
     );
+
+    await recordAnthropicBatchItemResult({
+      batchId,
+      customId: "integration-request-1",
+      status: "missing",
+      errorType: "missing_result",
+      errorMessage: "Transiently empty provider result stream."
+    });
+    const reopened = await reopenRecentIncompleteAnthropicBatch(
+      `integration-${suffix}`
+    );
+    assert.deepEqual(reopened, { reopened: true, batchId });
+    const retryable = await getActiveAnthropicMessageBatch(
+      `integration-${suffix}`
+    );
+    assert.equal(retryable?.status, "processing_results");
+    assert.equal(retryable?.items[0].status, "submitted");
   }
 );
 
