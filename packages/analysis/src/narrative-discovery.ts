@@ -115,6 +115,8 @@ export function buildNarrativeDiscoveryRequest(
     maxTokens?: number;
     maxDocumentChars?: number;
     corpusAttention?: CorpusAttentionHint[];
+    promptCaching?: boolean;
+    cacheTtl?: "5m" | "1h";
   }
 ): MessageCreateParamsNonStreaming {
   const maxDocumentChars = options.maxDocumentChars ?? 120_000;
@@ -125,6 +127,29 @@ export function buildNarrativeDiscoveryRequest(
           burstingTerms: options.corpusAttention.slice(0, 25)
         }
       : undefined;
+  // The shared context is identical for every document in a batch, so it goes
+  // first as its own block and can be served from the prompt cache; only the
+  // document block differs per request.
+  const referenceText = JSON.stringify({
+    trackedNarratives: trackedNarratives.map((narrative) => ({
+      slug: narrative.slug,
+      name: narrative.name,
+      proposition: narrative.proposition
+    })),
+    existingCandidates: existingCandidates.slice(0, 100),
+    ...(corpusAttention ? { corpusAttention } : {})
+  });
+  const referenceBlock =
+    options.promptCaching ?? true
+      ? {
+          type: "text" as const,
+          text: referenceText,
+          cache_control: {
+            type: "ephemeral" as const,
+            ...(options.cacheTtl ? { ttl: options.cacheTtl } : {})
+          }
+        }
+      : { type: "text" as const, text: referenceText };
   return {
     model: options.model,
     max_tokens: options.maxTokens ?? 4_000,
@@ -133,25 +158,24 @@ export function buildNarrativeDiscoveryRequest(
     messages: [
       {
         role: "user",
-        content: JSON.stringify({
-          document: {
-            id: document.id,
-            sourceId: document.sourceId,
-            sourceClass: document.sourceClass,
-            title: document.title,
-            publisher: document.publisher,
-            publishedAt: document.publishedAt,
-            tickers: document.tickers,
-            text: document.text.slice(0, maxDocumentChars)
-          },
-          trackedNarratives: trackedNarratives.map((narrative) => ({
-            slug: narrative.slug,
-            name: narrative.name,
-            proposition: narrative.proposition
-          })),
-          existingCandidates: existingCandidates.slice(0, 100),
-          ...(corpusAttention ? { corpusAttention } : {})
-        })
+        content: [
+          referenceBlock,
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              document: {
+                id: document.id,
+                sourceId: document.sourceId,
+                sourceClass: document.sourceClass,
+                title: document.title,
+                publisher: document.publisher,
+                publishedAt: document.publishedAt,
+                tickers: document.tickers,
+                text: document.text.slice(0, maxDocumentChars)
+              }
+            })
+          }
+        ]
       }
     ]
   };

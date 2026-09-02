@@ -144,7 +144,12 @@ async function executeNarrativeDiscoveryBatch(
       document,
       definitions,
       existingCandidates,
-      { model: options.model, corpusAttention }
+      {
+        model: options.model,
+        corpusAttention,
+        promptCaching: process.env.ANTHROPIC_PROMPT_CACHING !== "false",
+        cacheTtl: "1h"
+      }
     )
   }));
   const requestBytes = assertAnthropicBatchRequestLimits(requests);
