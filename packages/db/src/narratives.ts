@@ -1951,7 +1951,7 @@ export async function getNarrativeDetailStatus(
   if (!databaseUrl) return null;
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
-  let definitionId: string | null = null;
+  let definitionId: string | null;
   try {
     const result = await client.query<{ id: string }>(
       `select id

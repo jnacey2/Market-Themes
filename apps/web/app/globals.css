@@ -496,6 +496,199 @@ h3 {
   color: var(--risk);
 }
 
+.lifecycle-badge {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 6px 10px;
+  text-transform: uppercase;
+}
+
+.lifecycle-badge.compact {
+  font-size: 10px;
+  padding: 3px 7px;
+}
+
+.lifecycle-rising {
+  background: rgba(74, 222, 128, 0.14);
+  border-color: rgba(74, 222, 128, 0.35);
+  color: var(--bullish);
+}
+
+.lifecycle-peaking {
+  background: rgba(250, 204, 21, 0.14);
+  border-color: rgba(250, 204, 21, 0.35);
+  color: #fde68a;
+}
+
+.lifecycle-fading {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.35);
+  color: var(--risk);
+}
+
+.lifecycle-emerging {
+  background: rgba(167, 139, 250, 0.16);
+  border-color: rgba(167, 139, 250, 0.4);
+  color: #ddd6fe;
+}
+
+.lifecycle-steady {
+  background: rgba(125, 211, 252, 0.1);
+  border-color: rgba(125, 211, 252, 0.2);
+  color: #bae6fd;
+}
+
+.lifecycle-dormant,
+.lifecycle-unmeasured {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
+}
+
+.lane-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.lane {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.lane-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.lane-header h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.lane-header small {
+  color: var(--muted);
+}
+
+.lane-item {
+  border-top: 1px solid var(--line);
+  color: inherit;
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  text-decoration: none;
+}
+
+.lane-item:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.lane-item strong {
+  font-size: 15px;
+}
+
+.lane-item small,
+.lane-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lane-item:hover strong,
+.lane-item:focus-visible strong {
+  color: var(--accent);
+}
+
+.lane-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.change-list {
+  display: grid;
+  gap: 12px;
+}
+
+.change-row {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 140px 1fr auto;
+  padding: 14px 16px;
+}
+
+.change-row .change-kind {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.change-row .change-detail {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.state-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.lifecycle-badge-link {
+  align-items: center;
+  color: inherit;
+  display: inline-flex;
+  font-weight: 700;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.pill.active {
+  background: rgba(125, 211, 252, 0.28);
+  color: #f0f9ff;
+}
+
+.brief-sections {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.brief-sections h3 {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.brief-sections ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.brief-sections li {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 720px) {
+  .change-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .sparkline {
   height: 54px;
   overflow: visible;
@@ -578,7 +771,8 @@ h3 {
 }
 
 .density-line,
-.baseline-line {
+.baseline-line,
+.attention-line {
   fill: none;
   vector-effect: non-scaling-stroke;
 }
@@ -586,6 +780,43 @@ h3 {
 .density-line {
   stroke: var(--accent-strong);
   stroke-width: 3;
+}
+
+.attention-line {
+  stroke: #c4b5fd;
+  stroke-opacity: 0.75;
+  stroke-width: 1.5;
+}
+
+.chart-legend {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.chart-legend i {
+  border-radius: 2px;
+  display: inline-block;
+  height: 3px;
+  margin-right: 6px;
+  vertical-align: middle;
+  width: 18px;
+}
+
+.legend-density {
+  background: var(--accent-strong);
+}
+
+.legend-attention {
+  background: #c4b5fd;
+}
+
+.legend-baseline {
+  background: var(--muted);
 }
 
 .baseline-line {

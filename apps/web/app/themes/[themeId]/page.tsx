@@ -8,6 +8,10 @@ import {
   type ThemeTrendPoint,
   type TrendSummary
 } from "@market-themes/db";
+import {
+  LifecycleBadge,
+  peakSummary
+} from "../../../components/narratives/LifecycleBadge";
 import { NarrativeExplorer } from "../../../components/narratives/NarrativeExplorer";
 
 export const dynamic = "force-dynamic";
@@ -156,6 +160,10 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
           {narrative.eventLabel ? <p className="label">{narrative.eventLabel}</p> : null}
           <p className="lede">{narrative.proposition}</p>
           <div className="pill-row">
+            <LifecycleBadge state={narrative.lifecycleState} />
+            {narrative.status === "probationary" ? (
+              <span className="pill">probationary</span>
+            ) : null}
             {narrative.parentName ? (
               <span className="pill">
                 {narrative.parentName} · {narrative.dimension}
@@ -168,15 +176,22 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
                   ? "Classification pending"
                   : narrative.coverageStatus === "measured_zero"
                     ? "Measured zero"
-                    : narrative.eligibleDocuments > 0 && !narrative.lowHistory
-                ? `${narrative.percentileRank}th percentile`
-                : narrative.eligibleDocuments > 0
-                  ? "Building baseline"
-                  : "No recent coverage"}
+                    : narrative.lowHistory
+                      ? `${narrative.percentileRank}th percentile (provisional)`
+                      : `${narrative.percentileRank}th percentile`}
             </span>
-            {narrative.coverageStatus === "measured" &&
-            !narrative.lowHistory ? (
-              <span className="pill">z {narrative.zScore.toFixed(1)}</span>
+            {narrative.coverageStatus === "measured" ||
+            narrative.coverageStatus === "measured_zero" ? (
+              <>
+                <span className="pill">
+                  z {narrative.zScore.toFixed(1)}
+                  {narrative.lowHistory ? " (provisional)" : ""}
+                </span>
+                <span className="pill">attention z {narrative.attentionZScore.toFixed(1)}</span>
+              </>
+            ) : null}
+            {peakSummary(narrative) ? (
+              <span className="pill">{peakSummary(narrative)}</span>
             ) : null}
             <span className="pill">{narrative.publisherOwnerBreadth} publisher groups</span>
             <span className="pill">{narrative.storyBreadth} unique stories</span>
@@ -207,9 +222,18 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
             <Metric
               label="7d change"
               value={
-                narrative.coverageStatus === "measured" &&
-                !narrative.lowHistory
+                narrative.coverageStatus === "measured" ||
+                narrative.coverageStatus === "measured_zero"
                   ? signedMetric(narrative.change)
+                  : "—"
+              }
+            />
+            <Metric
+              label="Raw attention"
+              value={
+                narrative.coverageStatus === "measured" ||
+                narrative.coverageStatus === "measured_zero"
+                  ? narrative.attentionDensity.toFixed(1)
                   : "—"
               }
             />
@@ -219,11 +243,15 @@ function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }
             />
           </div>
           <p>
-            {narrative.matchedDocuments} matched documents represent{" "}
+            {narrative.matchedDocuments} approved documents represent{" "}
             {narrative.storyBreadth} unique stories from{" "}
-            {narrative.publisherOwnerBreadth} publisher groups.{" "}
-            {narrative.eligibleDocuments} of {narrative.corpusDocuments} readable
-            documents are classified; coverage is {narrative.coverageStatus}.
+            {narrative.publisherOwnerBreadth} publisher groups;{" "}
+            {narrative.attentionMatchedDocuments} documents matched the classifier
+            before review. {narrative.eligibleDocuments} of {narrative.corpusDocuments}{" "}
+            readable documents are classified; coverage is {narrative.coverageStatus}.
+            {narrative.peakDate
+              ? ` 90-day peak density ${narrative.peakDensity.toFixed(1)} on ${narrative.peakDate}.`
+              : ""}
           </p>
         </div>
       </section>

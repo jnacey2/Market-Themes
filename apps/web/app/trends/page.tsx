@@ -1,11 +1,59 @@
 import Link from "next/link";
-import { getNarrativeBoardStatus } from "@market-themes/db";
+import {
+  getNarrativeBoardStatus,
+  type NarrativeBoardStatus,
+  type NarrativeLifecycleState
+} from "@market-themes/db";
 import { NarrativeSparkline } from "../../components/narratives/NarrativeSparkline";
+import {
+  LifecycleBadge,
+  LIFECYCLE_LABELS,
+  peakSummary
+} from "../../components/narratives/LifecycleBadge";
 
 export const dynamic = "force-dynamic";
 
-export default async function TrendsPage() {
-  const status = await getNarrativeBoardStatus();
+const STATE_FILTERS: Array<NarrativeLifecycleState | "all"> = [
+  "all",
+  "rising",
+  "peaking",
+  "fading",
+  "emerging",
+  "steady",
+  "dormant",
+  "unmeasured"
+];
+
+export default async function TrendsPage({
+  searchParams
+}: {
+  searchParams: Promise<{ state?: string }>;
+}) {
+  const { state: requestedState } = await searchParams;
+  const activeState: NarrativeLifecycleState | "all" = STATE_FILTERS.includes(
+    requestedState as NarrativeLifecycleState
+  )
+    ? (requestedState as NarrativeLifecycleState)
+    : "all";
+  let status: NarrativeBoardStatus;
+  let loadError = false;
+  try {
+    status = await getNarrativeBoardStatus();
+  } catch (error) {
+    console.warn(
+      `[web] narrative board failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    status = { databaseConfigured: Boolean(process.env.DATABASE_URL), latestDate: null, narratives: [] };
+    loadError = true;
+  }
+  const counts = status.narratives.reduce<Record<string, number>>((totals, narrative) => {
+    totals[narrative.lifecycleState] = (totals[narrative.lifecycleState] ?? 0) + 1;
+    return totals;
+  }, {});
+  const visible =
+    activeState === "all"
+      ? status.narratives
+      : status.narratives.filter((narrative) => narrative.lifecycleState === activeState);
 
   return (
     <div className="shell wide-shell">
@@ -22,27 +70,54 @@ export default async function TrendsPage() {
         <div className="panel">
           <p className="eyebrow">Latest measurement</p>
           <h2>{status.latestDate ?? "Awaiting first run"}</h2>
-          <p>{status.narratives.length} versioned narratives tracked.</p>
+          <p>
+            {status.narratives.length} versioned narratives tracked.{" "}
+            <Link href="/changes">What changed</Link>
+          </p>
         </div>
       </section>
 
+      <nav className="pill-row" aria-label="Filter by lifecycle state">
+        {STATE_FILTERS.map((state) => (
+          <Link
+            aria-current={state === activeState ? "page" : undefined}
+            className={`pill${state === activeState ? " active" : ""}`}
+            href={state === "all" ? "/trends" : `/trends?state=${state}`}
+            key={state}
+          >
+            {state === "all" ? "All" : LIFECYCLE_LABELS[state]}{" "}
+            {state === "all" ? status.narratives.length : counts[state] ?? 0}
+          </Link>
+        ))}
+      </nav>
+
       <section className="currents-board" aria-label="Tracked market narratives">
-        <div className="currents-header" aria-hidden="true">
+        <div className="currents-header">
           <span>Narrative</span>
           <span>90-day current</span>
           <span>Now</span>
           <span>Movement</span>
           <span>Breadth</span>
         </div>
-        {status.narratives.length === 0 ? (
+        {loadError ? (
           <div className="panel">
-            <h2>No narrative measurements yet</h2>
+            <h2>The narrative board is temporarily unavailable</h2>
+            <p>The database query did not finish. Refresh in a moment; no measurements were lost.</p>
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="panel">
+            <h2>
+              {status.narratives.length === 0
+                ? "No narrative measurements yet"
+                : `No narratives are ${activeState} right now`}
+            </h2>
             <p>
-              Apply migrations, classify documents, and recompute narrative trends to
-              populate this board.
+              {status.narratives.length === 0
+                ? "Apply migrations, classify documents, and recompute narrative trends to populate this board."
+                : "Clear the filter to see the full board."}
             </p>
           </div>
-        ) : status.narratives.map((narrative) => (
+        ) : visible.map((narrative) => (
           <Link
             className="current-row"
             href={`/themes/${encodeURIComponent(narrative.id)}`}
@@ -53,69 +128,29 @@ export default async function TrendsPage() {
                 {narrative.parentName
                   ? `${narrative.parentName} · ${narrative.dimension ?? "dimension"}`
                   : `${narrative.category} · ${narrative.kind ?? "structural"}`}
+                {narrative.status === "probationary" ? " · probationary" : ""}
               </span>
               <strong>{narrative.name}</strong>
+              <div className="pill-row">
+                <LifecycleBadge compact state={narrative.lifecycleState} />
+                {peakSummary(narrative) ? <small>{peakSummary(narrative)}</small> : null}
+              </div>
               <small>{narrative.proposition}</small>
             </div>
             <NarrativeSparkline points={narrative.history} label={narrative.name} />
             <div className="current-level">
-              <strong>
-                {narrative.coverageStatus === "measured" ||
-                narrative.coverageStatus === "measured_zero"
-                  ? narrative.density.toFixed(1)
-                  : "—"}
-              </strong>
-              <span>
-                {narrative.coverageStatus === "no_corpus"
-                  ? "no readable corpus"
-                  : narrative.coverageStatus === "backfill_pending"
-                  ? "classification pending"
-                  : narrative.coverageStatus === "measured_zero"
-                    ? "0 approved matches · fully classified"
-                    : narrative.eligibleDocuments > 0 && !narrative.lowHistory
-                  ? `${narrative.percentileRank}th pct`
-                  : narrative.eligibleDocuments > 0
-                    ? "building baseline"
-                    : "measured zero"}
-              </span>
+              <strong>{measured(narrative) ? narrative.density.toFixed(1) : "—"}</strong>
+              <span>{levelCaption(narrative)}</span>
             </div>
             <div className="current-movement">
               <strong
                 className={
-                  narrative.coverageStatus !== "measured" ||
-                  narrative.eligibleDocuments === 0 ||
-                  narrative.lowHistory
-                    ? ""
-                    : narrative.change >= 0
-                      ? "rising"
-                      : "fading"
+                  !measured(narrative) ? "" : narrative.change >= 0 ? "rising" : "fading"
                 }
               >
-                {narrative.coverageStatus === "no_corpus"
-                  ? "No recent corpus"
-                  : narrative.coverageStatus === "backfill_pending"
-                  ? "Classification pending"
-                  : narrative.coverageStatus === "measured_zero"
-                    ? "Measured zero"
-                    : narrative.eligibleDocuments > 0 && !narrative.lowHistory
-                  ? `${narrative.change >= 0 ? "↑" : "↓"} ${Math.abs(narrative.change).toFixed(1)}`
-                  : narrative.eligibleDocuments > 0
-                    ? "Baseline pending"
-                    : "Measured zero"}
+                {movementLabel(narrative)}
               </strong>
-              <span>
-                {narrative.coverageStatus === "no_corpus"
-                  ? "ingest recent sources"
-                  : narrative.coverageStatus === "backfill_pending"
-                    ? "movement suppressed"
-                    : narrative.coverageStatus === "measured_zero"
-                      ? "no approved matches"
-                  : narrative.eligibleDocuments > 0 && !narrative.lowHistory
-                  ? `accel ${signed(narrative.acceleration)}`
-                  : narrative.eligibleDocuments > 0
-                    ? "movement suppressed"
-                    : "no approved matches"}
-              </span>
+              <span>{movementCaption(narrative)}</span>
             </div>
             <div className="current-breadth">
               <strong>{narrative.storyBreadth}</strong>
@@ -124,7 +159,9 @@ export default async function TrendsPage() {
                 {narrative.publisherOwnerBreadth} publisher groups ·{" "}
                 {narrative.eligibleDocuments}/{narrative.corpusDocuments} documents classified
               </small>
-              {narrative.lowHistory ? <em>building baseline</em> : null}
+              {narrative.lowHistory && measured(narrative) ? (
+                <em>thin baseline · {narrative.baselineWindows} comparison windows</em>
+              ) : null}
             </div>
           </Link>
         ))}
@@ -145,6 +182,40 @@ export default async function TrendsPage() {
       </section>
     </div>
   );
+}
+
+type BoardNarrative = NarrativeBoardStatus["narratives"][number];
+
+function measured(narrative: BoardNarrative) {
+  return (
+    narrative.coverageStatus === "measured" ||
+    narrative.coverageStatus === "measured_zero"
+  );
+}
+
+function levelCaption(narrative: BoardNarrative) {
+  if (narrative.coverageStatus === "no_corpus") return "no readable corpus";
+  if (narrative.coverageStatus === "backfill_pending") return "classification pending";
+  const attention = `attention ${narrative.attentionDensity.toFixed(1)} · z ${narrative.attentionZScore.toFixed(1)}`;
+  if (narrative.coverageStatus === "measured_zero") return `0 approved · ${attention}`;
+  return narrative.lowHistory
+    ? `${attention} · provisional`
+    : `${narrative.percentileRank}th pct · ${attention}`;
+}
+
+function movementLabel(narrative: BoardNarrative) {
+  if (narrative.coverageStatus === "no_corpus") return "No recent corpus";
+  if (narrative.coverageStatus === "backfill_pending") return "Classification pending";
+  return `${narrative.change >= 0 ? "↑" : "↓"} ${Math.abs(narrative.change).toFixed(1)}`;
+}
+
+function movementCaption(narrative: BoardNarrative) {
+  if (narrative.coverageStatus === "no_corpus") return "ingest recent sources";
+  if (narrative.coverageStatus === "backfill_pending") return "movement suppressed";
+  const z = narrative.lowHistory
+    ? `z ${narrative.zScore.toFixed(1)} (provisional)`
+    : `z ${narrative.zScore.toFixed(1)}`;
+  return `${z} · accel ${signed(narrative.acceleration)}`;
 }
 
 function signed(value: number) {
