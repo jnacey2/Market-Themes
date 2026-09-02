@@ -9,7 +9,7 @@ import type {
 } from "@market-themes/analysis";
 import {
   createDatabaseClient,
-  getActiveNarrativeDefinitions,
+  getTrackedNarrativeDefinitions,
   persistDocuments
 } from "@market-themes/db";
 import {
@@ -103,7 +103,7 @@ test(
     );
     assert.equal(reconciled.status, "completed");
 
-    const definitions = await getActiveNarrativeDefinitions();
+    const definitions = await getTrackedNarrativeDefinitions();
     const client = createDatabaseClient();
     await client.connect();
     try {

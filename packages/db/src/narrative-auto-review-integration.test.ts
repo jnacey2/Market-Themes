@@ -35,6 +35,7 @@ test(
     const fixtures = [
       fixture("pricing-a", "Publisher A", `owner-a:${suffix}`, 95, pricingPower.id),
       fixture("pricing-b", "Publisher B", `owner-b:${suffix}`, 92, pricingPower.id),
+      fixture("pricing-echo", "Publisher Echo", `owner-echo:${suffix}`, 91, pricingPower.id),
       fixture("pricing-low", "Publisher C", `owner-c:${suffix}`, 89, pricingPower.id),
       fixture("pricing-youtube", "YouTube Channel", `channel:${suffix}`, 99, pricingPower.id, {
         url: "https://youtu.be/example-auto-review-video"
@@ -75,6 +76,21 @@ test(
       ]);
       assert.equal(persisted.insertedDocuments, 1);
     }
+    const storyClient = createDatabaseClient();
+    await storyClient.connect();
+    try {
+      await storyClient.query(
+        `update documents
+         set near_duplicate_key = $2
+         where id = any($1::text[])`,
+        [
+          [`pricing-b:${suffix}`, `pricing-echo:${suffix}`],
+          `shared-pricing-story:${suffix}`
+        ]
+      );
+    } finally {
+      await storyClient.end();
+    }
 
     const observations: NarrativeObservationInput[] = fixtures.map((item) => ({
       id: `auto-review-observation:${item.key}:${suffix}`,
@@ -89,7 +105,14 @@ test(
       interpretation: "The exact quotation supports the tracked proposition.",
       affectedEntities: ["Integration"],
       model,
-      promptVersion
+      promptVersion,
+      metadata: {
+        contractValidation: {
+          satisfied: true,
+          inclusionCriteriaSatisfied: ["Integration fixture"],
+          exclusionCriteriaTriggered: []
+        }
+      }
     }));
     await persistNarrativeObservations(observations);
 
@@ -111,6 +134,10 @@ test(
     );
     assert.equal(status(queue, `auto-review-observation:pricing-a:${suffix}`), "approved");
     assert.equal(status(queue, `auto-review-observation:pricing-b:${suffix}`), "approved");
+    assert.equal(
+      status(queue, `auto-review-observation:pricing-echo:${suffix}`),
+      "pending"
+    );
     assert.equal(status(queue, `auto-review-observation:pricing-low:${suffix}`), "pending");
     assert.equal(
       status(queue, `auto-review-observation:pricing-youtube:${suffix}`),
@@ -191,6 +218,14 @@ test(
       "pending"
     );
 
+    await assert.rejects(
+      () =>
+        reviewNarrativeObservation({
+          id: `auto-review-observation:pricing-a:${suffix}`,
+          status: "rejected"
+        }),
+      /review note is required/
+    );
     await reviewNarrativeObservation({
       id: `auto-review-observation:pricing-a:${suffix}`,
       status: "rejected",

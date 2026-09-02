@@ -16,7 +16,7 @@ import {
 } from "./structured-output";
 import { logAnthropicUsage } from "./anthropic-usage";
 
-export const narrativeClassificationPromptVersion = "narrative_classification_v6";
+export const narrativeClassificationPromptVersion = "narrative_classification_v7";
 
 export const narrativeClassificationSystemPrompt =
   `Classify a source document against stable market-narrative propositions.
@@ -34,9 +34,14 @@ Do not infer structural energy-demand growth from short-term weather-driven cons
 For directional propositions, contradictory evidence is not supporting evidence; omit the definition.
 The evidenceSnippet must independently support the match without facts added from elsewhere.
 Interpretation may explain the quote but must not introduce facts absent from it.
-Every returned observation must use matched=true, matchScore 70-100, and an
-evidenceSnippet copied exactly from the source. Return an empty observations array
-when no definitions match. When uncertain, omit the definition. Do not make trade recommendations.
+Before returning a match, explicitly audit the complete inclusion and exclusion
+contract. contractSatisfied is true only when the quotation independently supports
+every required causal leg. List the satisfied inclusion criteria and any triggered
+exclusions. Never return a match when an exclusion is triggered.
+Every returned observation must use matched=true, contractSatisfied=true,
+matchScore 70-100, and an evidenceSnippet copied exactly from the source. Return an
+empty observations array when no definitions match. When uncertain, omit the definition.
+Do not make trade recommendations.
 Stance is risk, bullish, mixed, or neutral.`;
 
 type RawObservation = {
@@ -46,6 +51,9 @@ type RawObservation = {
   stance?: string;
   riskTone?: number;
   bullishTone?: number;
+  contractSatisfied?: boolean;
+  inclusionCriteriaSatisfied?: string[];
+  exclusionCriteriaTriggered?: string[];
   evidenceSnippet?: string;
   interpretation?: string;
   affectedEntities?: string[];
@@ -181,7 +189,8 @@ export function buildNarrativeClassificationContent(
       inclusionGuidance: definition.inclusionGuidance,
       exclusionGuidance: definition.exclusionGuidance,
       positiveExamples: definition.positiveExamples,
-      negativeExamples: definition.negativeExamples
+      negativeExamples: definition.negativeExamples,
+      evidenceContract: definition.metadata?.evidenceContract ?? null
     }))
   });
   const referenceBlock = promptCaching
@@ -223,13 +232,20 @@ export function normalizeObservation(
   promptVersion: string
 ): NarrativeObservationInput {
   const matchScore = clamp(raw?.matchScore, 0, 100);
-  const requestedMatch = raw?.matched === true && matchScore >= 70;
+  const exclusionCriteriaTriggered = validateStringArray(
+    raw?.exclusionCriteriaTriggered
+  );
+  const requestedMatch =
+    raw?.matched === true &&
+    raw.contractSatisfied === true &&
+    exclusionCriteriaTriggered.length === 0 &&
+    matchScore >= 70;
   const evidence = requestedMatch ? String(raw?.evidenceSnippet ?? "").trim().slice(0, 800) : "";
   const matched =
     requestedMatch &&
     evidence.length > 0 &&
     document.text.includes(evidence) &&
-    passesDefinitionGuard(definition.slug, evidence);
+    passesNarrativeEvidenceContract(definition, evidence);
   const stance = isStance(raw?.stance) ? raw.stance : "neutral";
 
   return {
@@ -251,8 +267,38 @@ export function normalizeObservation(
       : [],
     model,
     promptVersion,
-    metadata: { definitionVersion: definition.version }
+    metadata: {
+      definitionVersion: definition.version,
+      contractValidation: {
+        satisfied: raw?.contractSatisfied === true,
+        inclusionCriteriaSatisfied: validateStringArray(
+          raw?.inclusionCriteriaSatisfied
+        ),
+        exclusionCriteriaTriggered
+      }
+    }
   };
+}
+
+export function passesNarrativeEvidenceContract(
+  definition: NarrativeDefinition,
+  evidence: string
+) {
+  if (!passesDefinitionGuard(definition.slug, evidence)) return false;
+  const contract = definition.metadata?.evidenceContract;
+  if (!isObject(contract)) return true;
+  const groups = contract.requiredTermGroups;
+  if (!Array.isArray(groups)) return true;
+  const normalizedEvidence = normalizeForComparison(evidence);
+  return groups.every(
+    (group) =>
+      Array.isArray(group) &&
+      group.some(
+        (term) =>
+          typeof term === "string" &&
+          normalizedEvidence.includes(normalizeForComparison(term))
+      )
+  );
 }
 
 export function passesDefinitionGuard(slug: string, evidence: string) {

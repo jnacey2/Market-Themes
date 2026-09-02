@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   calculateNarrativeTrendSeries,
+  deriveNarrativeCoverageState,
   type NarrativeMetricObservation
 } from "./narrative-metrics";
 
@@ -30,7 +31,31 @@ test("counts publisher owners independently from syndicated publishers", () => {
 
   assert.equal(point.publisherBreadth, 2);
   assert.equal(point.publisherOwnerBreadth, 1);
+  assert.equal(point.storyBreadth, 2);
   assert.equal(point.lowHistory, true);
+});
+
+test("counts syndicated copies as one unique story", () => {
+  const rows = [
+    {
+      ...observation("a", "newspaper", true, "Outlet A", "Owner A"),
+      storyFingerprint: "shared-wire-story"
+    },
+    {
+      ...observation("b", "newspaper", true, "Outlet B", "Owner B"),
+      storyFingerprint: "shared-wire-story"
+    }
+  ];
+  const [point] = calculateNarrativeTrendSeries(
+    rows,
+    ["2026-01-01"],
+    1,
+    2
+  );
+
+  assert.equal(point.matchedDocuments, 2);
+  assert.equal(point.publisherOwnerBreadth, 2);
+  assert.equal(point.storyBreadth, 1);
 });
 
 test("does not rank an uncovered or unmatched window as unusual", () => {
@@ -59,6 +84,79 @@ test("does not rank an uncovered or unmatched window as unusual", () => {
   assert.equal(unmatched.zScore, 0);
 });
 
+test("suppresses movement while classification coverage is incomplete", () => {
+  const rows = [
+    observation("classified", "newspaper", true, "Publisher", "Owner")
+  ];
+  const [point] = calculateNarrativeTrendSeries(
+    rows,
+    ["2026-01-01"],
+    1,
+    1,
+    [
+      {
+        date: "2026-01-01",
+        documentId: "classified",
+        sourceClass: "newspaper"
+      },
+      {
+        date: "2026-01-01",
+        documentId: "pending",
+        sourceClass: "newspaper"
+      }
+    ]
+  );
+
+  assert.equal(point.coverageState, "backfill_pending");
+  assert.equal(point.classificationCoveragePercent, 50);
+  assert.equal(point.lowHistory, true);
+  assert.equal(point.zScore, 0);
+  assert.equal(point.change, 0);
+});
+
+test("distinguishes backfill, measured zero, measured, and empty coverage", () => {
+  assert.deepEqual(deriveNarrativeCoverageState({
+    corpusEligibleDocuments: 0,
+    classifiedDocuments: 0,
+    matchedDocuments: 0
+  }), {
+    classificationCoveragePercent: 0,
+    coverageState: "no_corpus"
+  });
+  assert.deepEqual(deriveNarrativeCoverageState({
+    corpusEligibleDocuments: 10,
+    classifiedDocuments: 0,
+    matchedDocuments: 0
+  }), {
+    classificationCoveragePercent: 0,
+    coverageState: "backfill_pending"
+  });
+  assert.deepEqual(deriveNarrativeCoverageState({
+    corpusEligibleDocuments: 10,
+    classifiedDocuments: 8,
+    matchedDocuments: 1
+  }), {
+    classificationCoveragePercent: 80,
+    coverageState: "backfill_pending"
+  });
+  assert.deepEqual(deriveNarrativeCoverageState({
+    corpusEligibleDocuments: 10,
+    classifiedDocuments: 10,
+    matchedDocuments: 0
+  }), {
+    classificationCoveragePercent: 100,
+    coverageState: "measured_zero"
+  });
+  assert.deepEqual(deriveNarrativeCoverageState({
+    corpusEligibleDocuments: 10,
+    classifiedDocuments: 10,
+    matchedDocuments: 1
+  }), {
+    classificationCoveragePercent: 100,
+    coverageState: "measured"
+  });
+});
+
 function observation(
   documentId: string,
   sourceClass: string,
@@ -76,6 +174,7 @@ function observation(
     bullishTone: 0,
     publisherId,
     publisherOwner,
+    storyFingerprint: documentId,
     sourceClass,
     affectedEntities: matched ? ["Example"] : []
   };

@@ -111,6 +111,7 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
 
   const canonicalUrl = canonicalizeUrl(url);
   const publisherId = slugPublisher(config.name);
+  const wireOrigin = detectWireOrigin(`${body} ${fullBody}`);
   return {
     id: `${config.id}:${createHash("sha256").update(canonicalUrl).digest("hex").slice(0, 24)}`,
     sourceId: config.id,
@@ -118,11 +119,13 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
     title,
     publisher: config.name,
     publisherId,
-    publisherOwner: resolvePublisherOwner({
-      url,
-      name: config.name,
-      fallback: config.publisherOwner ?? config.name
-    }),
+    publisherOwner:
+      wireOrigin ??
+      resolvePublisherOwner({
+        url,
+        name: config.name,
+        fallback: config.publisherOwner ?? config.name
+      }),
     url,
     canonicalUrl,
     publishedAt,
@@ -136,10 +139,37 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
     metadata: {
       feedUrl: config.url,
       publisherOwner: config.publisherOwner ?? config.name,
+      wireOrigin,
       sourceName: config.name,
       termsNotes: config.termsNotes
     }
   };
+}
+
+export function detectWireOrigin(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const leading = normalized.slice(0, 320);
+  if (
+    /(?:^|[-—:(]\s*)reuters(?:\s*[-—):]|$)/i.test(leading) ||
+    /\breuters reported\b/i.test(normalized)
+  ) {
+    return "reuters";
+  }
+  if (
+    /(?:^|[-—:(]\s*)(?:associated press|ap)(?:\s*[-—):]|$)/i.test(
+      leading
+    ) ||
+    /\b(?:associated press|the ap) reported\b/i.test(normalized)
+  ) {
+    return "associated-press";
+  }
+  if (
+    /(?:^|[-—:(]\s*)afp(?:\s*[-—):]|$)/i.test(leading) ||
+    /\bafp reported\b/i.test(normalized)
+  ) {
+    return "afp";
+  }
+  return null;
 }
 
 function object(value: unknown) {

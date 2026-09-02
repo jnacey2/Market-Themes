@@ -23,6 +23,22 @@ import type {
 export async function getActiveNarrativeDefinitions(
   databaseUrl = process.env.DATABASE_URL
 ): Promise<NarrativeDefinition[]> {
+  return getNarrativeDefinitionsByStatuses(["active"], databaseUrl);
+}
+
+export async function getTrackedNarrativeDefinitions(
+  databaseUrl = process.env.DATABASE_URL
+): Promise<NarrativeDefinition[]> {
+  return getNarrativeDefinitionsByStatuses(
+    ["active", "probationary"],
+    databaseUrl
+  );
+}
+
+async function getNarrativeDefinitionsByStatuses(
+  statuses: string[],
+  databaseUrl = process.env.DATABASE_URL
+): Promise<NarrativeDefinition[]> {
   if (!databaseUrl) return [];
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
@@ -41,13 +57,27 @@ export async function getActiveNarrativeDefinitions(
       status: string;
       kind: NarrativeDefinition["kind"];
       event_label: string | null;
+      metadata: Record<string, unknown>;
+      parent_definition_id: string | null;
+      merged_into_definition_id: string | null;
+      parent_name: string | null;
+      dimension: string | null;
+      event_expires_at: string | null;
+      activated_at: string | null;
     }>(
-      `select id, slug, version, name, proposition, category,
-              inclusion_guidance, exclusion_guidance,
-              positive_examples, negative_examples, status, kind, event_label
-       from narrative_definitions
-       where status = 'active'
-       order by category, name`
+      `select nd.id, nd.slug, nd.version, nd.name, nd.proposition, nd.category,
+              nd.inclusion_guidance, nd.exclusion_guidance,
+              nd.positive_examples, nd.negative_examples, nd.status, nd.kind,
+              nd.event_label, nd.metadata, nd.parent_definition_id,
+              nd.merged_into_definition_id,
+              parent.name as parent_name, nd.dimension,
+              nd.event_expires_at::text, nd.activated_at::text
+       from narrative_definitions nd
+       left join narrative_definitions parent
+         on parent.id = nd.parent_definition_id
+       where nd.status = any($1::text[])
+       order by coalesce(parent.name, nd.name), nd.dimension nulls first, nd.name`,
+      [statuses]
     );
     return result.rows.map(mapDefinition);
   } finally {
@@ -110,7 +140,7 @@ export async function selectDocumentsForNarrativeClassification(
            and exists (
              select 1
              from narrative_definitions nd
-             where nd.status = 'active'
+             where nd.status in ('active', 'probationary')
                and not exists (
                  select 1
                  from narrative_observations no
@@ -118,6 +148,7 @@ export async function selectDocumentsForNarrativeClassification(
                    and no.document_id = d.id
                    and no.model = $1
                    and no.prompt_version = $2
+                   and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
                )
            )
        )
@@ -182,7 +213,7 @@ export async function countNarrativeClassificationBacklog(
          and exists (
            select 1
            from narrative_definitions nd
-           where nd.status = 'active'
+           where nd.status in ('active', 'probationary')
              and not exists (
                select 1
                from narrative_observations no
@@ -190,6 +221,7 @@ export async function countNarrativeClassificationBacklog(
                  and no.document_id = d.id
                  and no.model = $1
                  and no.prompt_version = $2
+                 and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
              )
          )
        group by d.source_class
@@ -411,6 +443,24 @@ export async function reviewNarrativeObservation(
     if (!previous.rows[0]) {
       throw new Error("Matched narrative observation not found.");
     }
+    const previousActor =
+      (
+        previous.rows[0].metadata.reviewProvenance as
+          | { actorType?: unknown }
+          | undefined
+      )?.actorType ??
+      (previous.rows[0].metadata.autoReview !== undefined
+        ? "automatic"
+        : undefined);
+    if (
+      previousActor === "automatic" &&
+      previous.rows[0].review_status !== input.status &&
+      !input.note?.trim()
+    ) {
+      throw new Error(
+        "A review note is required when overriding an automatic decision."
+      );
+    }
     const provenance = {
       reviewProvenance: {
         actorType: "human",
@@ -545,6 +595,178 @@ export async function retractNarrativeDefinition(
   }
 }
 
+export async function reconcileNarrativeDefinitionLifecycle(
+  options: {
+    model?: string;
+    promptVersion?: string;
+    minimumStories?: number;
+    minimumPublisherOwners?: number;
+    lookbackDays?: number;
+  } = {},
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const model =
+    options.model ??
+    process.env.ANTHROPIC_MODEL ??
+    "claude-haiku-4-5-20251001";
+  const promptVersion =
+    options.promptVersion ??
+    process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+    "narrative_classification_v7";
+  const minimumStories = positiveInteger(
+    options.minimumStories ??
+      Number(process.env.NARRATIVE_ACTIVATION_MIN_STORIES ?? 3),
+    3
+  );
+  const minimumPublisherOwners = positiveInteger(
+    options.minimumPublisherOwners ??
+      Number(process.env.NARRATIVE_ACTIVATION_MIN_PUBLISHER_OWNERS ?? 3),
+    3
+  );
+  const lookbackDays = positiveInteger(
+    options.lookbackDays ??
+      Number(process.env.NARRATIVE_ACTIVATION_LOOKBACK_DAYS ?? 7),
+    7
+  );
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    await client.query("begin");
+    const expired = await client.query<{ narrative_definition_id: string }>(
+      `with changed as (
+         update narrative_definitions
+         set status = 'expired',
+             metadata = metadata || jsonb_build_object(
+               'expiration',
+               jsonb_build_object(
+                 'actorType', 'system',
+                 'expiredAt', now(),
+                 'eventExpiresAt', event_expires_at
+               )
+             ),
+             updated_at = now()
+         where kind = 'event'
+           and status in ('active', 'probationary')
+           and event_expires_at is not null
+           and event_expires_at <= now()
+         returning id
+       )
+       insert into narrative_definition_events (
+         id, narrative_definition_id, action, actor_type, reason, metadata
+       )
+       select
+         'narrative:definition:event:expired:' ||
+           md5(id || clock_timestamp()::text),
+         id,
+         'expired',
+         'system',
+         'Event reached its configured publication expiry.',
+         jsonb_build_object('eventExpiresAt', now())
+       from changed
+       returning narrative_definition_id`
+    );
+
+    const activated = await client.query<{
+      narrative_definition_id: string;
+    }>(
+      `with qualifying as (
+         select nd.id
+         from narrative_definitions nd
+         join narrative_observations no
+           on no.narrative_definition_id = nd.id
+         join documents d on d.id = no.document_id
+         join document_texts dt on dt.document_id = d.id
+         where nd.status = 'probationary'
+           and (nd.event_expires_at is null or nd.event_expires_at > now())
+           and no.matched
+           and no.review_status = 'approved'
+           and no.model = $1
+           and no.prompt_version = $2
+           and position(no.evidence_snippet in dt.content) > 0
+           and d.published_at >= now() - ($3::text || ' days')::interval
+           and d.published_at <= now()
+           and lower(coalesce(d.metadata->>'content', '')) <> 'preview'
+           and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
+           and no.metadata->'contractValidation'->>'satisfied' = 'true'
+         group by nd.id
+         having count(distinct coalesce(
+                  nullif(d.near_duplicate_key, ''),
+                  nullif(d.metadata->>'wireStoryId', ''),
+                  md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+                )) >= $4
+            and count(distinct lower(coalesce(
+                  nullif(d.publisher_owner, ''),
+                  nullif(d.publisher_id, ''),
+                  d.publisher
+                ))) >= $5
+       ),
+       changed as (
+         update narrative_definitions nd
+         set status = 'active',
+             activated_at = now(),
+             metadata = metadata || jsonb_build_object(
+               'activation',
+               jsonb_build_object(
+                 'actorType', 'system',
+                 'activatedAt', now(),
+                 'model', $1::text,
+                 'promptVersion', $2::text,
+                 'minimumStories', $4::integer,
+                 'minimumPublisherOwners', $5::integer,
+                 'lookbackDays', $3::integer
+               )
+             ),
+             updated_at = now()
+         from qualifying q
+         where nd.id = q.id
+         returning nd.id
+       )
+       insert into narrative_definition_events (
+         id, narrative_definition_id, action, actor_type, reason, metadata
+       )
+       select
+         'narrative:definition:event:activated:' ||
+           md5(id || clock_timestamp()::text),
+         id,
+         'activated',
+         'system',
+         'Probation completed with current-version unique-story and publisher breadth.',
+         jsonb_build_object(
+           'model', $1::text,
+           'promptVersion', $2::text,
+           'minimumStories', $4::integer,
+           'minimumPublisherOwners', $5::integer,
+           'lookbackDays', $3::integer
+         )
+       from changed
+       returning narrative_definition_id`,
+      [
+        model,
+        promptVersion,
+        lookbackDays,
+        minimumStories,
+        minimumPublisherOwners
+      ]
+    );
+    await client.query("commit");
+    return {
+      activatedDefinitions: activated.rowCount ?? 0,
+      activatedDefinitionIds: activated.rows.map(
+        (row) => row.narrative_definition_id
+      ),
+      expiredDefinitions: expired.rowCount ?? 0,
+      expiredDefinitionIds: expired.rows.map(
+        (row) => row.narrative_definition_id
+      )
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
 export type NarrativeAutoReviewOptions = {
   model?: string;
   promptVersion?: string;
@@ -566,7 +788,7 @@ export async function autoApproveNarrativeObservations(
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-    "narrative_classification_v6";
+    "narrative_classification_v7";
   const minimumMatchScore =
     options.minimumMatchScore ??
     Number(process.env.NARRATIVE_AUTO_REVIEW_MIN_SCORE ?? 90);
@@ -588,7 +810,7 @@ export async function autoApproveNarrativeObservations(
   ).map((value) => value.toLowerCase());
   const reviewNote =
     `Auto-approved: score >= ${minimumMatchScore}; corroborated by >= ` +
-    `${minimumDocuments} documents from >= ${minimumPublisherOwners} independent ` +
+    `${minimumDocuments} unique stories from >= ${minimumPublisherOwners} ` +
     `publisher groups within ${lookbackDays} days.`;
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
@@ -598,23 +820,34 @@ export async function autoApproveNarrativeObservations(
       narratives_touched: string;
       observation_ids: string[];
     }>(
-      `with corroborating as (
+      `with eligible as (
          select no.id, no.narrative_definition_id, no.document_id,
                 lower(coalesce(
                   nullif(d.publisher_owner, ''),
                   nullif(d.publisher_id, ''),
                   d.publisher
-                )) as publisher_owner
+                )) as publisher_owner,
+                coalesce(
+                  nullif(d.near_duplicate_key, ''),
+                  nullif(d.metadata->>'wireStoryId', ''),
+                  md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+                ) as story_fingerprint,
+                no.match_score,
+                d.published_at
          from narrative_observations no
          join documents d on d.id = no.document_id
+         join document_texts dt on dt.document_id = d.id
          join narrative_definitions nd on nd.id = no.narrative_definition_id
          where no.matched
-           and nd.status = 'active'
+           and nd.status in ('active', 'probationary')
            and no.review_status in ('pending', 'approved')
            and no.model = $1
            and no.prompt_version = $2
            and no.match_score >= $3
            and no.evidence_snippet <> ''
+           and position(no.evidence_snippet in dt.content) > 0
+           and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
+           and no.metadata->'contractValidation'->>'satisfied' = 'true'
            and d.published_at >= now() - ($4::text || ' days')::interval
            and d.published_at <= now()
            and lower(coalesce(d.metadata->>'content', '')) <> 'preview'
@@ -634,12 +867,25 @@ export async function autoApproveNarrativeObservations(
                 or lower(d.url) like '%.' || blocked.value || ':%/%'
            )
        ),
+       corroborating as (
+         select id, narrative_definition_id, document_id,
+                publisher_owner, story_fingerprint
+         from (
+           select eligible.*,
+                  row_number() over (
+                    partition by narrative_definition_id, story_fingerprint
+                    order by match_score desc, published_at desc, id
+                  ) as story_rank
+           from eligible
+         ) ranked
+         where story_rank = 1
+       ),
        qualified as (
          select narrative_definition_id,
                 array_agg(id order by id) as corroborating_observation_ids
          from corroborating
          group by narrative_definition_id
-         having count(distinct document_id) >= $6
+         having count(distinct story_fingerprint) >= $6
             and count(distinct publisher_owner) >= $7
        ),
        updated as (
@@ -732,7 +978,7 @@ export async function getNarrativeReviewQueue(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeReviewQueue> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v6";
+    configuredPromptVersion ?? "narrative_classification_v7";
   if (!databaseUrl) {
     return {
       databaseConfigured: false,
@@ -852,13 +1098,32 @@ export async function recomputeNarrativeTrends(
     const promptVersion =
       options.promptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-      "narrative_classification_v6";
+      "narrative_classification_v7";
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
     const definitions = await client.query<{ id: string }>(
-      "select id from narrative_definitions where status = 'active'"
+      "select id from narrative_definitions where status in ('active', 'probationary')"
     );
+    const corpus = await client.query<{
+      date: string;
+      document_id: string;
+      source_class: string;
+    }>(
+      `select d.published_at::date::text as date,
+              d.id as document_id, d.source_class
+       from documents d
+       join document_texts dt on dt.document_id = d.id
+       where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+         and length(btrim(dt.content)) > 0
+         and d.published_at::date between $1::date and $2::date`,
+      [startDate, asOfDate]
+    );
+    const corpusDocuments = corpus.rows.map((row) => ({
+      date: row.date,
+      documentId: row.document_id,
+      sourceClass: row.source_class
+    }));
     const rows = await client.query<{
       narrative_definition_id: string;
       date: string;
@@ -869,9 +1134,11 @@ export async function recomputeNarrativeTrends(
       bullish_tone: number;
       publisher_id: string | null;
       publisher_owner: string | null;
+      story_fingerprint: string;
       source_class: string;
       affected_entities: string[];
       review_status: NarrativeReviewStatus;
+      evidence_current: boolean;
     }>(
       `with latest_observations as (
          select distinct on (narrative_definition_id, document_id) *
@@ -884,9 +1151,16 @@ export async function recomputeNarrativeTrends(
               no.risk_tone::float, no.bullish_tone::float,
               coalesce(d.publisher_id, d.publisher) as publisher_id,
               coalesce(d.publisher_owner, d.publisher) as publisher_owner,
-              d.source_class, no.affected_entities, no.review_status
+              coalesce(
+                nullif(d.near_duplicate_key, ''),
+                nullif(d.metadata->>'wireStoryId', ''),
+                md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+              ) as story_fingerprint,
+              d.source_class, no.affected_entities, no.review_status,
+              position(no.evidence_snippet in dt.content) > 0 as evidence_current
        from latest_observations no
        join documents d on d.id = no.document_id
+       join document_texts dt on dt.document_id = d.id
        where d.published_at::date between $1::date and $2::date`,
       [startDate, asOfDate, promptVersion]
     );
@@ -901,12 +1175,16 @@ export async function recomputeNarrativeTrends(
             narrativeDefinitionId: row.narrative_definition_id,
             date: row.date,
             documentId: row.document_id,
-            matched: row.matched && row.review_status === "approved",
+            matched:
+              row.matched &&
+              row.review_status === "approved" &&
+              row.evidence_current,
             matchScore: row.match_score,
             riskTone: row.risk_tone,
             bullishTone: row.bullish_tone,
             publisherId: row.publisher_id ?? "",
             publisherOwner: row.publisher_owner ?? "",
+            storyFingerprint: row.story_fingerprint,
             sourceClass: row.source_class,
             affectedEntities: row.affected_entities
           }));
@@ -916,7 +1194,8 @@ export async function recomputeNarrativeTrends(
             observations,
             dates,
             window === "7d" ? 7 : 30,
-            lowHistoryDays
+            lowHistoryDays,
+            corpusDocuments
           );
           for (const point of points) {
             await client.query(
@@ -925,11 +1204,14 @@ export async function recomputeNarrativeTrends(
                  baseline_mean, baseline_stddev, z_score, percentile_rank,
                  change_value, acceleration, risk_tone, bullish_tone,
                  eligible_documents, matched_documents, publisher_breadth,
-                 publisher_owner_breadth, source_class_breadth, entity_breadth,
-                 low_history, prompt_version
+                 publisher_owner_breadth, story_breadth, source_class_breadth,
+                 entity_breadth, corpus_eligible_documents,
+                 classified_documents, classification_coverage_pct,
+                 coverage_state, low_history, prompt_version
                ) values (
                  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                 $21, $22, $23, $24, $25, $26
                )
                on conflict (narrative_definition_id, date, trend_window, prompt_version)
                do update set
@@ -946,8 +1228,13 @@ export async function recomputeNarrativeTrends(
                  matched_documents = excluded.matched_documents,
                  publisher_breadth = excluded.publisher_breadth,
                  publisher_owner_breadth = excluded.publisher_owner_breadth,
+                 story_breadth = excluded.story_breadth,
                  source_class_breadth = excluded.source_class_breadth,
                  entity_breadth = excluded.entity_breadth,
+                 corpus_eligible_documents = excluded.corpus_eligible_documents,
+                 classified_documents = excluded.classified_documents,
+                 classification_coverage_pct = excluded.classification_coverage_pct,
+                 coverage_state = excluded.coverage_state,
                  low_history = excluded.low_history`,
               [
                 `narrative:trend:${definition.id}:${window}:${point.date}:${promptVersion}`,
@@ -967,8 +1254,13 @@ export async function recomputeNarrativeTrends(
                 point.matchedDocuments,
                 point.publisherBreadth,
                 point.publisherOwnerBreadth,
+                point.storyBreadth,
                 point.sourceClassBreadth,
                 point.entityBreadth,
+                point.corpusEligibleDocuments,
+                point.classifiedDocuments,
+                point.classificationCoveragePercent,
+                point.coverageState,
                 point.lowHistory,
                 promptVersion
               ]
@@ -1004,6 +1296,7 @@ type NarrativeHomepageEvidenceRow = {
   affected_entities: string[];
   match_score: number;
   review_status: NarrativeReviewStatus;
+  story_fingerprint: string;
 };
 
 export async function getNarrativeHomepageStatus(
@@ -1011,7 +1304,7 @@ export async function getNarrativeHomepageStatus(
   configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
 ): Promise<NarrativeHomepageStatus> {
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v6";
+    configuredPromptVersion ?? "narrative_classification_v7";
   if (!databaseUrl) {
     return emptyNarrativeHomepageStatus(false);
   }
@@ -1038,6 +1331,16 @@ export async function getNarrativeHomepageStatus(
       status: string | null;
       kind: NarrativeDefinition["kind"] | null;
       event_label: string | null;
+      metadata: Record<string, unknown> | null;
+      parent_definition_id: string | null;
+      merged_into_definition_id: string | null;
+      parent_name: string | null;
+      dimension: string | null;
+      event_expires_at: string | null;
+      activated_at: string | null;
+      corpus_documents: number;
+      classification_coverage_pct: number;
+      coverage_state: NarrativeHomepageItem["coverageStatus"];
       density: number | null;
       baseline_mean: number | null;
       z_score: number | null;
@@ -1050,6 +1353,7 @@ export async function getNarrativeHomepageStatus(
       matched_documents: number | null;
       publisher_breadth: number | null;
       publisher_owner_breadth: number | null;
+      story_breadth: number | null;
       source_class_breadth: number | null;
       entity_breadth: number | null;
       low_history: boolean | null;
@@ -1075,29 +1379,41 @@ export async function getNarrativeHomepageStatus(
          select nd.id, nd.slug, nd.version, nd.name, nd.proposition, nd.category,
                 nd.inclusion_guidance, nd.exclusion_guidance,
                 nd.positive_examples, nd.negative_examples, nd.status,
-                nd.kind, nd.event_label,
+                nd.kind, nd.event_label, nd.metadata, nd.parent_definition_id,
+                nd.merged_into_definition_id,
+                parent.name as parent_name, nd.dimension,
+                nd.event_expires_at::text, nd.activated_at::text,
                 nt.density::float, nt.baseline_mean::float, nt.z_score::float,
                 nt.percentile_rank::float, nt.change_value::float,
                 nt.acceleration::float, nt.risk_tone::float,
                 nt.bullish_tone::float, nt.eligible_documents,
                 nt.matched_documents, nt.publisher_breadth,
-                nt.publisher_owner_breadth, nt.source_class_breadth,
-                nt.entity_breadth, nt.low_history
+                nt.publisher_owner_breadth, nt.story_breadth,
+                nt.source_class_breadth,
+                nt.entity_breadth,
+                nt.corpus_eligible_documents as corpus_documents,
+                nt.classification_coverage_pct::float,
+                nt.coverage_state, nt.low_history
          from narrative_trends nt
          join narrative_definitions nd on nd.id = nt.narrative_definition_id
+         left join narrative_definitions parent
+           on parent.id = nd.parent_definition_id
          where o.latest_date is not null
            and nt.date = o.latest_date::date
            and nt.trend_window = '7d'
            and nt.prompt_version = $1
            and nd.status = 'active'
            and nt.matched_documents > 0
-         order by nt.publisher_owner_breadth desc,
+           and nt.coverage_state = 'measured'
+         order by nt.story_breadth desc,
+                  nt.publisher_owner_breadth desc,
                   nt.matched_documents desc,
                   nt.source_class_breadth desc,
                   nd.id
          limit 6
        ) ranked on true
-       order by ranked.publisher_owner_breadth desc nulls last,
+       order by ranked.story_breadth desc nulls last,
+                ranked.publisher_owner_breadth desc nulls last,
                 ranked.matched_documents desc nulls last,
                 ranked.source_class_breadth desc nulls last,
                 ranked.id`,
@@ -1120,7 +1436,12 @@ export async function getNarrativeHomepageStatus(
              select distinct on (no.narrative_definition_id, no.document_id)
                     no.id, no.narrative_definition_id, no.document_id,
                     d.published_at, no.matched,
-                    no.match_score::float, no.review_status
+                    no.match_score::float, no.review_status,
+                    coalesce(
+                      nullif(d.near_duplicate_key, ''),
+                      nullif(d.metadata->>'wireStoryId', ''),
+                      md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+                    ) as story_fingerprint
              from narrative_observations no
              join documents d on d.id = no.document_id
              where no.prompt_version = $1
@@ -1130,18 +1451,29 @@ export async function getNarrativeHomepageStatus(
              order by no.narrative_definition_id, no.document_id,
                       no.observed_at desc, no.id
            ),
+           unique_stories as (
+             select id, narrative_definition_id, document_id,
+                    published_at, match_score, story_fingerprint,
+                    row_number() over (
+                      partition by narrative_definition_id, story_fingerprint
+                      order by published_at desc, match_score desc, id
+                    ) as story_rank
+             from latest_observations
+             where matched and review_status = 'approved'
+           ),
            ranked as (
              select id, narrative_definition_id, document_id,
-                    published_at, match_score,
+                    story_fingerprint,
                     row_number() over (
                       partition by narrative_definition_id
                       order by published_at desc, match_score desc, id
                     ) as evidence_rank
-             from latest_observations
-             where matched and review_status = 'approved'
+             from unique_stories
+             where story_rank = 1
            ),
            top_evidence as (
-             select id, narrative_definition_id, document_id, evidence_rank
+             select id, narrative_definition_id, document_id,
+                    story_fingerprint, evidence_rank
              from ranked
              where evidence_rank <= 3
            )
@@ -1149,11 +1481,14 @@ export async function getNarrativeHomepageStatus(
                   d.title, d.publisher, d.published_at::text, d.url,
                   d.source_class, no.stance, no.evidence_snippet,
                   no.interpretation, no.affected_entities,
-                  no.match_score::float, no.review_status
+                  no.match_score::float, no.review_status,
+                  top_evidence.story_fingerprint
            from top_evidence
            join narrative_observations no on no.id = top_evidence.id
            join documents d on d.id = top_evidence.document_id
+           join document_texts dt on dt.document_id = d.id
            where no.matched
+             and position(no.evidence_snippet in dt.content) > 0
            order by top_evidence.narrative_definition_id,
                     top_evidence.evidence_rank`,
           [promptVersion, narrativeIds, latestDate]
@@ -1183,7 +1518,8 @@ export async function getNarrativeHomepageStatus(
         interpretation: row.interpretation,
         affectedEntities: row.affected_entities,
         matchScore: Number(row.match_score),
-        reviewStatus: row.review_status
+        reviewStatus: row.review_status,
+        storyFingerprint: row.story_fingerprint
       });
       evidenceByNarrative.set(row.narrative_definition_id, items);
     }
@@ -1207,6 +1543,13 @@ export async function getNarrativeHomepageStatus(
         status: row.status ?? "active",
         kind: row.kind ?? "structural",
         eventLabel: row.event_label,
+        metadata: row.metadata ?? {},
+        parentDefinitionId: row.parent_definition_id,
+        parentName: row.parent_name,
+        mergedIntoDefinitionId: row.merged_into_definition_id,
+        dimension: row.dimension,
+        eventExpiresAt: row.event_expires_at,
+        activatedAt: row.activated_at,
         trendWindow: "7d",
         latestDate,
         density: Number(row.density),
@@ -1221,9 +1564,14 @@ export async function getNarrativeHomepageStatus(
         matchedDocuments: row.matched_documents ?? 0,
         publisherBreadth: row.publisher_breadth ?? 0,
         publisherOwnerBreadth: row.publisher_owner_breadth ?? 0,
+        storyBreadth: row.story_breadth ?? 0,
         sourceClassBreadth: row.source_class_breadth ?? 0,
         entityBreadth: row.entity_breadth ?? 0,
         lowHistory: row.low_history ?? true,
+        corpusDocuments: row.corpus_documents ?? 0,
+        classificationCoveragePercent:
+          row.classification_coverage_pct ?? 0,
+        coverageStatus: row.coverage_state ?? "no_corpus",
         evidencePreview: evidenceByNarrative.get(row.id) ?? []
       }))
     };
@@ -1248,7 +1596,7 @@ export async function getNarrativeBoardStatus(
   if (!databaseUrl) return { databaseConfigured: false, latestDate: null, narratives: [] };
   const definitions = await getActiveNarrativeDefinitions(databaseUrl);
   const promptVersion =
-    configuredPromptVersion ?? "narrative_classification_v6";
+    configuredPromptVersion ?? "narrative_classification_v7";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -1275,16 +1623,23 @@ export async function getNarrativeBoardStatus(
         matched_documents: number;
         publisher_breadth: number;
         publisher_owner_breadth: number;
+        story_breadth: number;
         source_class_breadth: number;
         entity_breadth: number;
+        corpus_eligible_documents: number;
+        classified_documents: number;
+        classification_coverage_pct: number;
+        coverage_state: NarrativeTrendSummary["coverageStatus"];
         low_history: boolean;
       }>(
         `select date::text, trend_window, density::float, baseline_mean::float,
                 z_score::float, percentile_rank::float, change_value::float,
                 acceleration::float, risk_tone::float, bullish_tone::float,
                 eligible_documents, matched_documents, publisher_breadth,
-                publisher_owner_breadth, source_class_breadth, entity_breadth,
-                low_history
+                publisher_owner_breadth, story_breadth, source_class_breadth,
+                entity_breadth, corpus_eligible_documents,
+                classified_documents, classification_coverage_pct::float,
+                coverage_state, low_history
          from narrative_trends
          where narrative_definition_id = $1
            and trend_window = '7d'
@@ -1307,6 +1662,7 @@ export async function getNarrativeBoardStatus(
         affected_entities: string[];
         match_score: number;
         review_status: NarrativeReviewStatus;
+        story_fingerprint: string;
       }>(
         `with latest_observations as (
            select distinct on (narrative_definition_id, document_id) *
@@ -1314,14 +1670,39 @@ export async function getNarrativeBoardStatus(
            where narrative_definition_id = $1
              and prompt_version = $2
            order by narrative_definition_id, document_id, observed_at desc, prompt_version desc
+         ),
+         evidence_with_story as (
+           select no.id, d.title, d.publisher, d.published_at, d.url,
+                  d.source_class, no.stance, no.evidence_snippet,
+                  no.interpretation, no.affected_entities, no.match_score,
+                  no.review_status,
+                  coalesce(
+                    nullif(d.near_duplicate_key, ''),
+                    nullif(d.metadata->>'wireStoryId', ''),
+                    md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
+                  ) as story_fingerprint
+           from latest_observations no
+           join documents d on d.id = no.document_id
+           join document_texts dt on dt.document_id = d.id
+           where no.matched
+             and no.review_status = 'approved'
+             and position(no.evidence_snippet in dt.content) > 0
+         ),
+         ranked as (
+           select *,
+                  row_number() over (
+                    partition by story_fingerprint
+                    order by published_at desc, match_score desc, id
+                  ) as story_rank
+           from evidence_with_story
          )
-         select no.id, d.title, d.publisher, d.published_at::text, d.url,
-                d.source_class, no.stance, no.evidence_snippet, no.interpretation,
-                no.affected_entities, no.match_score::float, no.review_status
-         from latest_observations no
-         join documents d on d.id = no.document_id
-         where no.matched and no.review_status = 'approved'
-         order by d.published_at desc, no.match_score desc
+         select id, title, publisher, published_at::text, url,
+                source_class, stance, evidence_snippet, interpretation,
+                affected_entities, match_score::float, review_status,
+                story_fingerprint
+         from ranked
+         where story_rank = 1
+         order by published_at desc, match_score desc
          limit 12`,
         [definition.id, promptVersion]
       );
@@ -1342,9 +1723,14 @@ export async function getNarrativeBoardStatus(
         matchedDocuments: current?.matched_documents ?? 0,
         publisherBreadth: current?.publisher_breadth ?? 0,
         publisherOwnerBreadth: current?.publisher_owner_breadth ?? 0,
+        storyBreadth: current?.story_breadth ?? 0,
         sourceClassBreadth: current?.source_class_breadth ?? 0,
         entityBreadth: current?.entity_breadth ?? 0,
         lowHistory: current?.low_history ?? true,
+        corpusDocuments: current?.corpus_eligible_documents ?? 0,
+        classificationCoveragePercent:
+          current?.classification_coverage_pct ?? 0,
+        coverageStatus: current?.coverage_state ?? "no_corpus",
         history: trends.rows.reverse().map((row) => ({
           date: row.date,
           density: row.density,
@@ -1368,7 +1754,8 @@ export async function getNarrativeBoardStatus(
           interpretation: row.interpretation,
           affectedEntities: row.affected_entities,
           matchScore: row.match_score,
-          reviewStatus: row.review_status
+          reviewStatus: row.review_status,
+          storyFingerprint: row.story_fingerprint
         }))
       });
     }
@@ -1377,8 +1764,20 @@ export async function getNarrativeBoardStatus(
       databaseConfigured: true,
       latestDate,
       narratives: narratives.sort(
-        (left, right) =>
-          right.zScore - left.zScore || right.publisherOwnerBreadth - left.publisherOwnerBreadth
+        (left, right) => {
+          const leftMature =
+            left.coverageStatus === "measured" && !left.lowHistory;
+          const rightMature =
+            right.coverageStatus === "measured" && !right.lowHistory;
+          return (
+            Number(rightMature) - Number(leftMature) ||
+            (rightMature ? right.zScore - left.zScore : 0) ||
+            right.storyBreadth - left.storyBreadth ||
+            right.sourceClassBreadth - left.sourceClassBreadth ||
+            right.publisherOwnerBreadth - left.publisherOwnerBreadth ||
+            left.name.localeCompare(right.name)
+          );
+        }
       )
     };
   } finally {
@@ -1423,6 +1822,13 @@ function mapDefinition(row: {
   status: string;
   kind: NarrativeDefinition["kind"];
   event_label: string | null;
+  metadata: Record<string, unknown>;
+  parent_definition_id: string | null;
+  merged_into_definition_id: string | null;
+  parent_name: string | null;
+  dimension: string | null;
+  event_expires_at: string | null;
+  activated_at: string | null;
 }): NarrativeDefinition {
   return {
     id: row.id,
@@ -1437,8 +1843,19 @@ function mapDefinition(row: {
     negativeExamples: row.negative_examples,
     status: row.status,
     kind: row.kind,
-    eventLabel: row.event_label
+    eventLabel: row.event_label,
+    metadata: row.metadata,
+    parentDefinitionId: row.parent_definition_id,
+    parentName: row.parent_name,
+    mergedIntoDefinitionId: row.merged_into_definition_id,
+    dimension: row.dimension,
+    eventExpiresAt: row.event_expires_at,
+    activatedAt: row.activated_at
   };
+}
+
+function positiveInteger(value: number, fallback: number) {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 function addDays(date: string, days: number) {

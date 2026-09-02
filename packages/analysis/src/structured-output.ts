@@ -102,6 +102,9 @@ export const narrativeClassificationOutputFormat = jsonSchemaOutputFormat({
           },
           riskTone: score,
           bullishTone: score,
+          contractSatisfied: { type: "boolean" },
+          inclusionCriteriaSatisfied: stringArray,
+          exclusionCriteriaTriggered: stringArray,
           evidenceSnippet: { type: "string" },
           interpretation: { type: "string" },
           affectedEntities: stringArray
@@ -113,6 +116,9 @@ export const narrativeClassificationOutputFormat = jsonSchemaOutputFormat({
           "stance",
           "riskTone",
           "bullishTone",
+          "contractSatisfied",
+          "inclusionCriteriaSatisfied",
+          "exclusionCriteriaTriggered",
           "evidenceSnippet",
           "interpretation",
           "affectedEntities"

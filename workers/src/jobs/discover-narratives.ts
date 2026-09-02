@@ -9,7 +9,7 @@ import {
   completeNarrativeDiscoveryRun,
   countNarrativeDiscoveryBacklog,
   failNarrativeDiscoveryRun,
-  getActiveNarrativeDefinitions,
+  getTrackedNarrativeDefinitions,
   getNarrativeCandidateContexts,
   getNarrativeCandidateQueue,
   recoverStaleDocumentAnalysisRuns,
@@ -39,7 +39,7 @@ export async function discoverNarrativeBatches(
     throw new Error("ANTHROPIC_API_KEY is required for narrative discovery.");
   }
   const options = { ...defaultOptions(), ...overrides };
-  const definitions = await getActiveNarrativeDefinitions();
+  const definitions = await getTrackedNarrativeDefinitions();
   const recovered = await recoverStaleDocumentAnalysisRuns({
     analysisType: narrativeCandidateAnalysisType,
     model: options.model,

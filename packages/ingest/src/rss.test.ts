@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRssConnector } from "./rss";
+import { createRssConnector, detectWireOrigin } from "./rss";
 
 const FEED_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -39,5 +39,22 @@ test("RSS snippet retention keeps the lede and maps publisher owners", async () 
   assert.equal(
     documents[0].canonicalUrl,
     "https://www.nytimes.com/2026/08/28/business/inflation.html"
+  );
+});
+
+test("attributes syndicated RSS copy to its wire origin", () => {
+  assert.equal(
+    detectWireOrigin(
+      "NEW YORK (Reuters) - Oil prices rose as traders reassessed supply risk."
+    ),
+    "reuters"
+  );
+  assert.equal(
+    detectWireOrigin("The Associated Press reported that yields moved higher."),
+    "associated-press"
+  );
+  assert.equal(
+    detectWireOrigin("The publisher's own market analysis."),
+    null
   );
 });

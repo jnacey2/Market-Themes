@@ -8,8 +8,15 @@ export type NarrativeMetricObservation = {
   bullishTone: number;
   publisherId: string;
   publisherOwner: string;
+  storyFingerprint: string;
   sourceClass: string;
   affectedEntities: string[];
+};
+
+export type NarrativeCorpusDocument = {
+  date: string;
+  documentId: string;
+  sourceClass: string;
 };
 
 export type NarrativeMetricPoint = {
@@ -27,8 +34,13 @@ export type NarrativeMetricPoint = {
   matchedDocuments: number;
   publisherBreadth: number;
   publisherOwnerBreadth: number;
+  storyBreadth: number;
   sourceClassBreadth: number;
   entityBreadth: number;
+  corpusEligibleDocuments: number;
+  classifiedDocuments: number;
+  classificationCoveragePercent: number;
+  coverageState: "no_corpus" | "backfill_pending" | "measured_zero" | "measured";
   lowHistory: boolean;
 };
 
@@ -36,9 +48,20 @@ export function calculateNarrativeTrendSeries(
   observations: NarrativeMetricObservation[],
   dates: string[],
   windowDays: number,
-  lowHistoryDays: number
+  lowHistoryDays: number,
+  corpusDocuments: NarrativeCorpusDocument[] = observations.map((row) => ({
+    date: row.date,
+    documentId: row.documentId,
+    sourceClass: row.sourceClass
+  }))
 ): NarrativeMetricPoint[] {
-  const daily = dates.map((date) => dailySummary(observations.filter((row) => row.date === date), date));
+  const daily = dates.map((date) =>
+    dailySummary(
+      observations.filter((row) => row.date === date),
+      corpusDocuments.filter((row) => row.date === date),
+      date
+    )
+  );
 
   return daily.map((_, index) => {
     const current = summarizeWindow(daily, index, windowDays);
@@ -49,22 +72,32 @@ export function calculateNarrativeTrendSeries(
 
     for (let end = windowDays - 1; end <= baselineEnd; end += 1) {
       const baseline = summarizeWindow(daily, end, windowDays);
-      if (baseline.eligibleDocuments > 0) {
+      if (
+        baseline.coverageState === "measured" ||
+        baseline.coverageState === "measured_zero"
+      ) {
         baselineValues.push(baseline.density);
       }
     }
 
     const baselineMean = average(baselineValues);
     const baselineStddev = Math.max(standardDeviation(baselineValues, baselineMean), 0.01);
-    const hasCoverage = current.eligibleDocuments > 0;
+    const hasCoverage =
+      current.coverageState === "measured" ||
+      current.coverageState === "measured_zero";
     const hasMatch = current.matchedDocuments > 0;
     const lowHistory = !hasCoverage || baselineValues.length < lowHistoryDays;
     const change =
-      hasCoverage && previous.eligibleDocuments > 0
+      hasCoverage &&
+      (previous.coverageState === "measured" ||
+        previous.coverageState === "measured_zero")
         ? current.density - previous.density
         : 0;
     const previousChange =
-      previous.eligibleDocuments > 0 && prior.eligibleDocuments > 0
+      (previous.coverageState === "measured" ||
+        previous.coverageState === "measured_zero") &&
+      (prior.coverageState === "measured" ||
+        prior.coverageState === "measured_zero")
         ? previous.density - prior.density
         : 0;
 
@@ -93,15 +126,25 @@ export function calculateNarrativeTrendSeries(
       matchedDocuments: current.matchedDocuments,
       publisherBreadth: current.publisherBreadth,
       publisherOwnerBreadth: current.publisherOwnerBreadth,
+      storyBreadth: current.storyBreadth,
       sourceClassBreadth: current.sourceClassBreadth,
       entityBreadth: current.entityBreadth,
+      corpusEligibleDocuments: current.corpusEligibleDocuments,
+      classifiedDocuments: current.classifiedDocuments,
+      classificationCoveragePercent: current.classificationCoveragePercent,
+      coverageState: current.coverageState,
       lowHistory
     };
   });
 }
 
-function dailySummary(rows: NarrativeMetricObservation[], date: string) {
+function dailySummary(
+  rows: NarrativeMetricObservation[],
+  corpusRows: NarrativeCorpusDocument[],
+  date: string
+) {
   const eligible = new Set(rows.map((row) => row.documentId));
+  const corpusEligible = new Set(corpusRows.map((row) => row.documentId));
   const matchedRows = rows.filter((row) => row.matched);
   const matched = new Set(matchedRows.map((row) => row.documentId));
   const sourceClasses = new Set(rows.map((row) => row.sourceClass));
@@ -123,8 +166,14 @@ function dailySummary(rows: NarrativeMetricObservation[], date: string) {
     matchedDocuments: matched.size,
     publisherIds: new Set(matchedRows.map((row) => row.publisherId).filter(Boolean)),
     publisherOwners: new Set(matchedRows.map((row) => row.publisherOwner).filter(Boolean)),
+    storyFingerprints: new Set(
+      matchedRows.map((row) => row.storyFingerprint || row.documentId)
+    ),
     sourceClasses: new Set(matchedRows.map((row) => row.sourceClass)),
-    entities: new Set(matchedRows.flatMap((row) => row.affectedEntities))
+    entities: new Set(matchedRows.flatMap((row) => row.affectedEntities)),
+    corpusDocumentIds: corpusEligible,
+    classifiedDocumentIds: eligible,
+    matchedDocumentIds: matched
   };
 }
 
@@ -135,21 +184,44 @@ function summarizeWindow(
 ) {
   const start = Math.max(0, endIndex - windowDays + 1);
   const rows = endIndex < 0 ? [] : daily.slice(start, endIndex + 1);
+  const corpusDocumentIds = union(
+    rows.map((row) => row.corpusDocumentIds)
+  );
+  const classifiedDocumentIds = union(
+    rows.map((row) => row.classifiedDocumentIds)
+  );
+  const matchedDocumentIds = union(
+    rows.map((row) => row.matchedDocumentIds)
+  );
+  const coverage = deriveNarrativeCoverageState({
+    corpusEligibleDocuments: corpusDocumentIds.size,
+    classifiedDocuments: classifiedDocumentIds.size,
+    matchedDocuments: matchedDocumentIds.size
+  });
   return {
     density: average(rows.map((row) => row.density)),
     riskTone: average(rows.map((row) => row.riskTone).filter((value) => value > 0)),
     bullishTone: average(rows.map((row) => row.bullishTone).filter((value) => value > 0)),
-    eligibleDocuments: sum(rows.map((row) => row.eligibleDocuments)),
-    matchedDocuments: sum(rows.map((row) => row.matchedDocuments)),
+    eligibleDocuments: classifiedDocumentIds.size,
+    matchedDocuments: matchedDocumentIds.size,
     publisherBreadth: unionSize(rows.map((row) => row.publisherIds)),
     publisherOwnerBreadth: unionSize(rows.map((row) => row.publisherOwners)),
+    storyBreadth: unionSize(rows.map((row) => row.storyFingerprints)),
     sourceClassBreadth: unionSize(rows.map((row) => row.sourceClasses)),
-    entityBreadth: unionSize(rows.map((row) => row.entities))
+    entityBreadth: unionSize(rows.map((row) => row.entities)),
+    corpusEligibleDocuments: corpusDocumentIds.size,
+    classifiedDocuments: classifiedDocumentIds.size,
+    classificationCoveragePercent: coverage.classificationCoveragePercent,
+    coverageState: coverage.coverageState
   };
 }
 
 function unionSize(sets: Set<string>[]) {
-  return new Set(sets.flatMap((set) => [...set])).size;
+  return union(sets).size;
+}
+
+function union(sets: Set<string>[]) {
+  return new Set(sets.flatMap((set) => [...set]));
 }
 
 function sum(values: number[]) {
@@ -169,4 +241,32 @@ function standardDeviation(values: number[], mean: number) {
 
 function round(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+export function deriveNarrativeCoverageState(input: {
+  corpusEligibleDocuments: number;
+  classifiedDocuments: number;
+  matchedDocuments: number;
+}) {
+  const corpusEligibleDocuments = Math.max(
+    0,
+    input.corpusEligibleDocuments
+  );
+  const classifiedDocuments = Math.min(
+    corpusEligibleDocuments,
+    Math.max(0, input.classifiedDocuments)
+  );
+  const classificationCoveragePercent =
+    corpusEligibleDocuments === 0
+      ? 0
+      : round((classifiedDocuments / corpusEligibleDocuments) * 100);
+  const coverageState =
+    corpusEligibleDocuments === 0
+      ? ("no_corpus" as const)
+      : classifiedDocuments < corpusEligibleDocuments
+        ? ("backfill_pending" as const)
+        : input.matchedDocuments === 0
+          ? ("measured_zero" as const)
+          : ("measured" as const);
+  return { classificationCoveragePercent, coverageState };
 }

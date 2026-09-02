@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import {
+  autoApproveNarrativeObservations,
   autoPromoteNarrativeCandidates,
   claimDocumentsForNarrativeDiscovery,
   completeNarrativeDiscoveryRun,
@@ -13,11 +14,14 @@ import {
   getNarrativeReviewQueue,
   getOperationsStatus,
   mergeNarrativeCandidate,
+  narrativeDescriptionsOverlap,
   persistDocuments,
   persistNarrativeObservations,
   promoteNarrativeCandidate,
+  reconcileNarrativeDefinitionLifecycle,
   recomputeNarrativeTrends,
   retractNarrativeDefinition,
+  selectDocumentsForNarrativeClassification,
   startDocumentAnalysisRun,
   type NarrativeCandidateInput,
   type CandidatePromotionValidation,
@@ -29,6 +33,27 @@ const discoveryPromptVersion = "integration-discovery-v1";
 const classificationPromptVersion = "integration-classification-v1";
 const model = "integration-model";
 const narrativeCandidateAnalysisType = "narrative_candidate_discovery";
+
+test("detects semantically overlapping tracked narratives", () => {
+  assert.equal(
+    narrativeDescriptionsOverlap(
+      "Oil Shock Inflation Path",
+      "Higher oil prices are reviving inflation fears and rate hike bets.",
+      "Energy Shock Reprices Inflation And Rates",
+      "Rising energy prices lift inflation expectations and reprice interest rates."
+    ),
+    true
+  );
+  assert.equal(
+    narrativeDescriptionsOverlap(
+      "Oil Supply Disruption",
+      "Conflict is reducing tanker traffic through a key shipping route.",
+      "Consumer Trade-Down",
+      "Consumers are choosing lower-priced products under budget pressure."
+    ),
+    false
+  );
+});
 
 test(
   "discovers, breadth-gates, promotes, recomputes, and reloads a narrative",
@@ -107,7 +132,7 @@ test(
           classificationModel: model,
           classificationPromptVersion
         }),
-      /independent publisher groups/
+      /unique stories|publisher groups/
     );
 
     const secondRun = await startDiscoveryRun(secondDocumentId);
@@ -128,6 +153,7 @@ test(
     );
     assert(qualified);
     assert.equal(qualified.qualified, true);
+    assert.equal(qualified.storyBreadth, 2);
     assert.equal(qualified.publisherOwnerBreadth, 2);
     const manualValidationInput = await getCandidatePromotionValidationInput(
       candidateId,
@@ -151,6 +177,46 @@ test(
       promotionValidation: eligibleValidation(manualValidationInput)
     });
     assert.equal(promoted.observationsCreated, 2);
+    const seedReclassification = await selectDocumentsForNarrativeClassification({
+      model,
+      promptVersion: classificationPromptVersion,
+      limit: 100
+    });
+    assert(
+      seedReclassification.some((item) => item.id === firstDocumentId)
+    );
+    assert(
+      seedReclassification.some((item) => item.id === secondDocumentId)
+    );
+    await persistNarrativeObservations(
+      [
+        { documentId: firstDocumentId, quote: firstQuote },
+        { documentId: secondDocumentId, quote: secondQuote }
+      ].map((item, index) => ({
+        id: `candidate:reclassified:${index}:${suffix}`,
+        narrativeDefinitionId: promoted.definitionId,
+        documentId: item.documentId,
+        matched: true,
+        matchScore: 95,
+        stance: "neutral" as const,
+        riskTone: 20,
+        bullishTone: 20,
+        evidenceSnippet: item.quote,
+        interpretation: "Fresh classification confirms the full contract.",
+        affectedEntities: [],
+        model,
+        promptVersion: classificationPromptVersion,
+        metadata: contractValidationMetadata()
+      }))
+    );
+    const lifecycle = await reconcileNarrativeDefinitionLifecycle({
+      model,
+      promptVersion: classificationPromptVersion,
+      minimumStories: 2,
+      minimumPublisherOwners: 2,
+      lookbackDays: 30
+    });
+    assert.equal(lifecycle.activatedDefinitions, 1);
 
     await recomputeNarrativeTrends({
       asOfDate: "2026-08-29",
@@ -399,6 +465,41 @@ test(
     assert.equal(result.candidatesPromoted, 1);
     assert.equal(result.observationsCreated, 3);
     assert.equal(result.failedCandidates.length, 0);
+    await persistNarrativeObservations(
+      evidence.slice(0, 3).map((item, index) => ({
+        id: `auto-promoted:fresh-classification:${index}:${suffix}`,
+        narrativeDefinitionId: result.promotedDefinitionIds[0],
+        documentId: item.id,
+        matched: true,
+        matchScore: 95,
+        stance: "neutral" as const,
+        riskTone: 20,
+        bullishTone: 20,
+        evidenceSnippet: item.quote,
+        interpretation: "Fresh classification confirms the full contract.",
+        affectedEntities: [],
+        model,
+        promptVersion: autoClassificationPrompt,
+        metadata: contractValidationMetadata()
+      }))
+    );
+    await autoApproveNarrativeObservations({
+      model,
+      promptVersion: autoClassificationPrompt,
+      minimumMatchScore: 90,
+      minimumDocuments: 3,
+      minimumPublisherOwners: 3,
+      lookbackDays: 7,
+      excludedPublisherOwners: []
+    });
+    const lifecycle = await reconcileNarrativeDefinitionLifecycle({
+      model,
+      promptVersion: autoClassificationPrompt,
+      minimumStories: 3,
+      minimumPublisherOwners: 3,
+      lookbackDays: 7
+    });
+    assert.equal(lifecycle.activatedDefinitions, 1);
     const weakValidationInput = await getCandidatePromotionValidationInput(
       weakCandidateId,
       autoPolicy
@@ -423,7 +524,7 @@ test(
           },
           promotionValidation: eligibleValidation(weakValidationInput)
         }),
-      /breadth policy|independent publisher groups/
+      /breadth policy|unique stories|publisher groups/
     );
     const staleValidationInput = await getCandidatePromotionValidationInput(
       staleCandidateId,
@@ -446,7 +547,7 @@ test(
           },
           promotionValidation: eligibleValidation(staleValidationInput)
         }),
-      /breadth policy|independent publisher groups/
+      /breadth policy|unique stories|publisher groups/
     );
 
     const queue = await getNarrativeCandidateQueue(
@@ -927,6 +1028,16 @@ function candidateFixture({
 
 function fixtureTextHash(quote: string, suffix: string) {
   return createHash("sha256").update(`${quote} ${suffix}`).digest("hex");
+}
+
+function contractValidationMetadata() {
+  return {
+    contractValidation: {
+      satisfied: true,
+      inclusionCriteriaSatisfied: ["Full proposition"],
+      exclusionCriteriaTriggered: []
+    }
+  };
 }
 
 function eligibleValidation(

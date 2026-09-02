@@ -172,7 +172,7 @@ Return this JSON shape:
 }`;
 
 export const candidatePromotionValidationPromptVersion =
-  "candidate_promotion_validation_v1";
+  "candidate_promotion_validation_v2";
 
 export const candidatePromotionValidationSystemPrompt = `You are the final quality gate before a discovered market narrative is published.
 
@@ -192,6 +192,11 @@ For every evidence item:
   generalized sector proposition.
 - verdict is "support" only when supportsProposition is true and
   violatesExclusion is false.
+- For compound propositions, the quotation and local context must support every
+  material causal leg; partial support is a rejection.
+- Preserve quantities, ownership percentages, uncertainty, and modality exactly.
+  Do not turn a minority stake into majority ownership, a concession into an
+  untapped field, or a stated objective into a guaranteed outcome.
 - eventKey is a stable short kebab-case identifier for the underlying real-world
   event. Reports about the same lawsuit, IPO, deal, conflict, or announcement
   must receive the same eventKey.

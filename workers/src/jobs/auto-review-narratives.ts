@@ -2,7 +2,8 @@ import { pathToFileURL } from "node:url";
 import { validateCandidateForPromotion } from "@market-themes/analysis";
 import {
   autoApproveNarrativeObservations,
-  autoPromoteNarrativeCandidates
+  autoPromoteNarrativeCandidates,
+  reconcileNarrativeDefinitionLifecycle
 } from "@market-themes/db";
 import { runRecordedJob } from "./recorded-job";
 
@@ -35,6 +36,7 @@ export async function autoReviewNarratives() {
           promotedDefinitionIds: [],
           failedCandidates: []
         };
+  const lifecycleResult = await reconcileNarrativeDefinitionLifecycle();
   const summary = {
     enabled: true,
     ...result,
@@ -43,7 +45,8 @@ export async function autoReviewNarratives() {
     candidatesBlocked: candidateResult.candidatesBlocked,
     candidateObservationsCreated: candidateResult.observationsCreated,
     promotedDefinitionIds: candidateResult.promotedDefinitionIds,
-    failedCandidatePromotions: candidateResult.failedCandidates
+    failedCandidatePromotions: candidateResult.failedCandidates,
+    ...lifecycleResult
   };
   console.log(`[auto-review-narratives] ${JSON.stringify(summary)}`);
   if (

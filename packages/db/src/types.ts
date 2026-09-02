@@ -519,6 +519,13 @@ export type NarrativeDefinition = {
   status: string;
   kind?: NarrativeCandidateKind;
   eventLabel?: string | null;
+  metadata?: Record<string, unknown>;
+  parentDefinitionId?: string | null;
+  parentName?: string | null;
+  mergedIntoDefinitionId?: string | null;
+  dimension?: string | null;
+  eventExpiresAt?: string | null;
+  activatedAt?: string | null;
 };
 
 export type NarrativeCandidateStatus =
@@ -653,6 +660,7 @@ export type NarrativeCandidateEvidence = {
   bullishTone: number;
   affectedEntities: string[];
   matchScore: number;
+  storyFingerprint: string;
 };
 
 export type NarrativeCandidateSummary = {
@@ -678,6 +686,7 @@ export type NarrativeCandidateSummary = {
   documentBreadth: number;
   publisherBreadth: number;
   publisherOwnerBreadth: number;
+  storyBreadth: number;
   sourceClassBreadth: number;
   entityBreadth: number;
   qualified: boolean;
@@ -739,6 +748,7 @@ export type NarrativeEvidence = {
   affectedEntities: string[];
   matchScore: number;
   reviewStatus: NarrativeReviewStatus;
+  storyFingerprint?: string;
 };
 
 export type NarrativeReviewStatus = "pending" | "approved" | "rejected";
@@ -778,9 +788,17 @@ export type NarrativeTrendSummary = NarrativeDefinition & {
   matchedDocuments: number;
   publisherBreadth: number;
   publisherOwnerBreadth: number;
+  storyBreadth: number;
   sourceClassBreadth: number;
   entityBreadth: number;
   lowHistory: boolean;
+  corpusDocuments: number;
+  classificationCoveragePercent: number;
+  coverageStatus:
+    | "no_corpus"
+    | "backfill_pending"
+    | "measured_zero"
+    | "measured";
   history: NarrativeTrendPoint[];
   evidence: NarrativeEvidence[];
 };

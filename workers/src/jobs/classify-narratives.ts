@@ -6,7 +6,7 @@ import {
   closeDatabaseClient,
   countNarrativeClassificationBacklog,
   createDatabaseClient,
-  getActiveNarrativeDefinitions,
+  getTrackedNarrativeDefinitions,
   persistNarrativeObservations,
   selectDocumentsForNarrativeClassification,
   type AnalysisDocument,
@@ -122,7 +122,7 @@ async function runClassification(options: ClassificationOptions) {
       stopReason = "document_budget_reached";
       break;
     }
-    const definitions = await getActiveNarrativeDefinitions();
+    const definitions = await getTrackedNarrativeDefinitions();
     if (definitions.length === 0) {
       stopReason = "backlog_empty";
       break;
