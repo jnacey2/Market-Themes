@@ -234,7 +234,8 @@ function stockNewsToDocument(
     summary: title,
     body,
     retrievalMethod: "api",
-    retentionPolicy: "full_text",
+    // FMP redistributes third-party article excerpts, not the full story.
+    retentionPolicy: "snippet",
     contentHash,
     metadata: {
       ticker,
@@ -276,7 +277,8 @@ function generalNewsToDocument(item: FmpGeneralNewsItem): PersistableDocument | 
     summary: title,
     body,
     retrievalMethod: "api",
-    retentionPolicy: "full_text",
+    // FMP redistributes third-party article excerpts, not the full story.
+    retentionPolicy: "snippet",
     contentHash,
     metadata: {
       site: item.site,

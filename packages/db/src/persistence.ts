@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import pg from "pg";
 import type {
   AnalysisDocument,
@@ -193,9 +194,7 @@ export function createDatabaseClient(
     keepAlive: true,
     query_timeout: queryTimeoutMs,
     statement_timeout: statementTimeoutMs,
-    ssl: databaseUrl.includes("render.com")
-      ? { rejectUnauthorized: false }
-      : undefined
+    ssl: resolveDatabaseSsl(databaseUrl)
   });
 
   client.on("error", (error) => {
@@ -205,6 +204,54 @@ export function createDatabaseClient(
   });
 
   return client;
+}
+
+/**
+ * TLS policy for the Postgres connection.
+ *
+ * DB_SSL_MODE:
+ * - "disable": plain TCP (local development).
+ * - "no-verify": TLS without certificate verification. Default for Render
+ *   hostnames because Render's internal endpoint presents a certificate that
+ *   is not in the Node trust store.
+ * - "verify-full": TLS with certificate verification. Set DB_SSL_CA to a PEM
+ *   bundle (inline or a file path) when the server uses a private CA.
+ * When unset, Render hosts use "no-verify" and everything else uses "disable",
+ * matching the previous behaviour.
+ */
+export function resolveDatabaseSsl(
+  databaseUrl: string,
+  env: NodeJS.ProcessEnv = process.env
+): false | { rejectUnauthorized: boolean; ca?: string } | undefined {
+  const mode = (env.DB_SSL_MODE ?? "").trim().toLowerCase();
+  const ca = readSslCa(env.DB_SSL_CA);
+
+  if (mode === "disable") return undefined;
+  if (mode === "no-verify") return { rejectUnauthorized: false };
+  if (mode === "verify-full") return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  if (mode) {
+    console.warn(`[db] unknown DB_SSL_MODE "${env.DB_SSL_MODE}"; falling back to host default.`);
+  }
+
+  if (/sslmode=require|sslmode=verify/i.test(databaseUrl) && ca) {
+    return { rejectUnauthorized: true, ca };
+  }
+
+  return databaseUrl.includes("render.com") ? { rejectUnauthorized: false } : undefined;
+}
+
+function readSslCa(value: string | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.includes("-----BEGIN")) return trimmed;
+  try {
+    return readFileSync(trimmed, "utf8");
+  } catch (error) {
+    console.warn(
+      `[db] DB_SSL_CA could not be read: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return undefined;
+  }
 }
 
 export async function closeDatabaseClient(client: { end: () => Promise<void> }) {

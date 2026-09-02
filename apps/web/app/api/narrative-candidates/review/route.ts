@@ -7,7 +7,7 @@ import {
   promoteNarrativeCandidate,
   rejectNarrativeCandidate
 } from "@market-themes/db";
-import { isSafeMutationRequest } from "../../../../lib/ops-auth";
+import { isSafeMutationRequest, publicErrorMessage } from "../../../../lib/ops-auth";
 
 export async function POST(request: Request) {
   if (!isSafeMutationRequest(request)) {
@@ -81,8 +81,9 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : String(error);
     const expected =
       /candidate|documents|publisher groups|tracked narrative|slug/i.test(message);
+    if (!expected) console.error("[api/narrative-candidates/review]", error);
     return NextResponse.json(
-      { error: message },
+      { error: expected ? message : publicErrorMessage(error, "Candidate review failed.") },
       { status: expected ? 409 : 500 }
     );
   }

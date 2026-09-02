@@ -44,10 +44,10 @@
     "@market-themes/db": "0.1.0",
     "@market-themes/ingest": "0.1.0",
     "playwright": "^1.62.1",
-    "tsx": "latest"
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
   }
 }

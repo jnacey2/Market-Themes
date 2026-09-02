@@ -57,6 +57,33 @@ export function isSafeMutationRequest(request: Request) {
   }
 }
 
+/**
+ * Standard 403 for mutation routes that fail the same-origin JSON check.
+ * Returns null when the request is acceptable so routes can early-return.
+ */
+export function rejectUnsafeMutation(request: Request): Response | null {
+  if (isSafeMutationRequest(request)) {
+    return null;
+  }
+  return Response.json(
+    { error: "Cross-origin or non-JSON mutation rejected." },
+    { status: 403 }
+  );
+}
+
+/**
+ * Error text safe to return to a browser. Operational details (connection
+ * strings, hostnames, SQL) are logged server-side instead of echoed back.
+ */
+export function publicErrorMessage(error: unknown, fallback = "Request failed.") {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message) return fallback;
+  if (/postgres|pg_|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|password|DATABASE_URL|ssl|tls|certificate|connect/i.test(message)) {
+    return fallback;
+  }
+  return message.length > 300 ? `${message.slice(0, 297)}...` : message;
+}
+
 function constantTimeEqual(left: string, right: string) {
   const encoder = new TextEncoder();
   const leftBytes = encoder.encode(left);

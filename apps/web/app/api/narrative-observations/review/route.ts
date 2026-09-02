@@ -3,7 +3,7 @@ import {
   reviewNarrativeObservation,
   type NarrativeReviewStatus
 } from "@market-themes/db";
-import { isSafeMutationRequest } from "../../../../lib/ops-auth";
+import { isSafeMutationRequest, publicErrorMessage } from "../../../../lib/ops-auth";
 
 export async function POST(request: Request) {
   if (!isSafeMutationRequest(request)) {
@@ -37,8 +37,9 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ observation });
   } catch (error) {
+    console.error("[api/narrative-observations/review]", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
+      { error: publicErrorMessage(error, "Review failed.") },
       { status: 500 }
     );
   }
