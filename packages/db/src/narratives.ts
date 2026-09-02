@@ -1113,10 +1113,14 @@ export async function recomputeNarrativeTrends(
       `select d.published_at::date::text as date,
               d.id as document_id, d.source_class
        from documents d
-       join document_texts dt on dt.document_id = d.id
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-         and length(btrim(dt.content)) > 0
-         and d.published_at::date between $1::date and $2::date`,
+         and d.published_at >= $1::date
+         and d.published_at < $2::date + interval '1 day'
+         and exists (
+           select 1
+           from document_texts dt
+           where dt.document_id = d.id
+         )`,
       [startDate, asOfDate]
     );
     const corpusDocuments = corpus.rows.map((row) => ({
@@ -1157,11 +1161,16 @@ export async function recomputeNarrativeTrends(
                 md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
               ) as story_fingerprint,
               d.source_class, no.affected_entities, no.review_status,
-              position(no.evidence_snippet in dt.content) > 0 as evidence_current
+              case
+                when no.matched and no.review_status = 'approved'
+                  then position(no.evidence_snippet in dt.content) > 0
+                else true
+              end as evidence_current
        from latest_observations no
        join documents d on d.id = no.document_id
        join document_texts dt on dt.document_id = d.id
-       where d.published_at::date between $1::date and $2::date`,
+       where d.published_at >= $1::date
+         and d.published_at < $2::date + interval '1 day'`,
       [startDate, asOfDate, promptVersion]
     );
 
