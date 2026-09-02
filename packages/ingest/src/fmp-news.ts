@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { PersistableDocument } from "@market-themes/db";
 import { resolvePublisherOwner, slugPublisher } from "./publisher-owners";
 import { SEC_SMOKE_TEST_TICKERS, SEC_TARGET_TICKERS } from "./sec-targets";
+import { resolveNewsTickers } from "./ticker-universe";
 
 const FMP_BASE_URL_V3 = "https://financialmodelingprep.com/api/v3";
 const FMP_BASE_URL_V4 = "https://financialmodelingprep.com/api/v4";
@@ -47,10 +48,7 @@ export function createFmpNewsConnector(options: FmpNewsOptions = {}) {
     description: "Financial Modeling Prep news connector (stock news + general market news).",
     async poll() {
       return fetchFmpNews({
-        tickers:
-          options.tickers ??
-          parseTickers(process.env.FMP_NEWS_TICKERS) ??
-          SEC_TARGET_TICKERS,
+        tickers: await resolveNewsTickers({ explicit: options.tickers }),
         macroProxies:
           options.macroProxies ??
           parseTickers(process.env.FMP_NEWS_MACRO_PROXIES) ??

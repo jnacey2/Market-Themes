@@ -1,5 +1,5 @@
 import { persistDocuments } from "@market-themes/db";
-import { fetchFmpNews, SEC_TARGET_TICKERS } from "@market-themes/ingest";
+import { fetchFmpNews, resolveNewsTickers } from "@market-themes/ingest";
 
 const MACRO_PROXIES = ["SPY", "QQQ", "TLT", "GLD"];
 
@@ -8,7 +8,7 @@ const batchSize = Number(process.env.FMP_NEWS_BACKFILL_BATCH_SIZE ?? 20);
 const batchIndex = Number(process.env.FMP_NEWS_BACKFILL_BATCH_INDEX ?? 0);
 const lookbackHours = lookbackDays * 24;
 
-const allTickers = parseTickers(process.env.FMP_NEWS_TICKERS) ?? SEC_TARGET_TICKERS;
+const allTickers = await resolveNewsTickers();
 const start = batchIndex * batchSize;
 const batchTickers = allTickers.slice(start, start + batchSize);
 
