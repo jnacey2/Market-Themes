@@ -385,3 +385,20 @@ function clamp(value: unknown, minimum: number, maximum: number) {
 function isStance(value: unknown): value is ToneDirection {
   return ["risk", "bullish", "mixed", "neutral"].includes(String(value));
 }
+
+function validateStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function normalizeForComparison(value: string) {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
