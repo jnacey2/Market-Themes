@@ -1,5 +1,5 @@
 import { persistDocuments } from "@market-themes/db";
-import { fetchSecFilings, SEC_TARGET_TICKERS } from "@market-themes/ingest";
+import { fetchSecFilings, resolveTargetTickers } from "@market-themes/ingest";
 
 const userAgent = process.env.SEC_USER_AGENT;
 
@@ -14,7 +14,8 @@ const maxFilingsPerTicker = Number(
   process.env.SEC_BACKFILL_MAX_FILINGS_PER_TICKER ?? 25
 );
 const start = batchIndex * batchSize;
-const tickers = SEC_TARGET_TICKERS.slice(start, start + batchSize);
+const universe = await resolveTargetTickers();
+const tickers = universe.slice(start, start + batchSize);
 
 if (tickers.length === 0) {
   console.log(

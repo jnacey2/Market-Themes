@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PersistableDocument } from "@market-themes/db";
-import { SEC_TARGET_TICKERS } from "./sec-targets";
+import { resolveTargetTickers } from "./ticker-universe";
 
 const SEC_TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json";
 const SEC_SUBMISSIONS_BASE_URL = "https://data.sec.gov/submissions";
@@ -147,8 +147,6 @@ export function createSecFilingsConnector(options: SecConnectorOptions = {}) {
   const maxFilingsPerTicker = Number(
     options.maxFilingsPerTicker ?? process.env.SEC_MAX_FILINGS_PER_TICKER ?? 10
   );
-  const tickers =
-    options.tickers ?? parseTickers(process.env.SEC_TARGET_TICKERS) ?? SEC_TARGET_TICKERS;
   const formConfig = resolveSecFormConfig(options.formConfig);
 
   return {
@@ -156,6 +154,7 @@ export function createSecFilingsConnector(options: SecConnectorOptions = {}) {
     sourceClass: "filing" as const,
     description: "Official SEC submissions and filing document connector.",
     async poll() {
+      const tickers = await resolveTargetTickers({ explicit: options.tickers });
       return fetchSecFilings({
         tickers,
         userAgent,
@@ -743,17 +742,6 @@ function detectSectionLabel(text: string) {
   }
 
   return null;
-}
-
-function parseTickers(value: string | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  return value
-    .split(",")
-    .map((ticker) => ticker.trim())
-    .filter(Boolean);
 }
 
 function normalizeTickers(tickers: string[]) {

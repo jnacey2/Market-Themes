@@ -9,3 +9,4 @@ export * from "./publication-feeds";
 export * from "./types";
 export * from "./narrative-briefs";
 export * from "./attention-bursts";
+export * from "./transcript-sections";

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import type { PersistableDocument } from "@market-themes/db";
-import { SEC_SMOKE_TEST_TICKERS, SEC_TARGET_TICKERS } from "./sec-targets";
+import { detectTranscriptSections, type PersistableDocument } from "@market-themes/db";
+import { SEC_SMOKE_TEST_TICKERS } from "./sec-targets";
+import { resolveTargetTickers } from "./ticker-universe";
 
 const FMP_BASE_URL = "https://financialmodelingprep.com/stable";
 const DEFAULT_RATE_LIMIT_MS = 250;
@@ -48,7 +49,7 @@ export function createFmpTranscriptsConnector(options: FmpTranscriptOptions = {}
         tickers:
           options.tickers ??
           parseTickers(process.env.FMP_TARGET_TICKERS) ??
-          SEC_TARGET_TICKERS,
+          (await resolveTargetTickers()),
         quarters: Number(
           options.quarters ?? process.env.FMP_BACKFILL_QUARTERS ?? 8
         ),
@@ -87,7 +88,7 @@ export async function fetchFmpTranscripts({
 
   const documents: PersistableDocument[] = [];
 
-  for (const ticker of normalizeTickers(tickers ?? SEC_TARGET_TICKERS)) {
+  for (const ticker of normalizeTickers(tickers ?? (await resolveTargetTickers()))) {
     await sleep(rateLimitMs);
     const targets = await discoverTranscriptTargets(ticker, resolvedApiKey);
     const selectedTargets = targets
@@ -197,8 +198,10 @@ function toPersistableDocument(
 ): PersistableDocument {
   const content = transcript.content ?? transcript.transcript ?? "";
   const normalized = normalizeTranscriptText(content);
-  const sections = detectTranscriptSections(normalized);
+  const sections = detectLegacyTranscriptSections(normalized);
+  const sectioning = detectTranscriptSections(normalized);
   const speakerCount = countDetectedSpeakers(normalized);
+  const qaSpan = sectioning.sections.find((span) => span.label === "qa");
   const publishedAt = transcript.date ?? target.date ?? `${target.year}-01-01`;
   const title =
     transcript.title ??
@@ -233,11 +236,21 @@ function toPersistableDocument(
       callDate: publishedAt,
       fmpEndpoint: "earning-call-transcript",
       sectionsDetected: sections,
-      speakerCount
+      speakerCount,
+      transcriptSections: sectioning,
+      qaStartOffset: sectioning.qaStartOffset,
+      preparedRemarksChars: qaSpan ? qaSpan.start : normalized.length,
+      qaChars: qaSpan ? qaSpan.end - qaSpan.start : 0
     }
   };
 }
 
+/**
+ * Body normalization is intentionally frozen: the content hash is derived from
+ * this output, so any change would re-ingest every stored transcript as a new
+ * revision and trigger a full re-extraction. Section boundaries are computed
+ * separately (see detectTranscriptSections) and stored as metadata offsets.
+ */
 function normalizeTranscriptText(content: string) {
   return content
     .replace(/\r\n/g, "\n")
@@ -248,7 +261,7 @@ function normalizeTranscriptText(content: string) {
     .trim();
 }
 
-function detectTranscriptSections(content: string) {
+function detectLegacyTranscriptSections(content: string) {
   const lower = content.toLowerCase();
   const sections: string[] = [];
 

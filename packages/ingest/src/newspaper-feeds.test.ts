@@ -17,8 +17,20 @@ test("newspaper presets are unique HTTPS feeds with stable owners", () => {
     assert.match(preset.homepageUrl, /^https:\/\//);
     const group = NEWSPAPER_FEED_GROUPS.find((item) => item.id === preset.group);
     assert.ok(group);
-    assert.equal(preset.publisherOwner, group?.publisherOwner);
+    if (group.publisherOwner) {
+      assert.equal(preset.publisherOwner, group.publisherOwner);
+    } else {
+      // mixed-owner groups (sector trade press) resolve each outlet's owner from its URL
+      assert.ok(preset.publisherOwner.length > 0);
+      assert.notEqual(preset.publisherOwner, preset.group);
+    }
   }
+});
+
+test("trade press presets resolve to distinct publisher owners", () => {
+  const tradePress = NEWSPAPER_FEED_PRESETS.filter((preset) => preset.group === "trade-press");
+  assert.ok(tradePress.length >= 5);
+  assert.equal(new Set(tradePress.map((preset) => preset.publisherOwner)).size, tradePress.length);
 });
 
 test("preset payloads stay snippet-only and unauthenticated", () => {
