@@ -1163,6 +1163,122 @@ h3 {
   transform: none;
 }
 
+.funnel-heading {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.funnel-heading h2 {
+  margin: 6px 0 8px;
+}
+
+.funnel-heading p:last-child {
+  color: var(--muted);
+  max-width: 620px;
+}
+
+.funnel {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.funnel-stage {
+  align-items: center;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(200px, 1.2fr) minmax(160px, 3fr) 120px;
+}
+
+.funnel-label small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.funnel-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  height: 14px;
+  overflow: hidden;
+}
+
+.funnel-fill {
+  background: linear-gradient(90deg, var(--accent-strong), rgba(56, 189, 248, 0.35));
+  border-radius: 999px;
+  height: 100%;
+  transition: width 240ms ease;
+}
+
+.funnel-value {
+  display: flex;
+  flex-direction: column;
+  text-align: right;
+}
+
+.funnel-value span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.funnel-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.funnel-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.funnel-table th,
+.funnel-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.funnel-table th:first-child,
+.funnel-table td:first-child {
+  text-align: left;
+  text-transform: capitalize;
+}
+
+.funnel-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 840px) {
+  .funnel-stage {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .funnel-value {
+    flex-direction: row;
+    gap: 10px;
+    text-align: left;
+  }
+
+  .funnel-table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
 @media (max-width: 840px) {
   .hero,
   .grid.two,
