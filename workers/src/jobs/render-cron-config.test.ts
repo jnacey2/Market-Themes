@@ -30,7 +30,7 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
   );
   assert.match(
     classification,
-    /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "40"/
+    /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "100"/
   );
 
   const discovery = serviceBlock("discover-narratives");
@@ -40,7 +40,12 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
     /startCommand: npm run narratives:discover:batch --workspace @market-themes\/workers/
   );
   assert.match(discovery, /key: ANTHROPIC_API_KEY/);
+  assert.match(discovery, /key: ANTHROPIC_PROMPT_CACHING\s+value: "true"/);
   assert.match(discovery, /key: NARRATIVE_DISCOVERY_PROMPT_VERSION/);
+  assert.match(
+    discovery,
+    /key: NARRATIVE_DISCOVERY_MAX_DOCUMENTS\s+value: "100"/
+  );
 });
 
 test("extracts a bounded recent-document batch every hour", () => {
