@@ -440,7 +440,11 @@ export function passesDefinitionGuard(
 function modelFacingEvidenceContract(definition: NarrativeDefinition) {
   const contract = definition.metadata?.evidenceContract;
   if (!isObject(contract)) return null;
-  const { requiredPatterns: _required, forbiddenPatterns: _forbidden, ...rest } = contract;
+  const rest = Object.fromEntries(
+    Object.entries(contract).filter(
+      ([key]) => key !== "requiredPatterns" && key !== "forbiddenPatterns"
+    )
+  );
   return Object.keys(rest).length === 0 ? null : rest;
 }
 
