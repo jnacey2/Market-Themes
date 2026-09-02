@@ -379,6 +379,7 @@ with retracted as (
       ),
       updated_at = now()
   where slug = 'us-venezuela-oil-partnership'
+    and version = 1
     and status in ('active', 'probationary')
   returning id
 )
