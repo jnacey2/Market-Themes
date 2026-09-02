@@ -441,7 +441,7 @@ services:
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
         value: "10"
       - key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS
-        value: "40"
+        value: "100"
       - key: NARRATIVE_CLASSIFICATION_MAX_RUNTIME_MS
         value: "2400000"
       - key: NARRATIVE_CLASSIFICATION_CONCURRENCY
@@ -464,6 +464,8 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-haiku-4-5-20251001
+      - key: ANTHROPIC_PROMPT_CACHING
+        value: "true"
       - key: DB_QUERY_TIMEOUT_MS
         value: "120000"
       - key: NODE_OPTIONS
@@ -472,8 +474,11 @@ services:
         value: narrative_discovery_v1
       - key: NARRATIVE_DISCOVERY_BATCH_SIZE
         value: "10"
+      # Eligible inflow is ~60 documents/hour; a batch of 100 keeps pace and
+      # drains backlog. The hourly run skips submission while the previous
+      # batch is still in progress, so batch size (not schedule) is the lever.
       - key: NARRATIVE_DISCOVERY_MAX_DOCUMENTS
-        value: "40"
+        value: "100"
       - key: NARRATIVE_DISCOVERY_MAX_RUNTIME_MS
         value: "1200000"
       - key: NARRATIVE_DISCOVERY_CONCURRENCY

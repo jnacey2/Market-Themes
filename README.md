@@ -737,7 +737,14 @@ Narrative classification processes up to
 across source classes. Set the value to `0` only for an intentionally unbounded
 drain that still observes the configured runtime limit. Candidate discovery then
 looks for directional propositions not covered by active
-definitions. Open `/narrative-candidates` to review the resulting clusters. A
+definitions, taking up to `NARRATIVE_DISCOVERY_MAX_DOCUMENTS` per run. Its
+shared context (tracked narratives, existing candidates, and attention-burst
+hints) is sent as a separate leading block with the same
+`ANTHROPIC_PROMPT_CACHING` cache breakpoint as classification, so only the
+document text is billed at full price within a batch. Each hourly run submits a
+new batch only when the previous one has completed, so raise the per-run
+document limit rather than the schedule frequency to increase throughput.
+Open `/narrative-candidates` to review the resulting clusters. A
 candidate cannot be promoted until at least two documents from two independent
 publisher-owner groups support it within the configured 30-day evidence window.
 Promotion creates a versioned narrative
