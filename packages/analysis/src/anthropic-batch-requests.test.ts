@@ -83,6 +83,70 @@ test("builds extraction requests for every deterministic section", () => {
   assert.ok(requests.every((request) => request.output_config?.format));
 });
 
+test("splits earnings call transcripts at the Q&A boundary with labeled sections", () => {
+  const prepared = Array.from(
+    { length: 12 },
+    (_, index) =>
+      `Chief Executive Officer: Demand stayed strong this quarter and we held expense growth below revenue growth. Paragraph ${index}.`
+  ).join("\n\n");
+  const cue = "Operator: We will now begin the question-and-answer session.";
+  const qa = Array.from(
+    { length: 6 },
+    (_, index) =>
+      `Analyst ${index}: Can you talk about pricing?\n\nChief Financial Officer: Pricing held up better than expected.`
+  ).join("\n\n");
+  const transcript: AnalysisDocument = {
+    ...document,
+    id: "document:transcript",
+    sourceClass: "transcript",
+    text: `${prepared}\n\n${cue}\n\n${qa}`
+  };
+
+  const detected = prepareSignalExtractionSections(transcript);
+
+  assert.deepEqual(
+    detected.map((section) => section.label),
+    ["Prepared remarks", "Q&A"]
+  );
+  assert.equal(detected[0].text, prepared);
+  assert.ok(detected[1].text.startsWith(cue));
+
+  const qaStart = transcript.text.indexOf(cue);
+  const withStoredOffsets: AnalysisDocument = {
+    ...transcript,
+    metadata: {
+      transcriptSections: {
+        qaStartOffset: qaStart,
+        boundaryMethod: "operator_cue",
+        sections: [
+          { label: "prepared_remarks", start: 0, end: qaStart },
+          { label: "qa", start: qaStart, end: transcript.text.length }
+        ]
+      }
+    }
+  };
+  const stored = prepareSignalExtractionSections(withStoredOffsets);
+  assert.deepEqual(
+    stored.map((section) => section.text),
+    detected.map((section) => section.text)
+  );
+
+  const chunked = prepareSignalExtractionSections(transcript, {
+    maxDocumentChars: 400,
+    sectionChars: 400,
+    sectionOverlap: 20
+  });
+  assert.ok(chunked.length > 2);
+  assert.ok(chunked.every((section) => /^(Prepared remarks|Q&A)( \(part \d+\))?$/.test(section.label)));
+  assert.ok(chunked.some((section) => section.label.startsWith("Q&A")));
+
+  const noBoundary = prepareSignalExtractionSections({ ...transcript, text: prepared });
+  assert.deepEqual(
+    noBoundary.map((section) => section.label),
+    ["Full document"]
+  );
+});
+
 test("builds a batch-compatible discovery request with its context", () => {
   const existing: NarrativeCandidateContext[] = [
     {

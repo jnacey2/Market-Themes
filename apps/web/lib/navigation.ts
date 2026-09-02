@@ -19,7 +19,8 @@ export const NAVIGATION_GROUPS: NavigationGroup[] = [
         href: "/trends",
         label: "Narrative Currents",
         activePrefixes: ["/themes/", "/storyboards/"]
-      }
+      },
+      { href: "/changes", label: "What Changed" }
     ]
   },
   {

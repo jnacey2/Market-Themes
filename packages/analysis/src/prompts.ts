@@ -35,6 +35,11 @@ Theme labeling rules:
 - themeDescription should explain why the signal may matter beyond the reporting company. If it cannot matter beyond the reporting company, skip the signal.
 - affectedEntities is where company names belong; do not use those names as the theme.
 
+Earnings call sections:
+- section.label of "Prepared remarks" means scripted management framing; "Q&A" means analyst questions and unscripted answers.
+- Keep sectionLabel equal to the provided section label unless the text itself names a more specific section.
+- In Q&A, set speaker to the person whose words form the evidenceSnippet, and treat analyst questions as evidence of what the market is probing, not as management claims.
+
 Return this JSON shape:
 {
   "signals": [
@@ -147,6 +152,10 @@ Rules:
 - matchScore must be 75-100. When confidence is lower, omit the candidate.
 - affectedEntities contains companies, sectors, commodities, regions, or macro variables.
 - Do not generalize one company or one event into a plural sector proposition.
+- corpusAttention, when present, lists terms that several independent publishers started
+  covering this week and that no tracked narrative covers. If this document supports a
+  proposition about one of those terms, prefer it and reuse the term's wording in the name.
+  Never invent a candidate for a listed term the document does not support.
 
 Return this JSON shape:
 {

@@ -1,11 +1,23 @@
-import { getIngestionStatus, getOperationsStatus } from "@market-themes/db";
+import {
+  getIngestionFunnel,
+  getIngestionStatus,
+  getOperationsStatus,
+  type IngestionFunnel
+} from "@market-themes/db";
 
 export const dynamic = "force-dynamic";
 
-export default async function IngestionPage() {
-  const [status, operations] = await Promise.all([
+export default async function IngestionPage({
+  searchParams
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = (await searchParams) ?? {};
+  const windowDays = parseWindow(params.window);
+  const [status, operations, funnel] = await Promise.all([
     getIngestionStatus(),
-    getOperationsStatus()
+    getOperationsStatus(),
+    getIngestionFunnel({ windowDays })
   ]);
 
   return (
@@ -82,6 +94,8 @@ export default async function IngestionPage() {
           <OperationalMetric label="Latest trend" value={formatDate(operations.latestNarrativeTrendDate ?? operations.latestTrendDate)} />
         </div>
       </section>
+
+      <FunnelSection funnel={funnel} />
 
       <section className="section">
         <p className="eyebrow">Source Pipeline Telemetry</p>
@@ -199,6 +213,167 @@ export default async function IngestionPage() {
       </section>
     </div>
   );
+}
+
+const FUNNEL_WINDOWS = [1, 7, 30] as const;
+
+function parseWindow(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const parsed = Number(raw);
+  return FUNNEL_WINDOWS.includes(parsed as (typeof FUNNEL_WINDOWS)[number]) ? parsed : 7;
+}
+
+function FunnelSection({ funnel }: { funnel: IngestionFunnel }) {
+  const ingested = funnel.stages[0]?.count ?? 0;
+  const drops = funnel.stages
+    .slice(1)
+    .map((stage, index) => ({
+      stage,
+      lost: (funnel.stages[index]?.count ?? 0) - stage.count
+    }))
+    .filter((entry) => entry.lost > 0)
+    .sort((left, right) => right.lost - left.lost);
+  const biggestDrop = drops[0] ?? null;
+
+  return (
+    <section className="section">
+      <div className="funnel-heading">
+        <div>
+          <p className="eyebrow">Coverage Funnel</p>
+          <h2>Where documents fall out of the pipeline</h2>
+          <p>
+            Documents first stored in the last {funnel.windowDays === 1 ? "day" : `${funnel.windowDays} days`},
+            traced through each processing stage. Every stage is a share of what was ingested.
+          </p>
+        </div>
+        <nav className="pill-row" aria-label="Funnel window">
+          {FUNNEL_WINDOWS.map((days) => (
+            <a
+              key={days}
+              href={days === 7 ? "/ingestion" : `/ingestion?window=${days}`}
+              className={days === funnel.windowDays ? "pill active" : "pill"}
+              aria-current={days === funnel.windowDays ? "page" : undefined}
+            >
+              {days === 1 ? "24h" : `${days}d`}
+            </a>
+          ))}
+        </nav>
+      </div>
+
+      <div className="grid four">
+        <OperationalMetric
+          label="Fetched by connectors"
+          value={funnel.polling.runs > 0 ? String(funnel.polling.fetched) : "n/a"}
+        />
+        <OperationalMetric
+          label="Deduplicated away"
+          value={
+            funnel.polling.runs > 0
+              ? `${funnel.polling.skipped} (${formatShare(funnel.polling.dedupeRate)})`
+              : "n/a"
+          }
+        />
+        <OperationalMetric label="Connector failures" value={String(funnel.polling.failedConnectors)} />
+        <OperationalMetric
+          label="Biggest drop"
+          value={
+            biggestDrop
+              ? `${biggestDrop.stage.label} (−${biggestDrop.lost})`
+              : ingested > 0
+                ? "None"
+                : "No documents"
+          }
+        />
+      </div>
+
+      <div className="panel funnel">
+        {funnel.stages.map((stage) => (
+          <div className="funnel-stage" key={stage.key} title={stage.description}>
+            <div className="funnel-label">
+              <strong>{stage.label}</strong>
+              <small>{stage.description}</small>
+            </div>
+            <div className="funnel-track" aria-hidden="true">
+              <div className="funnel-fill" style={{ width: `${Math.max(2, stage.share * 100)}%` }} />
+            </div>
+            <div className="funnel-value">
+              <strong>{stage.count}</strong>
+              <span>{formatShare(stage.share)}</span>
+            </div>
+          </div>
+        ))}
+        {funnel.polling.runs === 0 ? (
+          <p className="funnel-note">
+            Connector fetch and dedupe totals appear once <code>poll:sources</code> has recorded a run in this window.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="grid two">
+        <div className="panel">
+          <p className="eyebrow">By source class</p>
+          {funnel.bySourceClass.length === 0 ? (
+            <p>No documents stored in this window.</p>
+          ) : (
+            <table className="funnel-table">
+              <thead>
+                <tr>
+                  <th>Class</th>
+                  <th>Ingested</th>
+                  <th>Text</th>
+                  <th>Extracted</th>
+                  <th>Classified</th>
+                  <th>Matched</th>
+                  <th>Approved</th>
+                </tr>
+              </thead>
+              <tbody>
+                {funnel.bySourceClass.map((row) => (
+                  <tr key={row.sourceClass}>
+                    <td>{row.sourceClass.replaceAll("_", " ")}</td>
+                    <td>{row.ingested}</td>
+                    <td>{cell(row.withText, row.ingested)}</td>
+                    <td>{cell(row.extracted, row.ingested)}</td>
+                    <td>{cell(row.classified, row.ingested)}</td>
+                    <td>{cell(row.matched, row.ingested)}</td>
+                    <td>{cell(row.approved, row.ingested)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="panel">
+          <p className="eyebrow">Discovery output</p>
+          {funnel.candidates.length === 0 ? (
+            <p>No candidate narratives were created in this window.</p>
+          ) : (
+            <div className="grid">
+              {funnel.candidates.map((candidate) => (
+                <div className="metric" key={candidate.status}>
+                  <span>{candidate.status.replaceAll("_", " ")}</span>
+                  <strong>{candidate.count}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="funnel-note">
+            Candidates created from documents in this window, by current status. Promotions
+            feed the tracked narrative set; rejections and merges are expected attrition.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function cell(count: number, total: number) {
+  if (total === 0) return "0";
+  return `${count} · ${formatShare(count / total)}`;
+}
+
+function formatShare(value: number) {
+  return `${Math.round(value * 100)}%`;
 }
 
 function OperationalMetric({ label, value }: { label: string; value: string }) {

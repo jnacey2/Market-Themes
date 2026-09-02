@@ -15,6 +15,7 @@ test("global navigation exposes every top-level destination exactly once", () =>
   assert.deepEqual(hrefs, [
     "/",
     "/trends",
+    "/changes",
     "/narrative-candidates",
     "/narrative-review",
     "/sources",

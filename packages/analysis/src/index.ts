@@ -9,3 +9,4 @@ export * from "./prompts";
 export * from "./scoring";
 export * from "./structured-output";
 export * from "./theme-normalization";
+export * from "./attention-bursts";

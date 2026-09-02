@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { retractNarrativeDefinition } from "@market-themes/db";
-import { isSafeMutationRequest } from "../../../../lib/ops-auth";
+import { isSafeMutationRequest, publicErrorMessage } from "../../../../lib/ops-auth";
 
 export async function POST(request: Request) {
   if (!isSafeMutationRequest(request)) {
@@ -30,8 +30,9 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ narrative });
   } catch (error) {
+    console.error("[api/narrative-definitions/retract]", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
+      { error: publicErrorMessage(error, "Retraction failed.") },
       { status: 500 }
     );
   }

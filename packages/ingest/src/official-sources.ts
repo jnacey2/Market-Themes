@@ -9,6 +9,20 @@ export const DEFAULT_OFFICIAL_FEEDS: RssFeedConfig[] = [
     publisherOwner: "Federal Reserve System"
   },
   {
+    id: "federal-reserve-speeches",
+    name: "Federal Reserve Board Speeches",
+    url: "https://www.federalreserve.gov/feeds/speeches.xml",
+    sourceClass: "central_bank",
+    publisherOwner: "Federal Reserve System"
+  },
+  {
+    id: "federal-reserve-testimony",
+    name: "Federal Reserve Board Testimony",
+    url: "https://www.federalreserve.gov/feeds/testimony.xml",
+    sourceClass: "central_bank",
+    publisherOwner: "Federal Reserve System"
+  },
+  {
     id: "bls-latest",
     name: "U.S. Bureau of Labor Statistics",
     url: "https://www.bls.gov/feed/bls_latest.rss",

@@ -5,6 +5,8 @@ import {
   buildNarrativeClassificationContent,
   normalizeObservation,
   passesDefinitionGuard,
+  readEvidenceGuard,
+  SEEDED_EVIDENCE_GUARDS,
   passesNarrativeEvidenceContract
 } from "./narrative-classification";
 
@@ -213,65 +215,134 @@ test("caches only the stable definition prefix", () => {
 test("applies strict proposition-specific evidence guards", () => {
   assert.equal(
     passesDefinitionGuard(
-      "pricing-power",
+      SEEDED_EVIDENCE_GUARDS["pricing-power"],
       "Average ticket increased 2.3%, offset by a decrease in customer transactions."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "deal-activity-recovery",
+      SEEDED_EVIDENCE_GUARDS["deal-activity-recovery"],
       "The company completed its acquisition of Example Corp."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "AI data center demand increased and accelerator capacity remains constrained."
     ),
     true
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "Data center revenue increased 90% after a hyperscaler contract."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "Circular financing is a sign that the AI and compute industry is maturing."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "AI accelerator revenue increased 90% as customer orders reached a record."
     ),
     true
   );
   assert.equal(
     passesDefinitionGuard(
-      "energy-demand-growth",
+      SEEDED_EVIDENCE_GUARDS["energy-demand-growth"],
       "Hot summer temperatures drove very high natural gas demand this week."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "energy-demand-growth",
+      SEEDED_EVIDENCE_GUARDS["energy-demand-growth"],
       "Industrial electrification increased regional electricity load to a new record."
     ),
     true
   );
   assert.equal(
     passesDefinitionGuard(
-      "supply-chain-normalization",
+      SEEDED_EVIDENCE_GUARDS["supply-chain-normalization"],
       "Lead times shortened as component availability improved."
     ),
     true
   );
+});
+
+test("reads regex guards from definition metadata and enforces them in the evidence contract", () => {
+  const guarded: NarrativeDefinition = {
+    ...definition,
+    slug: "pricing-power",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["pricing-power"] }
+  };
+  assert.equal(
+    passesNarrativeEvidenceContract(
+      guarded,
+      "Average ticket increased 2.3%, offset by a decrease in customer transactions."
+    ),
+    false
+  );
+  assert.equal(
+    passesNarrativeEvidenceContract(
+      guarded,
+      "Pricing held firm while unit demand grew across the quarter."
+    ),
+    true
+  );
+  // Without metadata the slug alone no longer implies a guard.
+  assert.equal(
+    passesNarrativeEvidenceContract(
+      { ...definition, slug: "pricing-power", metadata: {} },
+      "Average ticket increased 2.3%, offset by a decrease in customer transactions."
+    ),
+    true
+  );
+  assert.equal(readEvidenceGuard({ requiredTermGroups: [["oil"]] }), null);
+  assert.deepEqual(readEvidenceGuard({ requiredPatterns: ["a"], forbiddenPatterns: 3 }), {
+    requiredPatterns: ["a"],
+    forbiddenPatterns: []
+  });
+});
+
+test("invalid guard patterns are ignored instead of failing classification", () => {
+  assert.equal(
+    passesDefinitionGuard(
+      { requiredPatterns: ["(unclosed", "demand"], forbiddenPatterns: [] },
+      "Demand rose."
+    ),
+    true
+  );
+});
+
+test("regex guards are kept out of the model-facing definition reference", () => {
+  const [reference] = buildNarrativeClassificationContent(
+    document,
+    [
+      {
+        ...definition,
+        metadata: {
+          evidenceContract: {
+            requiredTermGroups: [["oil"]],
+            requiredPatterns: ["oil"],
+            forbiddenPatterns: ["gas"]
+          }
+        }
+      }
+    ],
+    document.text,
+    false
+  );
+  const text = "text" in reference ? reference.text : "";
+  assert.ok(text.includes("requiredTermGroups"));
+  assert.ok(!text.includes("requiredPatterns"));
+  assert.ok(!text.includes("forbiddenPatterns"));
 });

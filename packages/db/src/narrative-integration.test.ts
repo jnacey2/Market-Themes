@@ -227,7 +227,9 @@ test(
     );
     assert.equal(homepage.degraded, false);
     assert.equal(homepage.latestDate, "2026-08-27");
-    assert.equal(homepage.trackedNarrativeCount, definitions.length);
+    assert.equal(homepage.trackedNarrativeCount, trackedDefinitions.length);
+    assert.ok(Array.isArray(homepage.lanes.rising));
+    assert.ok(Array.isArray(homepage.lanes.fading));
     assert(
       homepage.narratives.some(
         (item) =>
@@ -282,6 +284,22 @@ async function cleanupNarrativeFixture(suffix: string) {
   }
 }
 
+async function cleanupPublicationFixture(documentId: string) {
+  const client = createDatabaseClient();
+  await client.connect();
+  try {
+    await client.query(`delete from documents where id = $1`, [documentId]);
+    await client.query(
+      `delete from sources
+       where id = $1
+         and not exists (select 1 from documents where source_id = $1)`,
+      [documentId]
+    );
+  } finally {
+    await client.end();
+  }
+}
+
 test(
   "registers and disables a managed publication feed",
   { skip: !process.env.DATABASE_URL },
@@ -315,9 +333,12 @@ test(
 test(
   "upgrades a cached Substack preview after authenticated full-text retrieval",
   { skip: !process.env.DATABASE_URL },
-  async () => {
+  async (context) => {
     const suffix = randomUUID();
     const documentId = `publication:example:${suffix}`;
+    // Left-over fixtures dated inside the first test's corpus window dilute its
+    // classification coverage on repeated local runs, so always clean up.
+    context.after(() => cleanupPublicationFixture(documentId));
     const preview = await persistDocuments([
       {
         id: documentId,

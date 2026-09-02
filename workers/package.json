@@ -21,8 +21,11 @@
     "narratives:classify:batch": "node --import tsx src/jobs/classify-narratives-batch.ts",
     "narratives:discover": "node --import tsx src/jobs/discover-narratives.ts",
     "narratives:discover:batch": "node --import tsx src/jobs/discover-narratives-batch.ts",
+    "narratives:bursts": "node --import tsx src/jobs/detect-attention-bursts.ts",
     "anthropic:batches:poll": "node --import tsx src/jobs/poll-anthropic-batches.ts",
     "eval:narratives": "node --import tsx src/jobs/evaluate-narrative-classifier.ts",
+    "eval:export": "node --import tsx src/jobs/export-eval-cases.ts",
+    "narratives:backtest": "node --import tsx src/jobs/backtest-narrative-emergence.ts",
     "narratives:auto-review": "node --import tsx src/jobs/auto-review-narratives.ts",
     "repair:document-texts": "node --import tsx src/jobs/repair-document-texts.ts",
     "themes:normalize": "node --import tsx src/jobs/normalize-themes.ts",
@@ -41,10 +44,10 @@
     "@market-themes/db": "0.1.0",
     "@market-themes/ingest": "0.1.0",
     "playwright": "^1.62.1",
-    "tsx": "latest"
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest"
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
   }
 }

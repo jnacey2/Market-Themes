@@ -11,11 +11,20 @@ import {
   recordPublicationFeedPoll
 } from "@market-themes/db";
 import { pathToFileURL } from "node:url";
+import { runRecordedJob } from "./recorded-job";
 
 export async function pollSources() {
   let fetched = 0;
   let inserted = 0;
+  let skipped = 0;
   let failed = 0;
+  const connectorResults: Array<{
+    connectorId: string;
+    fetched: number;
+    inserted: number;
+    skipped: number;
+    error?: string;
+  }> = [];
   const publicationFeeds = await listPublicationFeeds({ enabledOnly: true });
   const publicationFeedById = new Map(publicationFeeds.map((feed) => [feed.id, feed]));
   const staticIds = new Set(defaultConnectors.map((connector) => connector.id));
@@ -64,11 +73,19 @@ export async function pollSources() {
         if (publicationFeedById.has(connector.id)) {
           await recordPublicationFeedPoll(connector.id, { success: true });
         }
+        connectorResults.push({ connectorId: connector.id, fetched: 0, inserted: 0, skipped: 0 });
         continue;
       }
 
       const result = await persistDocuments(documents);
       inserted += result.insertedDocuments;
+      skipped += result.skippedDocuments;
+      connectorResults.push({
+        connectorId: connector.id,
+        fetched: documents.length,
+        inserted: result.insertedDocuments,
+        skipped: result.skippedDocuments
+      });
       await recordConnectorCheckpoint({
         connectorId: connector.id,
         success: true,
@@ -95,6 +112,13 @@ export async function pollSources() {
       failed += 1;
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[poll-sources] ${connector.id} failed: ${message}`);
+      connectorResults.push({
+        connectorId: connector.id,
+        fetched: 0,
+        inserted: 0,
+        skipped: 0,
+        error: message
+      });
       await recordConnectorCheckpoint({
         connectorId: connector.id,
         success: false,
@@ -109,7 +133,7 @@ export async function pollSources() {
     }
   }
 
-  return { fetched, inserted, failed };
+  return { fetched, inserted, skipped, failed, connectors: connectorResults };
 }
 
 function newestDocumentDate(documents: Array<{ publishedAt: string }>) {
@@ -121,5 +145,16 @@ function newestDocumentDate(documents: Array<{ publishedAt: string }>) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await pollSources();
+  if (!process.env.DATABASE_URL) {
+    await pollSources();
+  } else {
+    // Recorded so the /ingestion funnel can report fetched vs. deduplicated
+    // counts per window; connector checkpoints only keep cumulative totals.
+    await runRecordedJob(
+      "poll_sources",
+      () => pollSources(),
+      (result) => result.inserted,
+      (result) => result.failed
+    );
+  }
 }

@@ -26,11 +26,14 @@ export async function GET() {
       commit: process.env.RENDER_GIT_COMMIT ?? null
     });
   } catch (error) {
+    // The health endpoint is unauthenticated; keep connection details out of
+    // the response and log them for operators instead.
+    console.error("[api/health] database check failed", error);
     return Response.json(
       {
         ok: false,
         database: "error",
-        error: error instanceof Error ? error.message : String(error)
+        error: "database_unreachable"
       },
       { status: 503 }
     );

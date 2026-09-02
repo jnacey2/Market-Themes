@@ -21,10 +21,16 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
       ),
     [narrative, source, tone]
   );
-  const maximum = Math.max(...points.flatMap((point) => [point.density, point.baselineMean]), 1);
+  const maximum = Math.max(
+    ...points.flatMap((point) => [point.density, point.baselineMean, point.attentionDensity]),
+    1
+  );
   const line = toPolyline(points.map((point) => point.density), maximum);
   const baseline = toPolyline(points.map((point) => point.baselineMean), maximum);
+  const attention = toPolyline(points.map((point) => point.attentionDensity), maximum);
   const active = points.find((point) => point.date === activeDate) ?? points.at(-1);
+  const measured =
+    narrative.coverageStatus === "measured" || narrative.coverageStatus === "measured_zero";
 
   return (
     <>
@@ -70,6 +76,7 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
           role="img"
           aria-label={`${narrative.name} density and baseline over ${horizon} days`}
         >
+          <path className="attention-line" d={`M ${attention.join(" L ")}`} />
           <path className="baseline-line" d={`M ${baseline.join(" L ")}`} />
           <path className="density-line" d={`M ${line.join(" L ")}`} />
           {points.map((point, index) => {
@@ -86,33 +93,34 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
                 onMouseEnter={() => setActiveDate(point.date)}
               >
                 <title>
-                  {point.date}: density {point.density.toFixed(1)}, baseline{" "}
-                  {point.baselineMean.toFixed(1)}, z {point.zScore.toFixed(1)}
+                  {point.date}: reviewed density {point.density.toFixed(1)}, raw attention{" "}
+                  {point.attentionDensity.toFixed(1)}, baseline {point.baselineMean.toFixed(1)}, z{" "}
+                  {point.zScore.toFixed(1)}, {point.lifecycleState}
                 </title>
               </circle>
             );
           })}
         </svg>
+        <div className="chart-legend" aria-hidden="true">
+          <span><i className="legend-density" /> Reviewed density</span>
+          <span><i className="legend-attention" /> Raw attention (pending + approved)</span>
+          <span><i className="legend-baseline" /> Baseline</span>
+        </div>
         <div className="chart-readout" aria-live="polite">
           <strong>{active?.date ?? "No observations"}</strong>
           <span>Density {active?.density.toFixed(1) ?? "0.0"}</span>
+          <span>Attention {active?.attentionDensity.toFixed(1) ?? "0.0"}</span>
           <span>Baseline {active?.baselineMean.toFixed(1) ?? "0.0"}</span>
           <span>
             Coverage {narrative.eligibleDocuments}/{narrative.corpusDocuments} (
             {narrative.classificationCoveragePercent}%)
           </span>
           <span>
-            Z-score{" "}
-            {narrative.lowHistory || narrative.coverageStatus !== "measured"
-              ? "—"
-              : active?.zScore.toFixed(1) ?? "0.0"}
+            Z-score {measured ? active?.zScore.toFixed(1) ?? "0.0" : "—"}
+            {measured && narrative.lowHistory ? " (provisional)" : ""}
           </span>
-          <span>
-            Change{" "}
-            {narrative.lowHistory || narrative.coverageStatus !== "measured"
-              ? "—"
-              : signed(active?.change ?? 0)}
-          </span>
+          <span>Change {measured ? signed(active?.change ?? 0) : "—"}</span>
+          <span>State {active?.lifecycleState ?? "unmeasured"}</span>
         </div>
       </div>
 

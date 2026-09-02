@@ -4,7 +4,14 @@ import type {
   Message,
   MessageCreateParamsNonStreaming
 } from "@anthropic-ai/sdk/resources/messages";
-import type { AnalysisDocument, ExtractedSignalInput, ToneDirection } from "@market-themes/db";
+import {
+  detectTranscriptSections,
+  readStoredTranscriptSections,
+  transcriptSectionDisplayLabel,
+  type AnalysisDocument,
+  type ExtractedSignalInput,
+  type ToneDirection
+} from "@market-themes/db";
 import {
   signalExtractionPromptVersion,
   signalExtractionSystemPrompt
@@ -88,13 +95,68 @@ export function prepareSignalExtractionSections(
 ) {
   const maxDocumentChars =
     options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS;
+  const sectionChars = options.sectionChars ?? DEFAULT_SECTION_CHARS;
+  const sectionOverlap = options.sectionOverlap ?? DEFAULT_SECTION_OVERLAP;
+
+  if (document.sourceClass === "transcript") {
+    const transcriptSections = prepareTranscriptSections(
+      document,
+      maxDocumentChars,
+      sectionChars,
+      sectionOverlap
+    );
+    if (transcriptSections) {
+      return transcriptSections;
+    }
+  }
+
   return document.text.length <= maxDocumentChars
     ? [{ label: "Full document", text: document.text }]
-    : splitIntoSections(
-        document.text,
-        options.sectionChars ?? DEFAULT_SECTION_CHARS,
-        options.sectionOverlap ?? DEFAULT_SECTION_OVERLAP
-      );
+    : splitIntoSections(document.text, sectionChars, sectionOverlap);
+}
+
+/**
+ * Earnings calls are split at the prepared-remarks / Q&A boundary so the model
+ * labels evidence by regime (scripted framing vs. analyst probing). Stored
+ * ingest offsets are preferred; otherwise the boundary is detected from text.
+ * Returns null when no boundary can be found so the generic path applies.
+ */
+function prepareTranscriptSections(
+  document: AnalysisDocument,
+  maxDocumentChars: number,
+  sectionChars: number,
+  sectionOverlap: number
+): SignalExtractionSection[] | null {
+  const sectioning =
+    readStoredTranscriptSections(document.metadata, document.text.length) ??
+    detectTranscriptSections(document.text);
+
+  if (sectioning.qaStartOffset === null) {
+    return null;
+  }
+
+  const sections: SignalExtractionSection[] = [];
+
+  for (const span of sectioning.sections) {
+    const text = document.text.slice(span.start, span.end).trim();
+    if (!text) {
+      continue;
+    }
+
+    const label = transcriptSectionDisplayLabel(span.label);
+    const limit = Math.min(maxDocumentChars, sectionChars);
+
+    if (text.length <= limit) {
+      sections.push({ label, text });
+      continue;
+    }
+
+    for (const [index, part] of splitIntoSections(text, sectionChars, sectionOverlap).entries()) {
+      sections.push({ label: `${label} (part ${index + 1})`, text: part.text });
+    }
+  }
+
+  return sections.length > 0 ? sections : null;
 }
 
 export function buildSignalExtractionRequest(

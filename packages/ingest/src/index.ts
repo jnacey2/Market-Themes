@@ -14,3 +14,4 @@ export * from "./sec";
 export * from "./sec-targets";
 export * from "./substack";
 export * from "./substack-publications";
+export * from "./ticker-universe";

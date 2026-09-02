@@ -1,8 +1,11 @@
 import Link from "next/link";
 import {
+  getAttentionBurstWatchlist,
   getNarrativeCandidateQueue,
+  type AttentionBurstWatchlist as AttentionBurstWatchlistStatus,
   type NarrativeCandidateSummary
 } from "@market-themes/db";
+import { AttentionWatchlist } from "../../components/narratives/AttentionWatchlist";
 import { CandidateActions } from "./CandidateActions";
 import { RetractNarrativeButton } from "./RetractNarrativeButton";
 
@@ -10,6 +13,7 @@ export const dynamic = "force-dynamic";
 
 export default async function NarrativeCandidatesPage() {
   const queue = await getNarrativeCandidateQueue();
+  const watchlist = await loadWatchlist();
   const pendingCandidates = queue.candidates.filter(
     (candidate) => candidate.status === "pending"
   );
@@ -45,6 +49,14 @@ export default async function NarrativeCandidatesPage() {
         <Metric label="Manual ready" value={queue.qualifiedCount} />
         <Metric label="Auto eligible" value={queue.autoEligibleCount} />
         <Metric label="Promoted" value={queue.approvedCount} />
+      </section>
+
+      <section className="section">
+        <AttentionWatchlist
+          watchlist={watchlist}
+          title="Corpus attention not yet tracked"
+          showCovered={false}
+        />
       </section>
 
       <section className="section candidate-queue">
@@ -262,6 +274,22 @@ function CandidateCard({
       )}
     </article>
   );
+}
+
+async function loadWatchlist(): Promise<AttentionBurstWatchlistStatus> {
+  try {
+    return await getAttentionBurstWatchlist({ limit: 40 });
+  } catch (error) {
+    console.warn(
+      `[web] attention watchlist failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return {
+      databaseConfigured: Boolean(process.env.DATABASE_URL),
+      date: null,
+      bursts: [],
+      uncoveredCount: 0
+    };
+  }
 }
 
 function Metric({

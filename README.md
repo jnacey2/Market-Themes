@@ -40,8 +40,17 @@ mix, and follow-up research questions for a market theme.
 ## What Exists Now
 
 - Render-friendly npm workspace monorepo.
-- Next.js dashboard ranked from reviewed narrative trends, with storyboard cards
-  and detail pages.
+- Next.js overview organised into Rising / Peaking / Fading / New lanes, ranked by
+  raw attention surprise, with storyboard cards and detail pages.
+- Lifecycle states (emerging, rising, peaking, steady, fading, dormant) derived from
+  reviewed density, raw classifier attention, and peak statistics
+  (days since peak, percent of peak) for every tracked narrative.
+- Stored daily brief and narrative alerts written by a scheduled job from the
+  measured board, plus a `/changes` page listing state transitions, board
+  entries and exits, and unusual moves day over day.
+- Corpus-level attention burst detection (n-grams, entities, extracted themes)
+  that flags terms several independent publishers started covering, surfaces the
+  uncovered ones as an operator watchlist, and feeds them into discovery prompts.
 - Mock data shaped like production objects.
 - Postgres schema for sources, documents, chunks, entities, themes, signals,
   trends, storyboards, briefs, and alerts.
@@ -58,10 +67,21 @@ mix, and follow-up research questions for a market theme.
 - Analysis inspection page for recent signals, evidence snippets, interpretations,
   and failed document runs.
 - Connector interfaces for source ingestion.
-- Official Federal Reserve, BLS, BEA, EIA, configurable company-IR RSS, and optional
-  GDELT discovery connectors.
+- Official Federal Reserve (press releases, speeches, testimony), BLS, BEA, EIA,
+  configurable company-IR RSS, and optional GDELT discovery connectors.
 - One-click public newspaper RSS presets (NYT, WSJ, Washington Post, Bloomberg, FT)
-  with snippet-only retention and shared publisher-owner mapping.
+  and trade-press presets (Industry Dive family and others) with snippet-only
+  retention and shared publisher-owner mapping.
+- Issuer universe for SEC filings and FMP transcripts resolved from FMP index
+  constituents (`TARGET_UNIVERSE`, S&P 500 by default) with a checked-in fallback.
+- Earnings-call transcripts sectioned at the prepared-remarks / Q&A boundary so
+  extracted evidence is labelled by regime.
+- Ingestion coverage funnel on `/ingestion`: fetched, deduplicated, analyzable,
+  extracted, classified, matched, approved, and candidate-cited counts per window
+  and per source class.
+- Real-document evaluation export with review-labelled and hand-labelled recall
+  strata, and an emergence backtest CLI that reports how early each detector
+  fired relative to definition dates or asserted truth dates.
 - Worker and cron job entrypoints.
 - A scheduled end-to-end pipeline with connector checkpoints and operations status.
 - `render.yaml` blueprint for Render deployment.
@@ -170,8 +190,35 @@ Curated narratives use a separate, stable measurement contract. Each active or
 probationary measurement definition is evaluated against every eligible document
 and records both matches and non-matches; only active definitions are published.
 Daily density is the percentage of eligible unique documents
-matching the proposition, calculated per source class and then averaged so a
-high-volume feed cannot dominate the result. The UI reports publisher breadth
+matching the proposition, calculated per source class and then combined with
+log-volume weights so a high-volume feed cannot dominate the result and a
+single-document class cannot swing it. Baselines use non-overlapping prior
+windows with a robust (MAD-based, floored) scale, so a sustained run of zero
+matches after a real baseline produces a negative z-score and a `fading` state
+instead of being skipped.
+
+Two series are tracked per narrative. **Reviewed density** counts only approved
+evidence and drives the board. **Raw attention** counts every non-rejected
+classifier match weighted by confidence, so a single-source signal is visible
+days before review confirms it; the overview lanes rank by raw attention
+surprise and the sparkline shows both lines. Peak density, peak date, days since
+peak, and percent of peak are stored on every trend row and drive the
+lifecycle state:
+
+| State | Meaning |
+| --- | --- |
+| `unmeasured` | Classification coverage is too thin to measure the window. |
+| `dormant` | Measured, with no reviewed evidence in this window or the last. |
+| `emerging` | Reviewed evidence exists but the baseline history is still short. |
+| `rising` | Reviewed density climbed by more than the noise floor. |
+| `peaking` | Within 15% of the recent peak and not yet past it. |
+| `steady` | Sustained reviewed attention without an unusual move. |
+| `fading` | Dropped to zero, fell two windows running, or sits below half of a peak that is at least one window old. |
+
+Newly activated definitions also appear in the overview's "New" lane for their
+first week regardless of state.
+
+The UI reports publisher breadth
 and publisher-owner breadth separately, and uses normalized-title/connector
 fingerprints to report unique-story breadth without counting syndicated copies
 as independent confirmation. Classification coverage is shown as classified
@@ -411,6 +458,39 @@ npm run eval:narratives -- --batch-id msgbatch_... --model claude-haiku-4-5-2025
 The result reports precision, recall, F1, and accuracy overall and per
 definition. Submit the same set with a challenger model to compare quality.
 
+The built-in set is ten synthetic sentences, which is enough to catch prompt
+regressions but says nothing about recall on real documents. Export real cases
+from the database instead:
+
+```bash
+# Reviewed documents arrive labelled from approve/reject decisions; the
+# "unlabeled" recall sample must be hand-labelled by editing expectedMatchedSlugs.
+npm run eval:export -- --out eval/narrative-eval-cases.json --unlabeled 40
+# Score the production classifier's stored verdicts without any model call:
+npm run eval:narratives -- --offline --cases eval/narrative-eval-cases.json
+# Or re-run the classifier on the exported cases through the Batch API:
+npm run eval:narratives -- --submit --cases eval/narrative-eval-cases.json
+```
+
+Scores are reported per label stratum. The `review` stratum measures precision
+on what the classifier already found; only the hand-labelled `unlabeled`
+stratum can measure recall, because review never sees documents the classifier
+skipped. `documentRecall` is the share of positive cases whose every expected
+slug was recovered. The `eval/` directory is git-ignored.
+
+To check detection latency rather than labelling accuracy, run the emergence
+backtest against stored trend history:
+
+```bash
+npm run narratives:backtest
+npm run narratives:backtest -- --truth eval/emergence-truth.json --window 7d --z 2
+```
+
+Without a truth file it reports, per narrative, the first date raw attention,
+reviewed density, and the lifecycle state would have fired, and how far ahead of
+or behind the definition date that was. With a truth file (`{"slug":
+"YYYY-MM-DD"}`) it adds median lag and the share detected within 7 and 14 days.
+
 Prompt scaffolding lives in `packages/analysis/src/prompts.ts`.
 Open `/analysis` in the web app to inspect recent Claude signals and failed
 runs before using them in production storyboards. The same page can queue and
@@ -451,6 +531,9 @@ Copy `.env.example` to `.env.local` for local development when needed.
 
 ```text
 DATABASE_URL=postgres://user:password@host:5432/market_themes
+# disable | no-verify | verify-full (unset: Render hosts use no-verify, others disable)
+DB_SSL_MODE=
+DB_SSL_CA=
 ANTHROPIC_API_KEY=sk-ant-api03-example
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ANTHROPIC_PROMPT_CACHING=true
@@ -473,6 +556,8 @@ THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v3
 THEME_NORMALIZATION_BATCH_SIZE=25
 THEME_NORMALIZATION_MAX_BATCHES=100
 NARRATIVE_CLASSIFICATION_PROMPT_VERSION=narrative_classification_v7
+# Documents older than this are not (re)classified when definitions change.
+NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS=60
 NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION=candidate_promotion_validation_v2
 NARRATIVE_EVENT_TTL_DAYS=14
 NARRATIVE_ACTIVATION_MIN_STORIES=3
@@ -501,7 +586,11 @@ GDELT_DOMAINS=wsj.com,nytimes.com,bloomberg.com,washingtonpost.com,ft.com,reuter
 NYT_API_KEY=
 NYT_SEARCH_LOOKBACK_HOURS=24
 SEC_USER_AGENT=MarketThemesBot/0.1 contact@example.com
-SEC_TARGET_TICKERS=AAPL,MSFT,JPM,WMT,XOM
+# Issuer universe for SEC filings and FMP transcripts: sp500 | nasdaq100 | dowjones | seed
+# (comma-separated). Requires FMP_API_KEY; falls back to the seed list otherwise.
+TARGET_UNIVERSE=sp500
+# Explicit override that bypasses TARGET_UNIVERSE.
+SEC_TARGET_TICKERS=
 SEC_POLL_LOOKBACK_DAYS=7
 SEC_BACKFILL_MONTHS=12
 SEC_BACKFILL_BATCH_SIZE=10
@@ -557,6 +646,9 @@ npm run narratives:discover
 npm run narratives:discover:batch
 npm run anthropic:batches:poll
 npm run eval:narratives -- --model claude-haiku-4-5-20251001
+npm run eval:export -- --out eval/narrative-eval-cases.json
+npm run narratives:backtest
+npm run narratives:bursts --workspace @market-themes/workers
 npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run pipeline
@@ -704,7 +796,10 @@ The blueprint defines:
 - `themes-postgres`: managed Postgres database.
 - `poll-sources`: cron job for source polling.
 - `poll-fmp-transcripts`: daily cron job for FMP transcript polling.
-- `generate-daily-brief`: cron job for daily brief generation.
+- `generate-daily-brief`: daily cron job that writes the stored brief and
+  narrative alerts from the measured board.
+- `detect-attention-bursts`: six-hourly corpus-level burst detection (no model
+  calls) that feeds the discovery watchlist and prompt hints.
 - `recompute-theme-trends`: cron job for z-score and baseline refreshes.
 - `extract-recent-signals`: hourly batched extraction of the latest 30-day corpus.
 - `classify-narratives`: hourly batched existing-narrative evidence classification.
@@ -777,6 +872,9 @@ npm run narratives:discover
 npm run narratives:discover:batch
 npm run anthropic:batches:poll
 npm run eval:narratives -- --model claude-haiku-4-5-20251001
+npm run eval:export -- --out eval/narrative-eval-cases.json
+npm run narratives:backtest
+npm run narratives:bursts --workspace @market-themes/workers
 npm run narratives:auto-review
 npm run narrative-trends:recompute
 npm run brief:daily --workspace @market-themes/workers
@@ -787,7 +885,14 @@ The worker uses `node --import tsx` so TypeScript entrypoints run locally and on
 Render without a separate build step.
 
 Open `/ingestion` in the web app to see separate operational cards for SEC
-filings and FMP transcripts.
+filings and FMP transcripts, plus the coverage funnel (fetched, deduplicated,
+analyzable, extracted, classified, matched, approved, candidate-cited) for the
+last 1, 7, or 30 days and per source class. Polling runs are recorded in
+`pipeline_runs`, so the fetched and deduplicated counts only cover runs since
+that recording was added.
+
+Open `/changes` to see what moved since the previous day: lifecycle state
+transitions, board entries and exits, and unusual raw-attention moves.
 
 Open `/analysis` to review Claude-extracted signals, evidence snippets,
 interpretations, and failed analysis runs.
@@ -800,49 +905,63 @@ replacing the mock dashboard with live rankings.
 
 ## Development Roadmap
 
+Done and in production use: Postgres-backed storyboards, ordered migrations,
+company-IR and official-source RSS, FMP-resolved issuer universe, lifecycle
+states with peak tracking, raw-attention early signal, stored daily briefs and
+alerts, the `/changes` delta view, corpus-level burst detection, the ingestion
+funnel, and real-document evaluation export with an emergence backtest.
+
 Near-term:
 
-1. Expand the checked-in SEC ticker seed to the full S&P 500 plus Nasdaq-100.
-2. Run FMP transcript smoke and backfill jobs.
-3. Review Claude signal quality from `/analysis`.
-4. Review normalized theme mappings from `/theme-mappings`.
-5. Review computed trend rows from `/trends`.
-6. Replace mock storyboard reads with Postgres queries.
-7. Add migrations or a migration runner.
-8. Add manual document paste/upload.
-9. Add company IR press release ingestion.
-10. Store embeddings for copilot retrieval.
-11. Generate storyboards and daily briefs from stored evidence.
+1. Hand-label the exported `unlabeled` recall stratum for every active
+   definition and record the first measured recall baseline.
+2. Assert truth dates for the narratives already on the board and run the
+   emergence backtest to calibrate the raw-attention z-threshold.
+3. Add manual document paste/upload.
+4. Store embeddings for copilot retrieval.
+5. Add credentialed newspaper connectors source by source, with controlled
+   scraping configuration where terms allow it.
 
 Then:
 
-1. Add credentialed newspaper connectors source by source.
-2. Add controlled scraping configuration where needed.
-3. Add source-specific retention policies.
-4. Add user review controls for merging, splitting, and dismissing themes.
-5. Add daily email delivery.
-6. Add historical evaluation sets for false positives and false negatives.
-7. Add copilot retrieval over chunks, signals, and storyboards.
+1. Add user review controls for merging, splitting, and dismissing themes.
+2. Add daily email delivery of the stored brief and alerts.
+3. Add copilot retrieval over chunks, signals, and storyboards.
+4. Expand attention-burst detection with cross-source co-occurrence so a term
+   that appears in filings and press simultaneously ranks above one-class bursts.
 
 ## Quality And Evaluation
 
-Before trusting alerts, build a small historical evaluation set of known market
-themes. For each historical theme, evaluate:
+Three checks now have tooling; run them before changing thresholds, prompts, or
+source weights:
 
-- Did the app surface it early?
-- Did the z-score move before the theme became obvious?
-- Were the evidence cards actually relevant?
-- Did Claude overstate the implication?
-- Were false positives caused by one noisy source or real breadth?
+- **Labelling accuracy**: `npm run eval:export` then `npm run eval:narratives
+  -- --offline` scores the production classifier's stored verdicts against
+  review decisions and hand labels, per stratum. Only the hand-labelled
+  `unlabeled` stratum measures recall.
+- **Detection latency**: `npm run narratives:backtest` reports, per narrative,
+  how many days before or after the definition (or an asserted truth date) raw
+  attention, reviewed density, and the lifecycle state first fired.
+- **Coverage**: the `/ingestion` funnel shows where documents drop out between
+  fetch and approved evidence, per source class, so a recall problem can be
+  separated from an ingestion problem.
 
-This evaluation loop should guide thresholds, source weights, and theme
-clustering behavior.
+For each narrative that mattered historically, still ask: did the app surface it
+early, did the z-score move before it became obvious, were the evidence cards
+relevant, did Claude overstate the implication, and were false positives caused
+by one noisy source or by real breadth across publisher owners.
 
 ## Security And Compliance
 
 - Store credentials in Render environment variables or a secrets manager.
 - Do not commit real credentials.
 - Keep `.env` and `.env.local` ignored.
+- Operator routes sit behind HTTP Basic Auth (`OPS_USERNAME`/`OPS_PASSWORD`);
+  every mutating API route additionally requires a same-origin request with a
+  JSON body, and error responses are redacted to a generic message while the
+  full error is logged server-side.
+- Set `DB_SSL_MODE=verify-full` with `DB_SSL_CA` wherever a CA bundle is
+  available; the default only skips verification for Render-internal hosts.
 - Keep scraping disabled by default.
 - Track source access method and retrieval logs.
 - Respect rate limits.
@@ -855,7 +974,14 @@ clustering behavior.
 - The legacy mock storyboard fixtures remain for development compatibility, but
   live storyboard routes use curated narrative observations and trends.
 - Narrative history is only meaningful after a representative historical
-  document backfill and classification run.
+  document backfill and classification run; lifecycle states other than
+  `emerging` need at least the low-history window of measured days.
+- Raw attention is an early, unreviewed signal: it can move on a single
+  classifier match and is deliberately shown alongside, not instead of,
+  reviewed density.
+- Ingestion funnel fetched/deduplicated counts start from the first recorded
+  `poll_sources` run; earlier connector history only exists as cumulative
+  checkpoint totals.
 - Candidate clustering reuses stable model-generated cluster keys and provides a
   manual merge action; semantically equivalent candidates can still require review.
 - GDELT is discovery metadata only and is excluded from full-text classification.

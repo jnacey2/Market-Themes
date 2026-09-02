@@ -41,6 +41,14 @@ type RawCandidate = {
   interpretation?: unknown;
 };
 
+/** Corpus-level burst hint passed to the discovery prompt (see attention-bursts.ts). */
+export type CorpusAttentionHint = {
+  term: string;
+  stories: number;
+  publisherOwners: number;
+  novel: boolean;
+};
+
 export type NarrativeDiscoveryOptions = {
   apiKey?: string;
   model?: string;
@@ -48,6 +56,7 @@ export type NarrativeDiscoveryOptions = {
   maxTokens?: number;
   maxDocumentChars?: number;
   maxEvidenceChars?: number;
+  corpusAttention?: CorpusAttentionHint[];
   signal?: AbortSignal;
 };
 
@@ -75,7 +84,8 @@ export async function discoverNarrativeCandidates(
     {
       model,
       maxTokens: options.maxTokens,
-      maxDocumentChars: options.maxDocumentChars
+      maxDocumentChars: options.maxDocumentChars,
+      corpusAttention: options.corpusAttention
     }
   );
   const message = await client.messages.create(
@@ -104,9 +114,17 @@ export function buildNarrativeDiscoveryRequest(
     model: string;
     maxTokens?: number;
     maxDocumentChars?: number;
+    corpusAttention?: CorpusAttentionHint[];
   }
 ): MessageCreateParamsNonStreaming {
   const maxDocumentChars = options.maxDocumentChars ?? 120_000;
+  const corpusAttention =
+    options.corpusAttention && options.corpusAttention.length > 0
+      ? {
+          note: "Terms several independent publishers began covering this week that no tracked narrative covers. Use only if this document supports a proposition about them.",
+          burstingTerms: options.corpusAttention.slice(0, 25)
+        }
+      : undefined;
   return {
     model: options.model,
     max_tokens: options.maxTokens ?? 4_000,
@@ -131,7 +149,8 @@ export function buildNarrativeDiscoveryRequest(
             name: narrative.name,
             proposition: narrative.proposition
           })),
-          existingCandidates: existingCandidates.slice(0, 100)
+          existingCandidates: existingCandidates.slice(0, 100),
+          ...(corpusAttention ? { corpusAttention } : {})
         })
       }
     ]

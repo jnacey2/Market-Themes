@@ -1,10 +1,13 @@
 import type {
   AnalysisDocument,
+  EvalCaseFile,
+  EvalCaseLabelSource,
   NarrativeDefinition
 } from "@market-themes/db";
 import {
   buildNarrativeClassificationRequest,
-  narrativeClassificationPromptVersion
+  narrativeClassificationPromptVersion,
+  SEEDED_EVIDENCE_GUARDS
 } from "./narrative-classification";
 import type { AnthropicBatchRequest } from "./anthropic-batches";
 
@@ -12,6 +15,18 @@ export type NarrativeClassificationEvalCase = {
   id: string;
   document: AnalysisDocument;
   expectedMatchedSlugs: string[];
+  /** Where the label came from; synthetic cases are "manual". */
+  labelSource?: EvalCaseLabelSource;
+  /** Production classifier verdict captured at export time, when available. */
+  classifierMatchedSlugs?: string[];
+};
+
+export type NarrativeClassificationEvalSuite = {
+  cases: NarrativeClassificationEvalCase[];
+  definitions: NarrativeDefinition[];
+  /** Exported cases whose label is still null and were therefore excluded. */
+  unlabeledCases: number;
+  source: "builtin" | "file";
 };
 
 export type NarrativeClassificationEvalPrediction = {
@@ -34,7 +49,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude price increases accompanied by materially weaker volume or without demand evidence.",
     positiveExamples: ["Prices rose while unit demand remained stable."],
     negativeExamples: ["Prices rose and customer traffic declined."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["pricing-power"] }
   },
   {
     id: "narrative:def:ai-infrastructure-demand:eval",
@@ -50,7 +66,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude generic data-center growth, industry maturity, or AI enthusiasm without concrete demand.",
     positiveExamples: ["AI accelerator orders doubled and backlog reached a record."],
     negativeExamples: ["The compute industry is maturing."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"] }
   },
   {
     id: "narrative:def:consumer-trade-down:eval",
@@ -66,7 +83,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude ordinary promotions and premium weakness without evidence of budget-driven substitution.",
     positiveExamples: ["Budget-conscious shoppers moved to private-label products."],
     negativeExamples: ["A seasonal promotion increased store traffic."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["consumer-trade-down"] }
   },
   {
     id: "narrative:def:credit-quality-deterioration:eval",
@@ -82,7 +100,8 @@ export const narrativeClassificationEvalDefinitions: NarrativeDefinition[] = [
       "Exclude hypothetical risks and reserve growth caused only by balance-sheet growth.",
     positiveExamples: ["Delinquencies and net charge-offs increased from last quarter."],
     negativeExamples: ["Loan balances increased while loss rates were stable."],
-    status: "active"
+    status: "active",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["credit-quality-deterioration"] }
   },
   {
     id: "narrative:def:energy-shock-inflation-rates:eval",
@@ -167,25 +186,76 @@ export const narrativeClassificationEvalCases: NarrativeClassificationEvalCase[]
     )
   ];
 
+export const builtinNarrativeClassificationEvalSuite: NarrativeClassificationEvalSuite = {
+  cases: narrativeClassificationEvalCases,
+  definitions: narrativeClassificationEvalDefinitions,
+  unlabeledCases: 0,
+  source: "builtin"
+};
+
+/**
+ * Converts an exported case file (see `exportNarrativeEvalCases`) into an
+ * evaluation suite. Cases whose label is still null are counted and skipped.
+ */
+export function loadNarrativeClassificationEvalSuite(
+  file: EvalCaseFile
+): NarrativeClassificationEvalSuite {
+  if (file.version !== 1 || !Array.isArray(file.cases) || !Array.isArray(file.definitions)) {
+    throw new Error("Unsupported evaluation case file format.");
+  }
+  const knownSlugs = new Set(file.definitions.map((definition) => definition.slug));
+  const cases: NarrativeClassificationEvalCase[] = [];
+  let unlabeledCases = 0;
+
+  for (const item of file.cases) {
+    if (!Array.isArray(item.expectedMatchedSlugs)) {
+      unlabeledCases += 1;
+      continue;
+    }
+    const unknown = item.expectedMatchedSlugs.filter((slug) => !knownSlugs.has(slug));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Case ${item.id} references unknown definition slugs: ${unknown.join(", ")}`
+      );
+    }
+    cases.push({
+      id: item.id,
+      document: item.document,
+      expectedMatchedSlugs: item.expectedMatchedSlugs,
+      labelSource: item.labelSource,
+      classifierMatchedSlugs: item.classifierMatchedSlugs
+    });
+  }
+
+  return {
+    cases,
+    definitions: file.definitions,
+    unlabeledCases,
+    source: "file"
+  };
+}
+
 export function buildNarrativeClassificationEvalRequests(
-  model: string
+  model: string,
+  suite: NarrativeClassificationEvalSuite = builtinNarrativeClassificationEvalSuite
 ): AnthropicBatchRequest[] {
-  return narrativeClassificationEvalCases.map((item, index) => ({
+  return suite.cases.map((item, index) => ({
     custom_id: `eval-${index + 1}`,
-    params: buildNarrativeClassificationRequest(
-      item.document,
-      narrativeClassificationEvalDefinitions,
-      {
-        model,
-        promptCaching: true,
-        cacheTtl: "1h"
-      }
-    )
+    params: buildNarrativeClassificationRequest(item.document, suite.definitions, {
+      model,
+      promptCaching: true,
+      cacheTtl: "1h"
+    })
   }));
 }
 
+export type NarrativeClassificationEvalScore = ReturnType<
+  typeof scoreNarrativeClassificationEval
+>;
+
 export function scoreNarrativeClassificationEval(
-  predictions: NarrativeClassificationEvalPrediction[]
+  predictions: NarrativeClassificationEvalPrediction[],
+  suite: NarrativeClassificationEvalSuite = builtinNarrativeClassificationEvalSuite
 ) {
   const predictedByCase = new Map(
     predictions.map((prediction) => [
@@ -194,39 +264,86 @@ export function scoreNarrativeClassificationEval(
     ])
   );
   const totals = { truePositive: 0, falsePositive: 0, falseNegative: 0, trueNegative: 0 };
-  const perDefinition = narrativeClassificationEvalDefinitions.map(
-    (definition) => {
-      const counts = {
-        slug: definition.slug,
-        truePositive: 0,
-        falsePositive: 0,
-        falseNegative: 0,
-        trueNegative: 0
-      };
-      for (const item of narrativeClassificationEvalCases) {
-        const expected = item.expectedMatchedSlugs.includes(definition.slug);
-        const predicted =
-          predictedByCase.get(item.id)?.has(definition.slug) ?? false;
-        const key = expected
-          ? predicted
-            ? "truePositive"
-            : "falseNegative"
-          : predicted
-            ? "falsePositive"
-            : "trueNegative";
-        counts[key] += 1;
-        totals[key] += 1;
+  const strata = new Map<EvalCaseLabelSource, typeof totals>();
+  const perDefinition = suite.definitions.map((definition) => {
+    const counts = {
+      slug: definition.slug,
+      truePositive: 0,
+      falsePositive: 0,
+      falseNegative: 0,
+      trueNegative: 0
+    };
+    for (const item of suite.cases) {
+      const expected = item.expectedMatchedSlugs.includes(definition.slug);
+      const predicted = predictedByCase.get(item.id)?.has(definition.slug) ?? false;
+      const key = expected
+        ? predicted
+          ? "truePositive"
+          : "falseNegative"
+        : predicted
+          ? "falsePositive"
+          : "trueNegative";
+      counts[key] += 1;
+      totals[key] += 1;
+      const stratum = item.labelSource ?? "manual";
+      if (!strata.has(stratum)) {
+        strata.set(stratum, {
+          truePositive: 0,
+          falsePositive: 0,
+          falseNegative: 0,
+          trueNegative: 0
+        });
       }
-      return { ...counts, ...classificationMetrics(counts) };
+      strata.get(stratum)![key] += 1;
     }
-  );
-  return { ...totals, ...classificationMetrics(totals), perDefinition };
+    return { ...counts, ...classificationMetrics(counts) };
+  });
+
+  // Document-level recall: a case counts as recovered when every expected slug
+  // was predicted. This is the number to watch on the "unlabeled" (hand-labeled
+  // recall) stratum, since per-slug counts are dominated by true negatives there.
+  const positiveCases = suite.cases.filter((item) => item.expectedMatchedSlugs.length > 0);
+  const recoveredCases = positiveCases.filter((item) => {
+    const predicted = predictedByCase.get(item.id) ?? new Set<string>();
+    return item.expectedMatchedSlugs.every((slug) => predicted.has(slug));
+  });
+
+  return {
+    ...totals,
+    ...classificationMetrics(totals),
+    cases: suite.cases.length,
+    positiveCases: positiveCases.length,
+    documentRecall: round(ratio(recoveredCases.length, positiveCases.length)),
+    byLabelSource: [...strata.entries()].map(([labelSource, counts]) => ({
+      labelSource,
+      ...counts,
+      ...classificationMetrics(counts)
+    })),
+    perDefinition
+  };
 }
 
-export function evalCaseForCustomId(customId: string) {
+/**
+ * Scores the production classifier's stored verdicts (captured at export time)
+ * against the labels, without any model call.
+ */
+export function scoreStoredClassifierVerdicts(suite: NarrativeClassificationEvalSuite) {
+  return scoreNarrativeClassificationEval(
+    suite.cases.map((item) => ({
+      caseId: item.id,
+      matchedSlugs: item.classifierMatchedSlugs ?? []
+    })),
+    suite
+  );
+}
+
+export function evalCaseForCustomId(
+  customId: string,
+  suite: NarrativeClassificationEvalSuite = builtinNarrativeClassificationEvalSuite
+) {
   const match = /^eval-(\d+)$/.exec(customId);
   if (!match) return null;
-  return narrativeClassificationEvalCases[Number(match[1]) - 1] ?? null;
+  return suite.cases[Number(match[1]) - 1] ?? null;
 }
 
 function classificationMetrics(counts: {
@@ -277,6 +394,7 @@ function evalCase(
 ): NarrativeClassificationEvalCase {
   return {
     id,
+    labelSource: "manual",
     document: {
       id: `eval:${id}`,
       sourceId: "human-labeled-eval",
