@@ -723,6 +723,15 @@ export type NarrativeObservationInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type NarrativeLifecycleState =
+  | "unmeasured"
+  | "dormant"
+  | "emerging"
+  | "rising"
+  | "peaking"
+  | "steady"
+  | "fading";
+
 export type NarrativeTrendPoint = {
   date: string;
   density: number;
@@ -733,6 +742,20 @@ export type NarrativeTrendPoint = {
   acceleration: number;
   riskTone: number;
   bullishTone: number;
+  attentionDensity: number;
+  lifecycleState: NarrativeLifecycleState;
+};
+
+export type NarrativeLifecycleMetrics = {
+  lifecycleState: NarrativeLifecycleState;
+  baselineWindows: number;
+  attentionDensity: number;
+  attentionMatchedDocuments: number;
+  attentionZScore: number;
+  peakDensity: number;
+  peakDate: string | null;
+  daysSincePeak: number | null;
+  percentOfPeak: number;
 };
 
 export type NarrativeEvidence = {
@@ -773,7 +796,7 @@ export type NarrativeReviewQueue = {
   items: NarrativeReviewItem[];
 };
 
-export type NarrativeTrendSummary = NarrativeDefinition & {
+export type NarrativeTrendSummary = NarrativeDefinition & NarrativeLifecycleMetrics & {
   trendWindow: TrendWindow;
   latestDate: string | null;
   density: number;
@@ -816,12 +839,64 @@ export type NarrativeHomepageItem = Omit<
   evidencePreview: NarrativeEvidence[];
 };
 
+export type NarrativeHomepageLane = "rising" | "peaking" | "fading" | "emerging";
+
 export type NarrativeHomepageStatus = {
   databaseConfigured: boolean;
   degraded: boolean;
   latestDate: string | null;
   trackedNarrativeCount: number;
+  /** Ranked by surprise (attention z-score) among measured narratives; kept for the lead card. */
   narratives: NarrativeHomepageItem[];
+  lanes: Record<NarrativeHomepageLane, NarrativeHomepageItem[]>;
+  brief: StoredBrief | null;
+};
+
+export type StoredBrief = {
+  id: string;
+  date: string;
+  headline: string;
+  summary: string;
+  sections: BriefSection[];
+  generatedAt: string;
+};
+
+export type BriefSection = {
+  title: string;
+  items: string[];
+};
+
+export type NarrativeChangeKind =
+  | "entered_board"
+  | "left_board"
+  | "state_change"
+  | "mover"
+  | "new_definition"
+  | "expired_definition";
+
+export type NarrativeChange = {
+  kind: NarrativeChangeKind;
+  narrativeDefinitionId: string;
+  slug: string;
+  name: string;
+  proposition: string;
+  category: string;
+  kindLabel: NarrativeCandidateKind;
+  previousState: NarrativeLifecycleState | null;
+  currentState: NarrativeLifecycleState | null;
+  previousDensity: number | null;
+  currentDensity: number | null;
+  attentionZScore: number | null;
+  change: number;
+  detail: string;
+};
+
+export type NarrativeChangeReport = {
+  databaseConfigured: boolean;
+  currentDate: string | null;
+  previousDate: string | null;
+  changes: NarrativeChange[];
+  stateCounts: Record<NarrativeLifecycleState, number>;
 };
 
 export type EvidenceCard = {

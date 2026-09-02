@@ -227,7 +227,9 @@ test(
     );
     assert.equal(homepage.degraded, false);
     assert.equal(homepage.latestDate, "2026-08-27");
-    assert.equal(homepage.trackedNarrativeCount, definitions.length);
+    assert.equal(homepage.trackedNarrativeCount, trackedDefinitions.length);
+    assert.ok(Array.isArray(homepage.lanes.rising));
+    assert.ok(Array.isArray(homepage.lanes.fading));
     assert(
       homepage.narratives.some(
         (item) =>

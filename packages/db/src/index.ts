@@ -7,3 +7,4 @@ export * from "./operations";
 export * from "./persistence";
 export * from "./publication-feeds";
 export * from "./types";
+export * from "./narrative-briefs";
