@@ -147,6 +147,10 @@ Rules:
 - matchScore must be 75-100. When confidence is lower, omit the candidate.
 - affectedEntities contains companies, sectors, commodities, regions, or macro variables.
 - Do not generalize one company or one event into a plural sector proposition.
+- corpusAttention, when present, lists terms that several independent publishers started
+  covering this week and that no tracked narrative covers. If this document supports a
+  proposition about one of those terms, prefer it and reuse the term's wording in the name.
+  Never invent a candidate for a listed term the document does not support.
 
 Return this JSON shape:
 {

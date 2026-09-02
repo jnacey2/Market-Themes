@@ -33,6 +33,7 @@ import {
   submitPersistedAnthropicBatch,
   withAnthropicBatchAdvisoryLock
 } from "./anthropic-batch-runtime";
+import { loadCorpusAttentionHints } from "./corpus-attention-hints";
 import { runRecordedJob } from "./recorded-job";
 
 export const narrativeDiscoveryBatchWorkload = "narrative_discovery";
@@ -117,9 +118,10 @@ async function executeNarrativeDiscoveryBatch(
     };
   }
 
-  const [definitions, existingCandidates] = await Promise.all([
+  const [definitions, existingCandidates, corpusAttention] = await Promise.all([
     getTrackedNarrativeDefinitions(),
-    getNarrativeCandidateContexts(options.promptVersion)
+    getNarrativeCandidateContexts(options.promptVersion),
+    loadCorpusAttentionHints("discover-narratives-batch")
   ]);
   const batchId = newAnthropicBatchId(narrativeDiscoveryBatchWorkload);
   const documents = await claimDocumentsForNarrativeDiscovery({
@@ -142,7 +144,7 @@ async function executeNarrativeDiscoveryBatch(
       document,
       definitions,
       existingCandidates,
-      { model: options.model }
+      { model: options.model, corpusAttention }
     )
   }));
   const requestBytes = assertAnthropicBatchRequestLimits(requests);

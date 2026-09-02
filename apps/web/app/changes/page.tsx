@@ -1,13 +1,16 @@
 import Link from "next/link";
 import {
+  getAttentionBurstWatchlist,
   getNarrativeChangeReport,
   getLatestBrief,
+  type AttentionBurstWatchlist as AttentionBurstWatchlistStatus,
   type NarrativeChange,
   type NarrativeChangeKind,
   type NarrativeChangeReport,
   type NarrativeLifecycleState,
   type StoredBrief
 } from "@market-themes/db";
+import { AttentionWatchlist } from "../../components/narratives/AttentionWatchlist";
 import {
   LifecycleBadge,
   LIFECYCLE_LABELS
@@ -38,8 +41,19 @@ export default async function ChangesPage() {
   let report: NarrativeChangeReport;
   let brief: StoredBrief | null = null;
   let failed = false;
+  const emptyWatchlist: AttentionBurstWatchlistStatus = {
+    databaseConfigured: Boolean(process.env.DATABASE_URL),
+    date: null,
+    bursts: [],
+    uncoveredCount: 0
+  };
+  let watchlist = emptyWatchlist;
   try {
-    [report, brief] = await Promise.all([getNarrativeChangeReport(), getLatestBrief()]);
+    [report, brief, watchlist] = await Promise.all([
+      getNarrativeChangeReport(),
+      getLatestBrief(),
+      getAttentionBurstWatchlist({ limit: 20, uncoveredOnly: true }).catch(() => emptyWatchlist)
+    ]);
   } catch (error) {
     console.warn(
       `[web] change report failed: ${error instanceof Error ? error.message : String(error)}`
@@ -105,6 +119,15 @@ export default async function ChangesPage() {
           <p>{brief.summary}</p>
         </section>
       ) : null}
+
+      <section className="section">
+        <AttentionWatchlist
+          watchlist={watchlist}
+          title="Corpus attention no tracked narrative covers"
+          limit={8}
+          showCovered={false}
+        />
+      </section>
 
       <section className="section">
         <p className="eyebrow">Changes</p>

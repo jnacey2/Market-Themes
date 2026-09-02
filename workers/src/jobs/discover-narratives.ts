@@ -2,7 +2,8 @@ import { pathToFileURL } from "node:url";
 import {
   discoverNarrativeCandidates,
   narrativeCandidateAnalysisType,
-  narrativeDiscoveryPromptVersion
+  narrativeDiscoveryPromptVersion,
+  type CorpusAttentionHint
 } from "@market-themes/analysis";
 import {
   claimDocumentsForNarrativeDiscovery,
@@ -17,9 +18,11 @@ import {
   type NarrativeCandidateContext,
   type NarrativeDefinition
 } from "@market-themes/db";
+import { loadCorpusAttentionHints } from "./corpus-attention-hints";
 import { runRecordedJob } from "./recorded-job";
 
 type DiscoveryOptions = {
+  corpusAttention?: CorpusAttentionHint[];
   batchSize: number;
   maxDocuments: number;
   maxRuntimeMs: number;
@@ -40,6 +43,7 @@ export async function discoverNarrativeBatches(
   }
   const options = { ...defaultOptions(), ...overrides };
   const definitions = await getTrackedNarrativeDefinitions();
+  const corpusAttention = await loadCorpusAttentionHints("discover-narratives");
   const recovered = await recoverStaleDocumentAnalysisRuns({
     analysisType: narrativeCandidateAnalysisType,
     model: options.model,
@@ -103,6 +107,7 @@ export async function discoverNarrativeBatches(
       (document) =>
         discoverDocument(document, definitions, existingCandidates, {
           ...options,
+          corpusAttention,
           documentTimeoutMs: Math.max(
             1,
             Math.min(
@@ -173,6 +178,7 @@ async function discoverDocument(
           {
             model: options.model,
             promptVersion: options.promptVersion,
+            corpusAttention: options.corpusAttention,
             signal
           }
         ),

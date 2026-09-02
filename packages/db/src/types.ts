@@ -866,6 +866,33 @@ export type BriefSection = {
   items: string[];
 };
 
+export type AttentionBurstRecord = {
+  id: string;
+  date: string;
+  term: string;
+  kind: "title_ngram" | "entity" | "theme_label";
+  currentStories: number;
+  currentOwners: number;
+  baselineMean: number;
+  baselineScale: number;
+  baselineWindows: number;
+  zScore: number;
+  novel: boolean;
+  score: number;
+  sampleDocumentIds: string[];
+  sampleTitles: string[];
+  /** Tracked narratives whose name, entities, or guidance already mention this term. */
+  coveringNarrativeDefinitionIds: string[];
+  coveringNarrativeNames: string[];
+};
+
+export type AttentionBurstWatchlist = {
+  databaseConfigured: boolean;
+  date: string | null;
+  bursts: AttentionBurstRecord[];
+  uncoveredCount: number;
+};
+
 export type NarrativeChangeKind =
   | "entered_board"
   | "left_board"

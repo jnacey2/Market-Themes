@@ -8,3 +8,4 @@ export * from "./persistence";
 export * from "./publication-feeds";
 export * from "./types";
 export * from "./narrative-briefs";
+export * from "./attention-bursts";

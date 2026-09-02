@@ -9,7 +9,7 @@ services:
     name: themes-web
     runtime: node
     plan: starter
-    buildCommand: npm install && npm run build --workspace @market-themes/web
+    buildCommand: npm ci --no-audit --no-fund && npm run build --workspace @market-themes/web
     # Pre-deploy runs on a separate instance that often cannot resolve the
     # internal Postgres hostname (dpg-… with no *.region-postgres.render.com
     # suffix). Retries plus --allow-unresolved-host keep a DNS miss from
@@ -120,7 +120,7 @@ services:
     name: themes-worker
     runtime: node
     plan: starter
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run worker
     envVars:
       - key: DATABASE_URL
@@ -220,7 +220,7 @@ services:
     name: poll-sources
     runtime: node
     schedule: "*/30 * * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run poll:sources --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -302,7 +302,7 @@ services:
     name: extract-recent-signals
     runtime: node
     schedule: "35 * * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run claude:extract:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -346,7 +346,7 @@ services:
     name: poll-fmp-transcripts
     runtime: node
     schedule: "30 6 * * 1-6"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run fmp:poll --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -361,22 +361,40 @@ services:
   - type: cron
     name: generate-daily-brief
     runtime: node
-    schedule: "0 11 * * 1-5"
-    buildCommand: npm install
+    schedule: "40 11 * * *"
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run brief:daily --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: themes-postgres
           property: connectionString
-      - key: ANTHROPIC_API_KEY
-        sync: false
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v7
+
+  # Corpus-level attention bursts: no model calls; feeds the discovery watchlist and
+  # discovery prompt hints. Runs before each discovery window.
+  - type: cron
+    name: detect-attention-bursts
+    runtime: node
+    schedule: "35 */6 * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run narratives:bursts --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
 
   - type: cron
     name: recompute-theme-trends
     runtime: node
     schedule: "15 */4 * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run themes:normalize:backfill --workspace @market-themes/workers && npm run trends:recompute --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -412,7 +430,7 @@ services:
     name: classify-narratives
     runtime: node
     schedule: "5 * * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run narratives:classify:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -446,7 +464,7 @@ services:
     name: discover-narratives
     runtime: node
     schedule: "10 * * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run narratives:discover:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -486,7 +504,7 @@ services:
     name: poll-anthropic-batches
     runtime: node
     schedule: "2,12,22,32,42,52 * * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run anthropic:batches:poll --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -502,7 +520,7 @@ services:
     name: auto-review-narratives
     runtime: node
     schedule: "15,45 * * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run narratives:auto-review --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -562,7 +580,7 @@ services:
     name: recompute-narrative-trends
     runtime: node
     schedule: "25,55 * * * *"
-    buildCommand: npm install
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run narrative-trends:recompute --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
@@ -588,57 +606,38 @@ services:
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
         value: "14"
 
-  - type: cron
-    name: poll-fmp-news
-    runtime: node
-    schedule: "0 */6 * * *"
-    buildCommand: npm install
-    startCommand: npm run fmp:news:poll --workspace @market-themes/workers
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: themes-postgres
-          property: connectionString
-      - key: FMP_API_KEY
-        sync: false
-      - key: FMP_NEWS_LOOKBACK_HOURS
-        value: "6"
-      - key: FMP_NEWS_MACRO_PROXIES
-        value: "SPY,QQQ,TLT,GLD"
-      - key: FMP_NEWS_LIMIT
-        value: "50"
-      - key: FMP_NEWS_RATE_LIMIT_MS
-        value: "250"
-
-  - type: cron
-    name: scrape-premium-publishers
-    runtime: docker
-    plan: 1c-2g
-    schedule: "45 */4 * * *"
-    dockerfilePath: ./Dockerfile.scraper
-    dockerCommand: npm run premium:scrape --workspace @market-themes/workers
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: themes-postgres
-          property: connectionString
-      - key: PREMIUM_PUBLISHERS
-        value: ""
-      - key: SCRAPING_ENABLED
-        value: "false"
-      - key: PREMIUM_SCRAPER_MAX_ARTICLES
-        value: "5"
-      - key: PREMIUM_SCRAPER_LOOKBACK_HOURS
-        value: "24"
-      - key: PREMIUM_SCRAPER_RATE_LIMIT_MS
-        value: "2000"
-      - key: WSJ_STORAGE_STATE_B64
-        sync: false
-      - key: NYT_STORAGE_STATE_B64
-        sync: false
-      - key: WAPO_STORAGE_STATE_B64
-        sync: false
-      - key: FT_STORAGE_STATE_B64
-        sync: false
-      - key: BLOOMBERG_STORAGE_STATE_B64
-        sync: false
+  # Premium publisher scraper. Disabled by default (SCRAPING_ENABLED=false, no
+  # PREMIUM_PUBLISHERS) and runs on a paid Docker plan, so it is not provisioned.
+  # Uncomment and set the session-state secrets to enable it.
+  #   - type: cron
+  #     name: scrape-premium-publishers
+  #     runtime: docker
+  #     plan: 1c-2g
+  #     schedule: "45 */4 * * *"
+  #     dockerfilePath: ./Dockerfile.scraper
+  #     dockerCommand: npm run premium:scrape --workspace @market-themes/workers
+  #     envVars:
+  #       - key: DATABASE_URL
+  #         fromDatabase:
+  #           name: themes-postgres
+  #           property: connectionString
+  #       - key: PREMIUM_PUBLISHERS
+  #         value: ""
+  #       - key: SCRAPING_ENABLED
+  #         value: "false"
+  #       - key: PREMIUM_SCRAPER_MAX_ARTICLES
+  #         value: "5"
+  #       - key: PREMIUM_SCRAPER_LOOKBACK_HOURS
+  #         value: "24"
+  #       - key: PREMIUM_SCRAPER_RATE_LIMIT_MS
+  #         value: "2000"
+  #       - key: WSJ_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: NYT_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: WAPO_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: FT_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: BLOOMBERG_STORAGE_STATE_B64
+  #         sync: false

@@ -21,6 +21,7 @@
     "narratives:classify:batch": "node --import tsx src/jobs/classify-narratives-batch.ts",
     "narratives:discover": "node --import tsx src/jobs/discover-narratives.ts",
     "narratives:discover:batch": "node --import tsx src/jobs/discover-narratives-batch.ts",
+    "narratives:bursts": "node --import tsx src/jobs/detect-attention-bursts.ts",
     "anthropic:batches:poll": "node --import tsx src/jobs/poll-anthropic-batches.ts",
     "eval:narratives": "node --import tsx src/jobs/evaluate-narrative-classifier.ts",
     "narratives:auto-review": "node --import tsx src/jobs/auto-review-narratives.ts",
