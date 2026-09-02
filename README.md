@@ -741,7 +741,12 @@ definitions, taking up to `NARRATIVE_DISCOVERY_MAX_DOCUMENTS` per run. Its
 shared context (tracked narratives, existing candidates, and attention-burst
 hints) is sent as a separate leading block with the same
 `ANTHROPIC_PROMPT_CACHING` cache breakpoint as classification, so only the
-document text is billed at full price within a batch. Each hourly run submits a
+document text is billed at full price within a batch. Discovery uses the
+five-minute cache TTL rather than classification's one hour: its prefix embeds
+the pending-candidate list, which changes every batch, so there is no
+cross-batch reuse to pay the higher one-hour write price for. Expect roughly a
+third of requests in each batch to write the cache rather than read it, because
+the Batch API processes requests in parallel. Each hourly run submits a
 new batch only when the previous one has completed, so raise the per-run
 document limit rather than the schedule frequency to increase throughput.
 Open `/narrative-candidates` to review the resulting clusters. A

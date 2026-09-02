@@ -148,7 +148,10 @@ async function executeNarrativeDiscoveryBatch(
         model: options.model,
         corpusAttention,
         promptCaching: process.env.ANTHROPIC_PROMPT_CACHING !== "false",
-        cacheTtl: "1h"
+        // The prefix embeds existingCandidates ordered by updated_at, so it
+        // changes every batch; a 1h TTL (2x write price) buys no cross-batch
+        // reuse. 5m writes cost 1.25x and reads within the batch keep it warm.
+        cacheTtl: "5m"
       }
     )
   }));
