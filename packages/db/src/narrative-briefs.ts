@@ -39,17 +39,34 @@ export function buildDailyBrief(
   report: Pick<NarrativeChangeReport, "changes" | "currentDate" | "previousDate" | "stateCounts">,
   date: string
 ): DailyBriefDraft {
-  const lead = lanes.rising[0] ?? lanes.peaking[0] ?? lanes.emerging[0] ?? null;
-  const fadingLead = lanes.fading[0] ?? null;
+  // The emerging lane deliberately shows probationary and recently activated
+  // narratives even before their window has coverage. A brief must not describe
+  // those as measured, so only a lane item whose own state is measured can lead.
+  const isMeasured = (item: NarrativeHomepageItem) =>
+    item.lifecycleState !== "unmeasured";
+  const lead =
+    lanes.rising.find(isMeasured) ??
+    lanes.peaking.find(isMeasured) ??
+    lanes.emerging.find((item) => item.lifecycleState === "emerging") ??
+    null;
+  const fadingLead = lanes.fading.find(isMeasured) ?? null;
+  const unmeasuredCount = report.stateCounts.unmeasured ?? 0;
   const headline = lead
     ? `${lead.name} is ${lead.lifecycleState === "rising" ? "gaining attention" : lead.lifecycleState === "peaking" ? "at peak attention" : "newly measurable"}${
         fadingLead ? `; ${fadingLead.name} is fading` : ""
       }.`
     : fadingLead
       ? `${fadingLead.name} is fading; no narrative is currently rising.`
-      : "No measured narrative movement to report.";
+      : unmeasuredCount > 0
+        ? `No narrative is measured yet; ${unmeasuredCount} ${unmeasuredCount === 1 ? "narrative is" : "narratives are"} awaiting classification coverage.`
+        : "No measured narrative movement to report.";
 
   const summaryParts: string[] = [];
+  if (unmeasuredCount > 0) {
+    summaryParts.push(
+      `${unmeasuredCount} ${unmeasuredCount === 1 ? "narrative has" : "narratives have"} incomplete classification coverage for the current window and ${unmeasuredCount === 1 ? "is" : "are"} not measured.`
+    );
+  }
   if (lead) {
     summaryParts.push(
       `${lead.name}: reviewed density ${lead.density.toFixed(1)}% (${signed(lead.change)} vs prior week), raw attention z ${lead.attentionZScore.toFixed(1)}, ${lead.storyBreadth} unique stories across ${lead.publisherOwnerBreadth} publisher groups.`
