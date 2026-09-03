@@ -5,6 +5,7 @@ import {
   calculateNarrativeTrendSeries,
   deriveLifecycleState,
   deriveNarrativeCoverageState,
+  resolveCoverageMeasuredPercent,
   robustScale,
   type NarrativeMetricObservation
 } from "./narrative-metrics";
@@ -248,3 +249,25 @@ function observation(
     affectedEntities: matched ? ["Example"] : []
   };
 }
+
+test("coverage threshold below 100 lets a nearly complete window measure", () => {
+  assert.deepEqual(
+    deriveNarrativeCoverageState(
+      { corpusEligibleDocuments: 1000, classifiedDocuments: 985, matchedDocuments: 3 },
+      98
+    ),
+    { classificationCoveragePercent: 98.5, coverageState: "measured" }
+  );
+  assert.deepEqual(
+    deriveNarrativeCoverageState(
+      { corpusEligibleDocuments: 1000, classifiedDocuments: 970, matchedDocuments: 3 },
+      98
+    ),
+    { classificationCoveragePercent: 97, coverageState: "backfill_pending" }
+  );
+  assert.equal(resolveCoverageMeasuredPercent(undefined), 100);
+  assert.equal(resolveCoverageMeasuredPercent("98"), 98);
+  assert.equal(resolveCoverageMeasuredPercent("0"), 100);
+  assert.equal(resolveCoverageMeasuredPercent("150"), 100);
+  assert.equal(resolveCoverageMeasuredPercent("abc"), 100);
+});

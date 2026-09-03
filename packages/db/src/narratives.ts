@@ -100,6 +100,15 @@ export async function selectDocumentsForNarrativeClassification(
     excludedDocumentIds?: string[];
     /** Only documents published within this many days are (re)classified. */
     lookbackDays?: number;
+    /**
+     * Documents published within this many days are claimed newest-first across all
+     * source classes before any older backfill work. Trend coverage requires every
+     * document in the measured window to be classified, so recent documents must not
+     * queue behind year-old filings.
+     */
+    priorityDays?: number;
+    /** Documents with this many failed batch attempts are no longer resubmitted. */
+    maxAttempts?: number;
   },
   databaseUrl = process.env.DATABASE_URL
 ): Promise<AnalysisDocument[]> {
@@ -134,6 +143,7 @@ export async function selectDocumentsForNarrativeClassification(
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
            and d.published_at >= now() - ($5::int * interval '1 day')
            and not (d.id = any($4::text[]))
+           and ${classificationAttemptsRemainingSql("$7", "$8")}
            and not exists (
              select 1
              from anthropic_message_batch_items mbi
@@ -152,6 +162,7 @@ export async function selectDocumentsForNarrativeClassification(
              select 1
              from narrative_definitions nd
              where nd.status in ('active', 'probationary')
+               and d.published_at >= now() - (coalesce(nd.history_backfill_days, $5)::int * interval '1 day')
                and not exists (
                  select 1
                  from narrative_observations no
@@ -166,14 +177,21 @@ export async function selectDocumentsForNarrativeClassification(
        select id, source_id, source_class, title, publisher, url,
               published_at::text, tickers, summary, metadata, content, text_hash
        from eligible
-       order by source_rank, published_at desc, source_class, id
+       order by
+         (published_at >= now() - ($6::int * interval '1 day')) desc,
+         case when published_at >= now() - ($6::int * interval '1 day')
+              then published_at end desc nulls last,
+         source_rank, published_at desc, source_class, id
        limit $3`,
       [
         options.model,
         resolveCompatibleClassificationPromptVersions(options.promptVersion),
         options.limit,
         options.excludedDocumentIds ?? [],
-        lookbackDays
+        lookbackDays,
+        resolveClassificationPriorityDays(options.priorityDays),
+        options.promptVersion,
+        resolveClassificationMaxAttempts(options.maxAttempts)
       ]
     );
 
@@ -197,6 +215,57 @@ export async function selectDocumentsForNarrativeClassification(
 }
 
 export const DEFAULT_NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS = 60;
+export const DEFAULT_NARRATIVE_CLASSIFICATION_PRIORITY_DAYS = 14;
+export const DEFAULT_NARRATIVE_CLASSIFICATION_MAX_ATTEMPTS = 5;
+
+/**
+ * Failed batch attempts after which a document stops being resubmitted for
+ * classification and leaves the trend coverage denominator. Without a bound a document
+ * the model cannot process is re-queued every batch and pins every narrative's window
+ * at "backfill pending" forever.
+ */
+export function resolveClassificationMaxAttempts(
+  value: number | string | undefined = process.env.NARRATIVE_CLASSIFICATION_MAX_ATTEMPTS
+) {
+  const parsed = typeof value === "string" ? Number.parseInt(value, 10) : value;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEFAULT_NARRATIVE_CLASSIFICATION_MAX_ATTEMPTS;
+}
+
+/**
+ * SQL predicate (for a `documents d` alias) that is true when the document has not
+ * exhausted its classification attempts under the given prompt version. Parameter
+ * placeholders are supplied by the caller so the fragment can be embedded anywhere.
+ */
+export function classificationAttemptsRemainingSql(
+  promptVersionParam: string,
+  maxAttemptsParam: string
+) {
+  return `(
+    select count(*)
+    from anthropic_message_batch_items mbi
+    join anthropic_message_batches mb on mb.id = mbi.batch_id
+    where mbi.document_id = d.id
+      and mb.workload = 'narrative_classification'
+      and mb.prompt_version = ${promptVersionParam}
+      and mbi.status not in ('submitted', 'completed')
+  ) < ${maxAttemptsParam}::int`;
+}
+
+/**
+ * Window of recent documents that classification claims first, newest-first across all
+ * source classes. Covers the 7-day measured window plus the previous week used for
+ * movement, so the board recovers coverage before backfill work resumes.
+ */
+export function resolveClassificationPriorityDays(
+  value: number | string | undefined = process.env.NARRATIVE_CLASSIFICATION_PRIORITY_DAYS
+) {
+  const parsed = typeof value === "string" ? Number.parseInt(value, 10) : value;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEFAULT_NARRATIVE_CLASSIFICATION_PRIORITY_DAYS;
+}
 
 /**
  * Prompt versions whose observations are interchangeable with the current one for trend
@@ -233,7 +302,12 @@ export function resolveClassificationLookbackDays(
 }
 
 export async function countNarrativeClassificationBacklog(
-  options: { model: string; promptVersion: string; lookbackDays?: number },
+  options: {
+    model: string;
+    promptVersion: string;
+    lookbackDays?: number;
+    maxAttempts?: number;
+  },
   databaseUrl = process.env.DATABASE_URL
 ): Promise<NarrativeBacklogSummary> {
   const lookbackDays = resolveClassificationLookbackDays(options.lookbackDays);
@@ -246,6 +320,7 @@ export async function countNarrativeClassificationBacklog(
        join document_texts dt on dt.document_id = d.id
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
          and d.published_at >= now() - ($3::int * interval '1 day')
+         and ${classificationAttemptsRemainingSql("$4", "$5")}
          and not exists (
            select 1
            from anthropic_message_batch_items mbi
@@ -264,6 +339,7 @@ export async function countNarrativeClassificationBacklog(
            select 1
            from narrative_definitions nd
            where nd.status in ('active', 'probationary')
+             and d.published_at >= now() - (coalesce(nd.history_backfill_days, $3)::int * interval '1 day')
              and not exists (
                select 1
                from narrative_observations no
@@ -279,7 +355,9 @@ export async function countNarrativeClassificationBacklog(
       [
         options.model,
         resolveCompatibleClassificationPromptVersions(options.promptVersion),
-        lookbackDays
+        lookbackDays,
+        options.promptVersion,
+        resolveClassificationMaxAttempts(options.maxAttempts)
       ]
     );
     const bySourceClass = result.rows.map((row) => ({
@@ -1176,8 +1254,9 @@ export async function recomputeNarrativeTrends(
            select 1
            from document_texts dt
            where dt.document_id = d.id
-         )`,
-      [startDate, asOfDate]
+         )
+         and ${classificationAttemptsRemainingSql("$3", "$4")}`,
+      [startDate, asOfDate, promptVersion, resolveClassificationMaxAttempts()]
     );
     const corpusDocuments = corpus.rows.map((row) => ({
       date: row.date,
@@ -2157,6 +2236,8 @@ export function deriveNarrativeChanges(
     };
     if (row.current_state && measured(row.current_coverage)) {
       stateCounts[row.current_state] += 1;
+    } else if (row.status !== "expired") {
+      stateCounts.unmeasured += 1;
     }
     if (row.status === "expired") {
       changes.push({

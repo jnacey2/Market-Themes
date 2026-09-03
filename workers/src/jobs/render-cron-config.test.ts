@@ -30,11 +30,15 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
   );
   assert.match(
     classification,
-    /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "300"/
+    /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "600"/
   );
   assert.match(
     classification,
     /key: NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS\s+value: "365"/
+  );
+  assert.match(
+    classification,
+    /key: NARRATIVE_CLASSIFICATION_PRIORITY_DAYS\s+value: "14"/
   );
 
   const discovery = serviceBlock("discover-narratives");

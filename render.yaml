@@ -445,8 +445,15 @@ services:
         value: "10"
       # Upper bound per hourly batch; steady-state batches are inflow-bound
       # (~60 documents/hour), so this mainly sets how fast a backlog drains.
+      # Trend coverage needs the whole 7-day window classified, so recovery
+      # after a prompt bump or definition promotion (~4,500 recent documents)
+      # should complete within a working day.
       - key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS
-        value: "300"
+        value: "600"
+      # Recent documents are claimed newest-first across all source classes
+      # before any backfill work, so the measured window is never starved.
+      - key: NARRATIVE_CLASSIFICATION_PRIORITY_DAYS
+        value: "14"
       - key: NARRATIVE_CLASSIFICATION_MAX_RUNTIME_MS
         value: "2400000"
       - key: NARRATIVE_CLASSIFICATION_CONCURRENCY

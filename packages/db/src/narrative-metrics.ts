@@ -430,24 +430,45 @@ function round(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-export function deriveNarrativeCoverageState(input: {
-  corpusEligibleDocuments: number;
-  classifiedDocuments: number;
-  matchedDocuments: number;
-}) {
+export const DEFAULT_COVERAGE_MEASURED_PERCENT = 100;
+
+/**
+ * Share of the window's corpus that must be classified before a narrative is measured.
+ * 100 means one unclassified document keeps the whole narrative at "backfill pending";
+ * a lower value trades a small amount of denominator noise for a board that stays
+ * measured while ingestion runs ahead of classification.
+ */
+export function resolveCoverageMeasuredPercent(
+  value: number | string | undefined = process.env.NARRATIVE_COVERAGE_MEASURED_PERCENT
+) {
+  const parsed = typeof value === "string" ? Number.parseFloat(value) : value;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 && parsed <= 100
+    ? parsed
+    : DEFAULT_COVERAGE_MEASURED_PERCENT;
+}
+
+export function deriveNarrativeCoverageState(
+  input: {
+    corpusEligibleDocuments: number;
+    classifiedDocuments: number;
+    matchedDocuments: number;
+  },
+  minimumCoveragePercent = resolveCoverageMeasuredPercent()
+) {
   const corpusEligibleDocuments = Math.max(0, input.corpusEligibleDocuments);
   const classifiedDocuments = Math.min(
     corpusEligibleDocuments,
     Math.max(0, input.classifiedDocuments)
   );
-  const classificationCoveragePercent =
+  const rawCoveragePercent =
     corpusEligibleDocuments === 0
       ? 0
-      : round((classifiedDocuments / corpusEligibleDocuments) * 100);
+      : (classifiedDocuments / corpusEligibleDocuments) * 100;
+  const classificationCoveragePercent = round(rawCoveragePercent);
   const coverageState =
     corpusEligibleDocuments === 0
       ? ("no_corpus" as const)
-      : classifiedDocuments < corpusEligibleDocuments
+      : rawCoveragePercent < minimumCoveragePercent
         ? ("backfill_pending" as const)
         : input.matchedDocuments === 0
           ? ("measured_zero" as const)
