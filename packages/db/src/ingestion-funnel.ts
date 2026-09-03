@@ -1,4 +1,8 @@
-import { closeDatabaseClient, createDatabaseClient } from "./persistence";
+import {
+  closeDatabaseClient,
+  createDatabaseClient,
+  resolveOpsQueryTimeoutMs
+} from "./persistence";
 import type { SourceClass } from "./types";
 
 /**
@@ -67,11 +71,18 @@ export async function getIngestionFunnel(
     return emptyFunnel(false, windowDays);
   }
 
-  const client = createDatabaseClient(databaseUrl);
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: resolveOpsQueryTimeoutMs(),
+    statementTimeoutMs: resolveOpsQueryTimeoutMs()
+  });
   try {
     await client.connect();
 
-    const stages = await client.query<{
+    // One pass over the window: per-document stage flags are computed once and
+    // grouped by source class with a rollup row for the totals, instead of
+    // running the same seven correlated probes twice (totals and per class).
+    const staged = await client.query<{
+      source_class: SourceClass | null;
       ingested: string;
       with_text: string;
       extracted: string;
@@ -115,7 +126,8 @@ export async function getIngestionFunnel(
          from documents d
          where d.created_at >= now() - ($1::int * interval '1 day')
        )
-       select count(*)::text as ingested,
+       select source_class,
+              count(*)::text as ingested,
               count(*) filter (where with_text)::text as with_text,
               count(*) filter (where extracted)::text as extracted,
               count(*) filter (where with_signals)::text as with_signals,
@@ -123,60 +135,15 @@ export async function getIngestionFunnel(
               count(*) filter (where matched)::text as matched,
               count(*) filter (where approved)::text as approved,
               count(*) filter (where in_candidates)::text as in_candidates
-       from recent`,
+       from recent
+       group by rollup (source_class)
+       order by grouping(source_class) desc, count(*) desc, source_class`,
       [windowDays]
     );
-
-    const bySourceClass = await client.query<{
-      source_class: SourceClass;
-      ingested: string;
-      with_text: string;
-      extracted: string;
-      classified: string;
-      matched: string;
-      approved: string;
-    }>(
-      `select d.source_class,
-              count(*)::text as ingested,
-              count(*) filter (
-                where exists (
-                  select 1 from document_texts dt
-                  where dt.document_id = d.id
-                    and coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-                )
-              )::text as with_text,
-              count(*) filter (
-                where exists (
-                  select 1 from document_analysis_runs r
-                  where r.document_id = d.id
-                    and r.analysis_type = 'market_signal_extraction'
-                    and r.status = 'completed'
-                )
-              )::text as extracted,
-              count(*) filter (
-                where exists (
-                  select 1 from narrative_observations no where no.document_id = d.id
-                )
-              )::text as classified,
-              count(*) filter (
-                where exists (
-                  select 1 from narrative_observations no
-                  where no.document_id = d.id and no.matched
-                    and no.review_status <> 'rejected'
-                )
-              )::text as matched,
-              count(*) filter (
-                where exists (
-                  select 1 from narrative_observations no
-                  where no.document_id = d.id and no.matched
-                    and no.review_status = 'approved'
-                )
-              )::text as approved
-       from documents d
-       where d.created_at >= now() - ($1::int * interval '1 day')
-       group by d.source_class
-       order by count(*) desc, d.source_class`,
-      [windowDays]
+    const totals = staged.rows.find((entry) => entry.source_class === null);
+    const perClass = staged.rows.filter(
+      (entry): entry is typeof entry & { source_class: SourceClass } =>
+        entry.source_class !== null
     );
 
     const polling = await client.query<{
@@ -207,7 +174,7 @@ export async function getIngestionFunnel(
       [windowDays]
     );
 
-    const row = stages.rows[0];
+    const row = totals;
     const poll = polling.rows[0];
     const fetched = Number(poll?.fetched ?? 0);
     const skipped = Number(poll?.skipped ?? 0);
@@ -233,7 +200,7 @@ export async function getIngestionFunnel(
         approved: Number(row?.approved ?? 0),
         in_candidates: Number(row?.in_candidates ?? 0)
       }),
-      bySourceClass: bySourceClass.rows.map((classRow) => ({
+      bySourceClass: perClass.map((classRow) => ({
         sourceClass: classRow.source_class,
         ingested: Number(classRow.ingested),
         withText: Number(classRow.with_text),
