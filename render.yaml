@@ -69,6 +69,10 @@ services:
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
         value: "14"
+      # The /ingestion operations panel counts the classification backlog with
+      # the same rules as the classify-narratives cron; keep these in step.
+      - key: NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS
+        value: "365"
       - key: APP_BASE_URL
         sync: false
       - key: SESSION_SECRET
