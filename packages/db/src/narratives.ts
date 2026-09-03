@@ -287,6 +287,33 @@ export function resolveCompatibleClassificationPromptVersions(
 }
 
 /**
+ * Builds the observation prompt-version filter and the DISTINCT ON ordering used to pick
+ * one observation per (definition, document). With a single version (the normal case)
+ * the predicate is a plain equality and the ordering matches
+ * narrative_observations_homepage_idx exactly, so the planner streams from the index.
+ * Only when compatible versions are configured does it fall back to an array match and
+ * an expression ordering that prefers the current version.
+ */
+export function observationVersionSql(
+  versions: string[],
+  versionsParam: string,
+  currentParam: string
+) {
+  if (versions.length === 1) {
+    // Both parameters stay referenced so the bind matches; the equality drives the
+    // index and the array check is a no-op filter.
+    return {
+      predicate: `prompt_version = ${currentParam} and prompt_version = any(${versionsParam}::text[])`,
+      order: "observed_at desc, prompt_version desc"
+    };
+  }
+  return {
+    predicate: `prompt_version = any(${versionsParam}::text[])`,
+    order: `(prompt_version = ${currentParam}) desc, observed_at desc, prompt_version desc`
+  };
+}
+
+/**
  * Bounds how far back the classifier revisits documents when a definition is added or a
  * prompt version changes. Keep this aligned with NARRATIVE_TREND_LOOKBACK_DAYS: trend
  * baselines can only see classified history, so a shorter classification lookback caps
@@ -1233,6 +1260,7 @@ export async function recomputeNarrativeTrends(
       "narrative_classification_v7";
     const observationVersions =
       resolveCompatibleClassificationPromptVersions(promptVersion);
+    const recomputeVersionSql = observationVersionSql(observationVersions, "$3", "$4");
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -1282,9 +1310,8 @@ export async function recomputeNarrativeTrends(
       `with latest_observations as (
          select distinct on (narrative_definition_id, document_id) *
          from narrative_observations
-         where prompt_version = any($3::text[])
-         order by narrative_definition_id, document_id,
-                  (prompt_version = $4) desc, observed_at desc, prompt_version desc
+         where ${recomputeVersionSql.predicate}
+         order by narrative_definition_id, document_id, ${recomputeVersionSql.order}
        )
        select no.narrative_definition_id, d.published_at::date::text as date,
               no.document_id, no.matched, no.match_score::float,
@@ -1988,14 +2015,15 @@ async function loadNarrativeBoard(options: {
       rows.push(row);
       historyByDefinition.set(row.narrative_definition_id, rows);
     }
+    const evidenceVersions = resolveCompatibleClassificationPromptVersions(promptVersion);
+    const evidenceVersionSql = observationVersionSql(evidenceVersions, "$2", "$3");
     const evidence = await client.query<NarrativeHomepageEvidenceRow>(
       `with latest_observations as (
          select distinct on (narrative_definition_id, document_id) *
          from narrative_observations
          where narrative_definition_id = any($1::text[])
-           and prompt_version = any($2::text[])
-         order by narrative_definition_id, document_id,
-                  (prompt_version = $3) desc, observed_at desc, prompt_version desc
+           and ${evidenceVersionSql.predicate}
+         order by narrative_definition_id, document_id, ${evidenceVersionSql.order}
        ),
        evidence_with_story as (
          select no.id, no.narrative_definition_id, d.title, d.publisher,
@@ -2034,11 +2062,7 @@ async function loadNarrativeBoard(options: {
        from per_definition
        where evidence_rank <= 12
        order by narrative_definition_id, evidence_rank`,
-      [
-        definitionIds,
-        resolveCompatibleClassificationPromptVersions(promptVersion),
-        promptVersion
-      ]
+      [definitionIds, evidenceVersions, promptVersion]
     );
     const evidenceByDefinition = new Map<string, NarrativeEvidence[]>();
     for (const row of evidence.rows) {

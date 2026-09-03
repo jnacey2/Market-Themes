@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { resolveCompatibleClassificationPromptVersions } from "./narratives";
+import {
+  observationVersionSql,
+  resolveCompatibleClassificationPromptVersions
+} from "./narratives";
 
 const narratives = readFileSync(
   fileURLToPath(new URL("narratives.ts", import.meta.url)),
@@ -39,16 +42,22 @@ test("adds indexes for corpus dates and prompt-version observation scans", () =>
   );
 });
 
-test("trend observations accept compatible prompt versions but prefer the current one", () => {
-  const observationQuery = narratives.slice(
-    narratives.indexOf("with latest_observations as (\n         select distinct on (narrative_definition_id, document_id) *\n         from narrative_observations\n         where prompt_version = any($3::text[])"),
+test("observation version SQL stays index-ordered for a single version", () => {
+  const single = observationVersionSql(["v7"], "$3", "$4");
+  assert.equal(single.order, "observed_at desc, prompt_version desc");
+  assert.match(single.predicate, /prompt_version = \$4/);
+  assert.match(single.predicate, /any\(\$3::text\[\]\)/, "array parameter stays referenced");
+
+  const multi = observationVersionSql(["v7", "v6"], "$3", "$4");
+  assert.match(multi.predicate, /^prompt_version = any\(\$3::text\[\]\)$/);
+  assert.match(multi.order, /^\(prompt_version = \$4\) desc, observed_at desc/);
+
+  const recompute = narratives.slice(
+    narratives.indexOf("const recomputeVersionSql = observationVersionSql"),
     narratives.indexOf("[startDate, asOfDate, observationVersions, promptVersion]")
   );
-  assert.ok(observationQuery.length > 0, "recompute query passes the compatible version list");
-  assert.match(
-    observationQuery,
-    /distinct on \(narrative_definition_id, document_id\)[\s\S]*\(prompt_version = \$4\) desc, observed_at desc/
-  );
+  assert.match(recompute, /\$\{recomputeVersionSql\.predicate\}/);
+  assert.match(recompute, /order by narrative_definition_id, document_id, \$\{recomputeVersionSql\.order\}/);
 });
 
 test("compatible prompt versions always lead with the current version and dedupe", () => {
