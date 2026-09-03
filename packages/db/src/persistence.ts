@@ -1749,8 +1749,10 @@ export async function recomputeThemeTrends(
     options.onProgress?.(`grouped ${themes.size} themes`);
     let lowHistoryRows = 0;
     let trendRowsWritten = 0;
+    let skippedEmptyRows = 0;
     let themesStored = 0;
     const latestTrends: TrendSummary[] = [];
+    await pruneTrendRowsBefore(client, storageStartDate, options.onProgress);
     await client.query("begin");
     await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
 
@@ -1770,6 +1772,19 @@ export async function recomputeThemeTrends(
 
           if (score.lowHistory) {
             lowHistoryRows += 1;
+          }
+
+          // A window with no evidence, no intensity, and a flat zero baseline carries
+          // no information; readers treat a missing date as zero. Storing them made
+          // the table ~97% empty rows and the four-hourly rewrite take ~95 minutes on
+          // the production plan. The as-of-date row is always kept so latest-date
+          // lookups and per-theme "current" reads keep working.
+          if (
+            date !== asOfDate &&
+            isNoInformationTrendScore(score.intensity, score.zScore, score.sourceMix.evidenceCount)
+          ) {
+            skippedEmptyRows += 1;
+            continue;
           }
 
           themeTrendRows.push({
@@ -1826,11 +1841,14 @@ export async function recomputeThemeTrends(
     }
 
     await client.query("commit");
-    options.onProgress?.("trend rows committed");
+    options.onProgress?.(
+      `trend rows committed (${trendRowsWritten} written, ${skippedEmptyRows} empty windows skipped)`
+    );
 
     return {
       themesProcessed: themes.size,
       trendRowsWritten,
+      skippedEmptyRows,
       lowHistoryRows,
       topTrends: latestTrends
         .sort((left, right) => right.zScore - left.zScore)
@@ -2449,6 +2467,34 @@ async function deleteTrendRowsForDateRange(
   }
 }
 
+/**
+ * Rows older than the storage window were never removed, so shrinking TREND_STORAGE_DAYS
+ * left them in place indefinitely. Prune them in per-date statements outside the main
+ * transaction so each statement stays short on a small database plan.
+ */
+async function pruneTrendRowsBefore(
+  client: DbClient,
+  storageStartDate: string,
+  onProgress?: (message: string) => void
+) {
+  const oldest = await client.query<{ date: string | null }>(
+    "select min(date)::text as date from theme_trends where date < $1::date",
+    [storageStartDate]
+  );
+  const oldestDate = oldest.rows[0]?.date;
+  if (!oldestDate) return 0;
+  const dates = enumerateDates(oldestDate, addDays(storageStartDate, -1));
+  let pruned = 0;
+  for (const [index, date] of dates.entries()) {
+    const result = await client.query("delete from theme_trends where date = $1::date", [date]);
+    pruned += result.rowCount ?? 0;
+    if ((index + 1) % 10 === 0 || index === dates.length - 1) {
+      onProgress?.(`pruned ${pruned} trend rows older than the storage window (${index + 1}/${dates.length} dates)`);
+    }
+  }
+  return pruned;
+}
+
 function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, endDate: string) {
   const themes = new Map<
     string,
@@ -2825,7 +2871,33 @@ async function loadThemeTrendHistory(
     [themeId]
   );
 
-  return result.rows.reverse();
+  return fillThemeTrendHistoryGaps(result.rows.reverse());
+}
+
+/** Empty windows are not stored; restore them as zero points so the series is contiguous. */
+export function fillThemeTrendHistoryGaps(points: ThemeTrendPoint[]): ThemeTrendPoint[] {
+  if (points.length < 2) return points;
+  const byDate = new Map(points.map((point) => [point.date, point]));
+  const filled: ThemeTrendPoint[] = [];
+  for (const date of enumerateDates(points[0].date, points[points.length - 1].date)) {
+    filled.push(
+      byDate.get(date) ?? { date, intensity: 0, baselineMean: 0, zScore: 0 }
+    );
+  }
+  return filled;
+}
+
+/**
+ * True when a trend window says nothing: no evidence in the window, zero intensity, and
+ * a z-score of zero (a flat zero baseline). Zero intensity against a non-zero baseline
+ * yields a negative z-score and is kept, since that is a fading signal.
+ */
+export function isNoInformationTrendScore(
+  intensity: number,
+  zScore: number,
+  evidenceCount: number
+) {
+  return intensity === 0 && zScore === 0 && evidenceCount === 0;
 }
 
 async function loadRelatedSubthemes(client: DbClient, themeId: string) {
