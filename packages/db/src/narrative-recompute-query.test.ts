@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { resolveCompatibleClassificationPromptVersions } from "./narratives";
 
 const narratives = readFileSync(
   fileURLToPath(new URL("narratives.ts", import.meta.url)),
@@ -35,5 +36,29 @@ test("adds indexes for corpus dates and prompt-version observation scans", () =>
   assert.match(
     migration,
     /narrative_observations \(\s*prompt_version,\s*narrative_definition_id,\s*document_id/
+  );
+});
+
+test("trend observations accept compatible prompt versions but prefer the current one", () => {
+  const observationQuery = narratives.slice(
+    narratives.indexOf("with latest_observations as (\n         select distinct on (narrative_definition_id, document_id) *\n         from narrative_observations\n         where prompt_version = any($3::text[])"),
+    narratives.indexOf("[startDate, asOfDate, observationVersions, promptVersion]")
+  );
+  assert.ok(observationQuery.length > 0, "recompute query passes the compatible version list");
+  assert.match(
+    observationQuery,
+    /distinct on \(narrative_definition_id, document_id\)[\s\S]*\(prompt_version = \$4\) desc, observed_at desc/
+  );
+});
+
+test("compatible prompt versions always lead with the current version and dedupe", () => {
+  assert.deepEqual(
+    resolveCompatibleClassificationPromptVersions("narrative_classification_v7", undefined),
+    ["narrative_classification_v7"]
+  );
+  assert.deepEqual(resolveCompatibleClassificationPromptVersions("v7", ""), ["v7"]);
+  assert.deepEqual(
+    resolveCompatibleClassificationPromptVersions("v7", " v6 , v7, v5,v6 "),
+    ["v7", "v6", "v5"]
   );
 });

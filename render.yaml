@@ -436,12 +436,17 @@ services:
         value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
         value: narrative_classification_v7
+      # Matches NARRATIVE_TREND_LOOKBACK_DAYS so trend baselines can accumulate a
+      # full year of classified history; the 30d window needs 75 days before it
+      # leaves low-history state.
       - key: NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS
-        value: "60"
+        value: "365"
       - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
         value: "10"
+      # Upper bound per hourly batch; steady-state batches are inflow-bound
+      # (~60 documents/hour), so this mainly sets how fast a backlog drains.
       - key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS
-        value: "100"
+        value: "300"
       - key: NARRATIVE_CLASSIFICATION_MAX_RUNTIME_MS
         value: "2400000"
       - key: NARRATIVE_CLASSIFICATION_CONCURRENCY

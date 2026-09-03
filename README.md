@@ -424,6 +424,34 @@ prefix reaches 4,096 tokens, so shorter prefixes continue uncached without error
 Each request logs uncached input, cache-write input, cache-read input, and output
 token counts under `[anthropic-usage]`.
 
+### Prompt version policy
+
+Narrative trend history is keyed by classification prompt version: the trend
+recompute, the homepage evidence loader, and classification eligibility only read
+observations from the current version plus any listed in
+`NARRATIVE_CLASSIFICATION_COMPATIBLE_PROMPT_VERSIONS`. Bumping the version
+therefore resets every baseline to zero and re-queues the corpus within
+`NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS` for classification. With `lowHistoryDays`
+at 14 the 7-day window needs 22 days of history before it leaves low-history
+state, and the 30-day window needs 75, so a bump is not free. Treat a prompt
+change as one of two kinds:
+
+- **Cosmetic** (wording, formatting, output shape; matching semantics unchanged):
+  append the previous version to
+  `NARRATIVE_CLASSIFICATION_COMPATIBLE_PROMPT_VERSIONS` on `classify-narratives`,
+  `recompute-narrative-trends`, and `themes-web`. History carries over, only new
+  documents are classified under the new version, and where a document has
+  observations under both the current version wins.
+- **Semantic** (stricter or looser contract, changed inclusion/exclusion legs,
+  different model): leave the compatible list empty and budget a re-classification
+  of the corpus at about $0.0016 per document (Haiku, batch, cached prefix). That
+  is a few dollars today and grows with ingestion, so semantic bumps should be
+  rare and deliberate.
+
+Keep `NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS` equal to
+`NARRATIVE_TREND_LOOKBACK_DAYS`; a shorter classification lookback caps how much
+history the trend baselines can ever see.
+
 Scheduled extraction, classification, and discovery use Anthropic Message
 Batches, which discount input and output tokens by 50%. Hourly submit crons
 create the next bounded batch only when that workload has no active batch, while
@@ -556,8 +584,13 @@ THEME_NORMALIZATION_PROMPT_VERSION=theme_normalization_v3
 THEME_NORMALIZATION_BATCH_SIZE=25
 THEME_NORMALIZATION_MAX_BATCHES=100
 NARRATIVE_CLASSIFICATION_PROMPT_VERSION=narrative_classification_v7
+# Earlier prompt versions whose matches are interchangeable with the current one
+# (cosmetic edits only). Their observations count toward trend history and
+# classification eligibility. Leave empty after any semantic change.
+NARRATIVE_CLASSIFICATION_COMPATIBLE_PROMPT_VERSIONS=
 # Documents older than this are not (re)classified when definitions change.
-NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS=60
+# Keep aligned with NARRATIVE_TREND_LOOKBACK_DAYS; see "Prompt version policy".
+NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS=365
 NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION=candidate_promotion_validation_v2
 NARRATIVE_EVENT_TTL_DAYS=14
 NARRATIVE_ACTIVATION_MIN_STORIES=3
