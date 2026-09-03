@@ -599,8 +599,12 @@ services:
         fromDatabase:
           name: themes-postgres
           property: connectionString
+      # Batch job on a 30-minute cadence: the observation load reads every
+      # current-version observation and its document, which can exceed two
+      # minutes on the production plan while autovacuum or the theme recompute
+      # is running. Five minutes still fits comfortably inside the schedule.
       - key: DB_QUERY_TIMEOUT_MS
-        value: "120000"
+        value: "300000"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
