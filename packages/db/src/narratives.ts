@@ -1326,14 +1326,20 @@ export async function recomputeNarrativeTrends(
               d.source_class, no.affected_entities, no.review_status,
               case
                 when no.matched and no.review_status = 'approved'
-                  then position(no.evidence_snippet in dt.content) > 0
+                  then exists (
+                    select 1 from document_texts dt
+                    where dt.document_id = no.document_id
+                      and position(no.evidence_snippet in dt.content) > 0
+                  )
                 else true
               end as evidence_current
        from latest_observations no
        join documents d on d.id = no.document_id
-       join document_texts dt on dt.document_id = d.id
        where d.published_at >= $1::date
-         and d.published_at < $2::date + interval '1 day'`,
+         and d.published_at < $2::date + interval '1 day'
+         and exists (
+           select 1 from document_texts dt where dt.document_id = d.id
+         )`,
       [startDate, asOfDate, observationVersions, promptVersion]
     );
 
