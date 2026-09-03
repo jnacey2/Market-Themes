@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import {
   getIngestionFunnel,
   getIngestionStatus,
@@ -6,6 +7,21 @@ import {
 } from "@market-themes/db";
 
 export const dynamic = "force-dynamic";
+
+// The funnel and operations aggregates scan the whole corpus (tens of seconds on the
+// production database plan). One computation serves the page for ten minutes; the
+// cheap connection/status panel stays live.
+const OPS_REVALIDATE_SECONDS = 600;
+const cachedOperationsStatus = unstable_cache(
+  () => getOperationsStatus(),
+  ["ingestion-operations-status"],
+  { revalidate: OPS_REVALIDATE_SECONDS }
+);
+const cachedIngestionFunnel = unstable_cache(
+  (windowDays: number) => getIngestionFunnel({ windowDays }),
+  ["ingestion-funnel"],
+  { revalidate: OPS_REVALIDATE_SECONDS }
+);
 
 export default async function IngestionPage({
   searchParams
@@ -16,8 +32,8 @@ export default async function IngestionPage({
   const windowDays = parseWindow(params.window);
   const [status, operations, funnel] = await Promise.all([
     getIngestionStatus(),
-    getOperationsStatus(),
-    getIngestionFunnel({ windowDays })
+    cachedOperationsStatus(),
+    cachedIngestionFunnel(windowDays)
   ]);
 
   return (

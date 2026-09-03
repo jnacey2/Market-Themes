@@ -603,6 +603,9 @@ NARRATIVE_PROMOTED_DEFINITION_HISTORY_DAYS=60
 # Share of the window's corpus that must be classified before a narrative is
 # measured. 100 (default) means one unclassified document keeps it pending.
 NARRATIVE_COVERAGE_MEASURED_PERCENT=100
+# Query budget for the operator dashboards (/ingestion funnel and operations
+# status), which aggregate over the whole corpus and are cached for ten minutes.
+OPS_QUERY_TIMEOUT_MS=90000
 NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION=candidate_promotion_validation_v2
 NARRATIVE_EVENT_TTL_DAYS=14
 NARRATIVE_ACTIVATION_MIN_STORIES=3

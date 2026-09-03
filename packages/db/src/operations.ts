@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { closeDatabaseClient, createDatabaseClient } from "./persistence";
+import {
+  closeDatabaseClient,
+  createDatabaseClient,
+  resolveOpsQueryTimeoutMs
+} from "./persistence";
 import {
   DEFAULT_CANDIDATE_EVIDENCE_WINDOW_DAYS,
   DEFAULT_CANDIDATE_MIN_DOCUMENTS,
@@ -205,7 +209,10 @@ export async function getOperationsStatus(
     return emptyOperationsStatus();
   }
 
-  const client = createDatabaseClient(databaseUrl);
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: resolveOpsQueryTimeoutMs(),
+    statementTimeoutMs: resolveOpsQueryTimeoutMs()
+  });
   try {
     await client.connect();
     const analysisModel =

@@ -40,6 +40,19 @@ const DEFAULT_CHUNK_OVERLAP = 500;
 const DEFAULT_QUERY_TIMEOUT_MS = 20_000;
 const DEFAULT_TREND_QUERY_TIMEOUT_MS = 120_000;
 export const DASHBOARD_QUERY_TIMEOUT_MS = 4_000;
+const DEFAULT_OPS_QUERY_TIMEOUT_MS = 90_000;
+
+/**
+ * Operator dashboards (ingestion funnel, operations status) aggregate over the whole
+ * corpus and are cached by the page, so they get a longer budget than request-path
+ * reads instead of failing over to empty panels at the default timeout.
+ */
+export function resolveOpsQueryTimeoutMs(
+  value: string | undefined = process.env.OPS_QUERY_TIMEOUT_MS
+) {
+  const parsed = value === undefined ? Number.NaN : Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_OPS_QUERY_TIMEOUT_MS;
+}
 
 type DatabaseClientOptions = {
   queryTimeoutMs?: number;
