@@ -158,7 +158,7 @@ export async function selectDocumentsForNarrativeClassification(
                  where no.narrative_definition_id = nd.id
                    and no.document_id = d.id
                    and no.model = $1
-                   and no.prompt_version = $2
+                   and no.prompt_version = any($2::text[])
                    and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
                )
            )
@@ -170,7 +170,7 @@ export async function selectDocumentsForNarrativeClassification(
        limit $3`,
       [
         options.model,
-        options.promptVersion,
+        resolveCompatibleClassificationPromptVersions(options.promptVersion),
         options.limit,
         options.excludedDocumentIds ?? [],
         lookbackDays
@@ -199,9 +199,29 @@ export async function selectDocumentsForNarrativeClassification(
 export const DEFAULT_NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS = 60;
 
 /**
+ * Prompt versions whose observations are interchangeable with the current one for trend
+ * measurement and classification eligibility. Trend history is keyed by prompt version, so
+ * a cosmetic prompt edit would otherwise reset every baseline to zero and re-classify the
+ * corpus. List only versions with unchanged matching semantics; a stricter or looser
+ * contract must stay incompatible and be backfilled instead. The current version is
+ * always first so it wins when a document was classified under more than one.
+ */
+export function resolveCompatibleClassificationPromptVersions(
+  currentVersion: string,
+  value: string | undefined = process.env.NARRATIVE_CLASSIFICATION_COMPATIBLE_PROMPT_VERSIONS
+): string[] {
+  const compatible = (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && item !== currentVersion);
+  return [currentVersion, ...new Set(compatible)];
+}
+
+/**
  * Bounds how far back the classifier revisits documents when a definition is added or a
- * prompt version changes. Without a bound every new definition re-reads the whole corpus,
- * which is expensive and adds little to trend detection beyond roughly two months.
+ * prompt version changes. Keep this aligned with NARRATIVE_TREND_LOOKBACK_DAYS: trend
+ * baselines can only see classified history, so a shorter classification lookback caps
+ * how much history the 30-day window can ever accumulate.
  */
 export function resolveClassificationLookbackDays(
   value: number | string | undefined = process.env.NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS
@@ -250,13 +270,17 @@ export async function countNarrativeClassificationBacklog(
                where no.narrative_definition_id = nd.id
                  and no.document_id = d.id
                  and no.model = $1
-                 and no.prompt_version = $2
+                 and no.prompt_version = any($2::text[])
                  and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
              )
          )
        group by d.source_class
        order by d.source_class`,
-      [options.model, options.promptVersion, lookbackDays]
+      [
+        options.model,
+        resolveCompatibleClassificationPromptVersions(options.promptVersion),
+        lookbackDays
+      ]
     );
     const bySourceClass = result.rows.map((row) => ({
       sourceClass: row.source_class,
@@ -1129,6 +1153,8 @@ export async function recomputeNarrativeTrends(
       options.promptVersion ??
       process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
       "narrative_classification_v7";
+    const observationVersions =
+      resolveCompatibleClassificationPromptVersions(promptVersion);
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -1177,8 +1203,9 @@ export async function recomputeNarrativeTrends(
       `with latest_observations as (
          select distinct on (narrative_definition_id, document_id) *
          from narrative_observations
-         where prompt_version = $3
-         order by narrative_definition_id, document_id, observed_at desc, prompt_version desc
+         where prompt_version = any($3::text[])
+         order by narrative_definition_id, document_id,
+                  (prompt_version = $4) desc, observed_at desc, prompt_version desc
        )
        select no.narrative_definition_id, d.published_at::date::text as date,
               no.document_id, no.matched, no.match_score::float,
@@ -1201,7 +1228,7 @@ export async function recomputeNarrativeTrends(
        join document_texts dt on dt.document_id = d.id
        where d.published_at >= $1::date
          and d.published_at < $2::date + interval '1 day'`,
-      [startDate, asOfDate, promptVersion]
+      [startDate, asOfDate, observationVersions, promptVersion]
     );
 
     const rowsByDefinition = new Map<string, typeof rows.rows>();
@@ -1887,8 +1914,9 @@ async function loadNarrativeBoard(options: {
          select distinct on (narrative_definition_id, document_id) *
          from narrative_observations
          where narrative_definition_id = any($1::text[])
-           and prompt_version = $2
-         order by narrative_definition_id, document_id, observed_at desc, prompt_version desc
+           and prompt_version = any($2::text[])
+         order by narrative_definition_id, document_id,
+                  (prompt_version = $3) desc, observed_at desc, prompt_version desc
        ),
        evidence_with_story as (
          select no.id, no.narrative_definition_id, d.title, d.publisher,
@@ -1927,7 +1955,11 @@ async function loadNarrativeBoard(options: {
        from per_definition
        where evidence_rank <= 12
        order by narrative_definition_id, evidence_rank`,
-      [definitionIds, promptVersion]
+      [
+        definitionIds,
+        resolveCompatibleClassificationPromptVersions(promptVersion),
+        promptVersion
+      ]
     );
     const evidenceByDefinition = new Map<string, NarrativeEvidence[]>();
     for (const row of evidence.rows) {
