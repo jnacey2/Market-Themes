@@ -1,5 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createDatabaseClient } from "./persistence";
+
+export const DEFAULT_PROMOTED_DEFINITION_HISTORY_DAYS = 60;
+
+/**
+ * How much document history a promoted candidate is classified against. A candidate is
+ * emerging by construction, so it needs the measured window and a baseline rather than
+ * the full-year backfill curated definitions get; this keeps a promotion from re-queuing
+ * the whole classification lookback.
+ */
+export function resolvePromotedDefinitionHistoryDays(
+  value: string | undefined = process.env.NARRATIVE_PROMOTED_DEFINITION_HISTORY_DAYS
+) {
+  const parsed = value === undefined ? Number.NaN : Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_PROMOTED_DEFINITION_HISTORY_DAYS;
+}
 import type {
   AnalysisDocument,
   CandidatePromotionPolicy,
@@ -129,7 +146,7 @@ export async function selectDocumentsForNarrativeDiscovery(
           and ar.model = $2
           and ar.prompt_version = $3
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-           and length(btrim(dt.content)) > 0
+           and coalesce(dt.content_length, 0) > 0
            and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
            and (
              ar.id is null
@@ -219,7 +236,7 @@ export async function claimDocumentsForNarrativeDiscovery(
           and ar.model = $2
           and ar.prompt_version = $3
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-           and length(btrim(dt.content)) > 0
+           and coalesce(dt.content_length, 0) > 0
            and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
            and (
              ar.id is null
@@ -381,7 +398,7 @@ export async function countNarrativeDiscoveryBacklog(
         and ar.model = $2
         and ar.prompt_version = $3
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-         and length(btrim(dt.content)) > 0
+         and coalesce(dt.content_length, 0) > 0
          and ($4::integer is null or d.published_at >= now() - ($4::text || ' days')::interval)
          and (
            ar.id is null
@@ -1584,6 +1601,41 @@ export async function promoteNarrativeCandidate(
         `Candidate overlaps tracked narrative "${semanticCollision.name}" (${semanticCollision.id}); merge or refine it instead of creating another definition.`
       );
     }
+    // Wording can differ while the evidence is the same. If most of the documents
+    // that qualify this candidate are already matched to one tracked definition
+    // (including the approved seed observations a promotion writes), the candidate
+    // is that definition under another name.
+    const evidenceDocumentIds = [
+      ...new Set(selectedRows.map((row) => row.document_id))
+    ];
+    const evidenceCollision = await client.query<{
+      narrative_definition_id: string;
+      name: string;
+      shared: string;
+    }>(
+      `select no.narrative_definition_id, nd.name,
+              count(distinct no.document_id)::text as shared
+       from narrative_observations no
+       join narrative_definitions nd on nd.id = no.narrative_definition_id
+       where no.document_id = any($1::text[])
+         and no.matched
+         and no.review_status <> 'rejected'
+         and nd.status in ('active', 'probationary')
+       group by no.narrative_definition_id, nd.name
+       having count(distinct no.document_id) >= $2::int
+       order by count(distinct no.document_id) desc
+       limit 1`,
+      [
+        evidenceDocumentIds,
+        evidenceCollisionThreshold(evidenceDocumentIds.length)
+      ]
+    );
+    const sharedEvidence = evidenceCollision.rows[0];
+    if (sharedEvidence) {
+      throw new Error(
+        `Candidate evidence already supports tracked narrative "${sharedEvidence.name}" (${sharedEvidence.narrative_definition_id}): ${sharedEvidence.shared} of ${evidenceDocumentIds.length} qualifying documents are matched to it; merge or refine instead of creating another definition.`
+      );
+    }
     const activeCollision = await client.query(
       `select 1
        from narrative_definitions
@@ -1625,10 +1677,10 @@ export async function promoteNarrativeCandidate(
          id, slug, version, name, proposition, category,
          inclusion_guidance, exclusion_guidance, positive_examples,
          negative_examples, status, kind, event_label, metadata,
-         event_expires_at
+         event_expires_at, history_backfill_days
        ) values (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'probationary',
-         $10, $11, $12::jsonb, $13::timestamptz
+         $10, $11, $12::jsonb, $13::timestamptz, $14::int
        )`,
       [
         definitionId,
@@ -1647,7 +1699,8 @@ export async function promoteNarrativeCandidate(
           candidateId: candidate.id,
           promotionValidation: semanticValidation
         }),
-        eventExpiresAt
+        eventExpiresAt,
+        resolvePromotedDefinitionHistoryDays()
       ]
     );
 
@@ -1810,6 +1863,16 @@ export async function promoteNarrativeCandidate(
   }
 }
 
+/**
+ * Number of a candidate's qualifying documents that must already be matched to a single
+ * tracked definition before promotion is treated as a duplicate: at least two thirds of
+ * them, and never fewer than three, so a broad structural narrative that happens to
+ * match one shared story does not block a genuinely new proposition.
+ */
+export function evidenceCollisionThreshold(qualifyingDocuments: number) {
+  return Math.max(3, Math.ceil((qualifyingDocuments * 2) / 3));
+}
+
 export function isNarrativeCandidateQualified(
   breadth: {
     documentBreadth: number;
@@ -1841,8 +1904,14 @@ export function narrativeDescriptionsOverlap(
   rightName: string,
   rightProposition: string
 ) {
+  // Jaccard alone misses a name that repeats another's core tokens with extra
+  // qualifiers ("US-Iran Hormuz Escalation Oil Price Shock" vs "US-Iran Hormuz
+  // Escalation September 2026"): 4 shared of 10 distinct is 0.40. The overlap
+  // coefficient (shared / smaller set) catches that at 0.57 while a single shared
+  // sector word still cannot trip it because at least three shared tokens are required.
   return (
     tokenSimilarity(leftName, rightName) >= 0.5 ||
+    tokenOverlapCoefficient(leftName, rightName, 3) >= 0.5 ||
     tokenSimilarity(leftProposition, rightProposition) >= 0.55
   );
 }
@@ -1855,6 +1924,17 @@ function tokenSimilarity(left: string, right: string) {
     rightTokens.has(token)
   ).length;
   return intersection / new Set([...leftTokens, ...rightTokens]).size;
+}
+
+function tokenOverlapCoefficient(left: string, right: string, minimumShared: number) {
+  const leftTokens = meaningfulTokens(left);
+  const rightTokens = meaningfulTokens(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const intersection = [...leftTokens].filter((token) =>
+    rightTokens.has(token)
+  ).length;
+  if (intersection < minimumShared) return 0;
+  return intersection / Math.min(leftTokens.size, rightTokens.size);
 }
 
 function meaningfulTokens(value: string) {

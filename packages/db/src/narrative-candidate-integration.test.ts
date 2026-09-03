@@ -14,6 +14,7 @@ import {
   getNarrativeReviewQueue,
   getOperationsStatus,
   mergeNarrativeCandidate,
+  evidenceCollisionThreshold,
   narrativeDescriptionsOverlap,
   persistDocuments,
   persistNarrativeObservations,
@@ -53,6 +54,33 @@ test("detects semantically overlapping tracked narratives", () => {
     ),
     false
   );
+});
+
+test("a name that repeats another's core tokens with extra qualifiers is a duplicate", () => {
+  assert.equal(
+    narrativeDescriptionsOverlap(
+      "US-Iran Hormuz Escalation September 2026 Week",
+      "US-Iran military strikes resumed at the start of the week following weeks of relative calm, creating acute geopolitical escalation risk that threatens Strait of Hormuz energy supply and is repricing bond markets higher.",
+      "US-Iran Hormuz Escalation Oil Price Shock",
+      "Intensified US-Iran fighting over the Strait of Hormuz is triggering renewed oil price spikes and extending market expectations for prolonged conflict, creating acute geopolitical energy supply disruption risk."
+    ),
+    true,
+    "shared core tokens (us, iran, hormuz, escalation) outweigh differing qualifiers"
+  );
+  assert.equal(
+    narrativeDescriptionsOverlap(
+      "Energy Demand Growth",
+      "Electricity, natural-gas, or fuel demand is accelerating because of economic activity, electrification, or data-center load.",
+      "Energy Shock Drives Cross-Asset Repricing",
+      "An energy-price shock is simultaneously pushing sovereign yields higher and pressuring equities or other rate-sensitive assets."
+    ),
+    false,
+    "one shared sector word is not enough"
+  );
+  assert.equal(evidenceCollisionThreshold(2), 3);
+  assert.equal(evidenceCollisionThreshold(3), 3);
+  assert.equal(evidenceCollisionThreshold(5), 4);
+  assert.equal(evidenceCollisionThreshold(10), 7);
 });
 
 test(

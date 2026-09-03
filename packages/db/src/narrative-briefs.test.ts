@@ -42,6 +42,46 @@ test("daily brief leads with the rising narrative and names the fading one", () 
   assert.deepEqual(brief.narrativeDefinitionIds, ["r", "f", "e"]);
 });
 
+test("daily brief never headlines an unmeasured narrative as measurable", () => {
+  const lanes: NarrativeHomepageStatus["lanes"] = {
+    rising: [],
+    peaking: [],
+    fading: [],
+    emerging: [
+      item({ id: "u1", name: "AI Infrastructure Demand", lifecycleState: "unmeasured", status: "probationary" }),
+      item({ id: "u2", name: "Hormuz Escalation", lifecycleState: "unmeasured", status: "probationary" })
+    ]
+  };
+  const brief = buildDailyBrief(
+    lanes,
+    {
+      currentDate: "2026-09-03",
+      previousDate: "2026-09-02",
+      stateCounts: { ...emptyCounts, unmeasured: 20 },
+      changes: []
+    },
+    "2026-09-03"
+  );
+
+  assert.doesNotMatch(brief.headline, /newly measurable/);
+  assert.match(brief.headline, /No narrative is measured yet; 20 narratives are awaiting classification coverage/);
+  assert.match(brief.summary, /20 narratives have incomplete classification coverage/);
+  assert.doesNotMatch(brief.summary, /reviewed density/);
+
+  const mixed = buildDailyBrief(
+    {
+      ...lanes,
+      emerging: [
+        item({ id: "u1", name: "AI Infrastructure Demand", lifecycleState: "unmeasured", status: "probationary" }),
+        item({ id: "m", name: "Tariff Pass-Through", lifecycleState: "emerging", status: "probationary" })
+      ]
+    },
+    { currentDate: "2026-09-03", previousDate: "2026-09-02", stateCounts: { ...emptyCounts, emerging: 1, unmeasured: 1 }, changes: [] },
+    "2026-09-03"
+  );
+  assert.match(mixed.headline, /^Tariff Pass-Through is newly measurable/);
+});
+
 test("alerts fire for state changes, large moves, new definitions, and unusual attention", () => {
   const lanes: NarrativeHomepageStatus["lanes"] = {
     rising: [item({ id: "hot", name: "Hot", attentionZScore: 3.1 })],

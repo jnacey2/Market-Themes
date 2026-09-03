@@ -5,6 +5,10 @@ import {
   DEFAULT_CANDIDATE_MIN_DOCUMENTS,
   DEFAULT_CANDIDATE_MIN_PUBLISHER_OWNERS
 } from "./narrative-candidates";
+import {
+  resolveClassificationLookbackDays,
+  resolveCompatibleClassificationPromptVersions
+} from "./narratives";
 import type {
   ConnectorCheckpointSummary,
   OperationsStatus,
@@ -359,17 +363,19 @@ export async function getOperationsStatus(
          from documents d
          join document_texts dt on dt.document_id = d.id
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+           and d.published_at >= now() - ($9::int * interval '1 day')
            and exists (
              select 1
              from narrative_definitions nd
              where nd.status in ('active', 'probationary')
+               and d.published_at >= now() - (coalesce(nd.history_backfill_days, $9)::int * interval '1 day')
                and not exists (
                  select 1
                  from narrative_observations no
                  where no.narrative_definition_id = nd.id
                    and no.document_id = d.id
                    and no.model = $1
-                   and no.prompt_version = $3
+                   and no.prompt_version = any($8::text[])
                    and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
                )
            )
@@ -399,7 +405,7 @@ export async function getOperationsStatus(
           and ar.model = $1
           and ar.prompt_version = $4
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-           and length(btrim(dt.content)) > 0
+           and coalesce(dt.content_length, 0) > 0
          group by d.source_id
        ),
        match_stats as (
@@ -446,7 +452,9 @@ export async function getOperationsStatus(
         discoveryPromptVersion,
         discoveryLookbackDays,
         discoveryMaxAttempts,
-        analysisMaxAttempts
+        analysisMaxAttempts,
+        resolveCompatibleClassificationPromptVersions(classificationPromptVersion),
+        resolveClassificationLookbackDays()
       ]
     );
     const connectors = await client.query<{
