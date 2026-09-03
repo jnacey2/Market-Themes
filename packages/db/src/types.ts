@@ -316,6 +316,8 @@ export type ThemeDetailStatus = {
 export type RecomputeThemeTrendsResult = {
   themesProcessed: number;
   trendRowsWritten: number;
+  /** Windows with no evidence, zero intensity, and zero z-score that were not stored. */
+  skippedEmptyRows: number;
   lowHistoryRows: number;
   topTrends: Array<{
     themeId: string;

@@ -529,8 +529,15 @@ unavailable values, never as false zero counts.
 
 Trend aggregation turns stored Claude signals into deterministic `theme_trends`
 rows. It computes 7-day and 30-day rolling windows from source `published_at`
-dates, includes zero-intensity days, compares each theme to its own history, and
-flags low-history rows until at least 14 baseline days exist.
+dates, includes zero-intensity days in the computation, compares each theme to
+its own history, and flags low-history rows until at least 14 baseline days
+exist. Windows that carry no information (no evidence, zero intensity, and a
+zero z-score against a flat baseline) are computed but not stored; readers
+treat a missing date as zero and the per-theme history is back-filled with zero
+points. A zero-intensity window against a non-zero baseline has a negative
+z-score and is stored, since that is a fading signal. The as-of-date row is
+always stored. Each run also prunes rows older than `TREND_STORAGE_DAYS`, which
+earlier runs left in place.
 
 ## Local Development
 
