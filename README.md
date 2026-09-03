@@ -591,6 +591,18 @@ NARRATIVE_CLASSIFICATION_COMPATIBLE_PROMPT_VERSIONS=
 # Documents older than this are not (re)classified when definitions change.
 # Keep aligned with NARRATIVE_TREND_LOOKBACK_DAYS; see "Prompt version policy".
 NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS=365
+# Recent documents are claimed newest-first across all source classes before any
+# backfill work, so the measured 7-day window is never starved by the tail.
+NARRATIVE_CLASSIFICATION_PRIORITY_DAYS=14
+# Failed batch attempts after which a document stops being resubmitted and leaves
+# the trend coverage denominator.
+NARRATIVE_CLASSIFICATION_MAX_ATTEMPTS=5
+# History depth classified for candidates promoted to definitions. Curated
+# definitions use the full classification lookback (history_backfill_days NULL).
+NARRATIVE_PROMOTED_DEFINITION_HISTORY_DAYS=60
+# Share of the window's corpus that must be classified before a narrative is
+# measured. 100 (default) means one unclassified document keeps it pending.
+NARRATIVE_COVERAGE_MEASURED_PERCENT=100
 NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION=candidate_promotion_validation_v2
 NARRATIVE_EVENT_TTL_DAYS=14
 NARRATIVE_ACTIVATION_MIN_STORIES=3
