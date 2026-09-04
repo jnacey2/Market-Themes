@@ -102,6 +102,7 @@ test("publishes narrative trends twice hourly without waiting on model work", ()
     trends,
     /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION\s+value: narrative_classification_v7/
   );
+  assert.match(trends, /key: NARRATIVE_COVERAGE_MEASURED_PERCENT\s+value: "98"/);
   assert.match(
     trends,
     /key: NARRATIVE_ACTIVATION_MIN_STORIES\s+value: "3"/

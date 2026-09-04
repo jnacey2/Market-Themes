@@ -621,6 +621,12 @@ services:
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
         value: "14"
+      # poll-sources inserts at :00/:30, classification claims at :05, and this
+      # job runs at :25/:55, so the :55 recompute always sees the :30 documents
+      # unclassified. 98% of a ~5,000-document window tolerates ~1.5 hours of
+      # inflow while a genuine backlog still reads as pending.
+      - key: NARRATIVE_COVERAGE_MEASURED_PERCENT
+        value: "98"
 
   # Premium publisher scraper. Disabled by default (SCRAPING_ENABLED=false, no
   # PREMIUM_PUBLISHERS) and runs on a paid Docker plan, so it is not provisioned.

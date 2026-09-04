@@ -608,8 +608,10 @@ NARRATIVE_CLASSIFICATION_MAX_ATTEMPTS=5
 # definitions use the full classification lookback (history_backfill_days NULL).
 NARRATIVE_PROMOTED_DEFINITION_HISTORY_DAYS=60
 # Share of the window's corpus that must be classified before a narrative is
-# measured. 100 (default) means one unclassified document keeps it pending.
-NARRATIVE_COVERAGE_MEASURED_PERCENT=100
+# measured. 100 (default) means one unclassified document keeps it pending;
+# production uses 98 because ingestion lands at :00/:30 and classification
+# claims at :05, so the :55 recompute always sees a few unclassified documents.
+NARRATIVE_COVERAGE_MEASURED_PERCENT=98
 # Query budget for the operator dashboards (/ingestion funnel and operations
 # status), which aggregate over the whole corpus and are cached for ten minutes.
 OPS_QUERY_TIMEOUT_MS=90000
