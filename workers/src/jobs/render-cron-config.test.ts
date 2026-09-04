@@ -30,7 +30,7 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
   );
   assert.match(
     classification,
-    /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "600"/
+    /key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS\s+value: "400"/
   );
   assert.match(
     classification,
