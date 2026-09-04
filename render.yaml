@@ -440,6 +440,10 @@ services:
         value: "120000"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
+      # Up to three provider batches in flight; a single slow Anthropic batch
+      # (2-3 hours observed) otherwise skips every following hourly submit.
+      - key: ANTHROPIC_BATCH_MAX_ACTIVE
+        value: "3"
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
         value: narrative_classification_v7
       # Matches NARRATIVE_TREND_LOOKBACK_DAYS so trend baselines can accumulate a
@@ -488,6 +492,8 @@ services:
         value: "120000"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
+      - key: ANTHROPIC_BATCH_MAX_ACTIVE
+        value: "3"
       - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
         value: narrative_discovery_v1
       - key: NARRATIVE_DISCOVERY_BATCH_SIZE

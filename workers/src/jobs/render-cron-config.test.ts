@@ -24,6 +24,7 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
     classification,
     /key: ANTHROPIC_PROMPT_CACHING\s+value: "true"/
   );
+  assert.match(classification, /key: ANTHROPIC_BATCH_MAX_ACTIVE\s+value: "3"/);
   assert.match(
     classification,
     /key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION\s+value: narrative_classification_v7/
@@ -49,6 +50,7 @@ test("runs narrative classification and discovery as dedicated hourly crons", ()
   );
   assert.match(discovery, /key: ANTHROPIC_API_KEY/);
   assert.match(discovery, /key: ANTHROPIC_PROMPT_CACHING\s+value: "true"/);
+  assert.match(discovery, /key: ANTHROPIC_BATCH_MAX_ACTIVE\s+value: "3"/);
   assert.match(discovery, /key: NARRATIVE_DISCOVERY_PROMPT_VERSION/);
   assert.match(
     discovery,

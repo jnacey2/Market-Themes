@@ -164,6 +164,29 @@ export async function getActiveAnthropicMessageBatch(
   }
 }
 
+export async function listActiveAnthropicMessageBatches(
+  workload: string,
+  databaseUrl = process.env.DATABASE_URL
+) {
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<BatchRow>(
+      `select ${batchSelectColumns}
+       from anthropic_message_batches
+       where workload = $1
+         and status = any($2::text[])
+       order by created_at`,
+      [workload, activeStatuses]
+    );
+    const records = [];
+    for (const row of result.rows) records.push(await loadBatchRecord(client, row));
+    return records;
+  } finally {
+    await client.end();
+  }
+}
+
 export async function getAnthropicMessageBatch(
   id: string,
   databaseUrl = process.env.DATABASE_URL
