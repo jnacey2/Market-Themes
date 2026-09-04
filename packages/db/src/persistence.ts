@@ -148,7 +148,7 @@ type SignalTrendInput = {
   scoreContribution: number;
 };
 
-type DailyTrendBucket = {
+export type DailyTrendBucket = {
   date: string;
   baseIntensity: number;
   intensity: number;
@@ -1756,18 +1756,24 @@ export async function recomputeThemeTrends(
     await client.query("begin");
     await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
 
+    const seriesStartDate = storageStartDate < startDate ? storageStartDate : startDate;
+    const allDates = enumerateDates(seriesStartDate, asOfDate);
+    const storageDates = enumerateDates(storageStartDate, asOfDate);
+    const firstStorageIndex = allDates.indexOf(storageDates[0]);
+    const baselineStartIndex = allDates.indexOf(startDate);
     for (const theme of themes.values()) {
       const themeTrendRows: TrendRowInput[] = [];
-      for (const date of enumerateDates(storageStartDate, asOfDate)) {
+      const series = buildThemeTrendSeries(theme.buckets, allDates);
+      for (const [offset, date] of storageDates.entries()) {
         for (const trendWindow of windows) {
           const windowDays = trendWindowDays(trendWindow);
-          const score = scoreTrendWindow(
-            theme.buckets,
-            date,
+          const score = scoreTrendWindowAt(
+            series,
+            firstStorageIndex + offset,
             windowDays,
             lowHistoryDays,
             theme.trendLevel,
-            startDate
+            baselineStartIndex
           );
 
           if (score.lowHistory) {
@@ -2552,7 +2558,7 @@ function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, end
   return themes;
 }
 
-function scoreTrendWindow(
+export function scoreTrendWindow(
   buckets: Map<string, DailyTrendBucket>,
   date: string,
   windowDays: number,
@@ -2654,6 +2660,109 @@ function summarizeBuckets(buckets: DailyTrendBucket[]) {
     sourceMix,
     sourceDiversity: sourceClasses.size,
     entityBreadth: entities.size
+  };
+}
+
+/**
+ * Per-theme series over the full lookback, built once so every (date, window) score is
+ * O(window) for the current summary and O(baseline) for the statistics, instead of
+ * re-enumerating dates and re-summarizing every rolling baseline position. Produces the
+ * same numbers as scoreTrendWindow; see the equivalence test.
+ */
+export type ThemeTrendSeries = {
+  dates: string[];
+  buckets: Array<DailyTrendBucket | undefined>;
+  /** prefix[i] = sum of bucket intensity for dates[0..i-1]; prefix[0] = 0. */
+  prefix: Float64Array;
+};
+
+export function buildThemeTrendSeries(
+  buckets: Map<string, DailyTrendBucket>,
+  dates: string[]
+): ThemeTrendSeries {
+  const series: Array<DailyTrendBucket | undefined> = new Array(dates.length);
+  const prefix = new Float64Array(dates.length + 1);
+  for (let index = 0; index < dates.length; index += 1) {
+    const bucket = buckets.get(dates[index]);
+    series[index] = bucket;
+    prefix[index + 1] = prefix[index] + (bucket?.intensity ?? 0);
+  }
+  return { dates, buckets: series, prefix };
+}
+
+export function scoreTrendWindowAt(
+  series: ThemeTrendSeries,
+  dateIndex: number,
+  windowDays: number,
+  lowHistoryDays: number,
+  trendLevel: "market" | "sector" | "unmapped",
+  /** Index in series.dates where baseline history begins (the lookback start). */
+  baselineStartIndex = 0
+): ReturnType<typeof scoreTrendWindow> {
+  const windowStart = dateIndex - windowDays + 1;
+  const currentBuckets: DailyTrendBucket[] = [];
+  for (let index = Math.max(windowStart, 0); index <= dateIndex; index += 1) {
+    const bucket = series.buckets[index];
+    if (bucket) currentBuckets.push(bucket);
+  }
+  const currentSummary = summarizeBuckets(currentBuckets);
+
+  // Baseline covers dates[0 .. windowStart-1]; its rolling window totals are prefix
+  // differences. Mirrors rollingWindowTotals: fewer than windowDays baseline days
+  // collapse to a single total of everything available.
+  const baselineDays = Math.max(windowStart - baselineStartIndex, 0);
+  const baselineValues: number[] = [];
+  if (baselineDays > 0 && baselineDays < windowDays) {
+    baselineValues.push(
+      series.prefix[baselineStartIndex + baselineDays] - series.prefix[baselineStartIndex]
+    );
+  } else if (baselineDays >= windowDays) {
+    for (let end = windowDays; end <= baselineDays; end += 1) {
+      const stop = baselineStartIndex + end;
+      baselineValues.push(series.prefix[stop] - series.prefix[stop - windowDays]);
+    }
+  }
+
+  const baselineMean = average(baselineValues);
+  const rawStddev = standardDeviation(baselineValues, baselineMean);
+  const baselineStddev = Math.max(rawStddev, 1);
+  const zScore = (currentSummary.intensity - baselineMean) / baselineStddev;
+  const lowHistory = baselineValues.length < lowHistoryDays;
+  const percentileRank =
+    baselineValues.length === 0
+      ? 0
+      : Math.round(
+          (baselineValues.filter((value) => value <= currentSummary.intensity).length /
+            baselineValues.length) *
+            100
+        );
+  const candidate =
+    !lowHistory &&
+    zScore >= 1.8 &&
+    percentileRank >= 90 &&
+    currentSummary.evidenceCount >= 2 &&
+    hasMarketBreadth(currentSummary, trendLevel) &&
+    currentSummary.sourceDiversity >= 1;
+
+  return {
+    intensity: roundMetric(currentSummary.intensity),
+    baselineMean: roundMetric(baselineMean),
+    baselineStddev: roundMetric(baselineStddev),
+    zScore: roundMetric(zScore),
+    percentileRank,
+    lowHistory,
+    sourceMix: {
+      sources: currentSummary.sourceMix,
+      trendLevel,
+      evidenceCount: currentSummary.evidenceCount,
+      documentBreadth: currentSummary.documentBreadth,
+      sourceDiversity: currentSummary.sourceDiversity,
+      entityBreadth: currentSummary.entityBreadth,
+      baseIntensity: roundMetric(currentSummary.baseIntensity),
+      lowHistory,
+      baselineDays: baselineValues.length,
+      candidate
+    }
   };
 }
 
