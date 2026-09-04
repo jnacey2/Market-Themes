@@ -454,7 +454,10 @@ history the trend baselines can ever see.
 
 Scheduled extraction, classification, and discovery use Anthropic Message
 Batches, which discount input and output tokens by 50%. Hourly submit crons
-create the next bounded batch only when that workload has no active batch, while
+create the next bounded batch only while that workload has fewer than
+`ANTHROPIC_BATCH_MAX_ACTIVE` batches in flight (default 1; production runs
+classification and discovery at 3 because a single provider batch has taken two
+to three hours and would otherwise skip every following hour), while
 `poll-anthropic-batches` reconciles provider state and applies results every ten
 minutes.
 Provider IDs, custom-ID mappings, item outcomes, and usage are stored in
@@ -572,6 +575,8 @@ DB_SSL_CA=
 ANTHROPIC_API_KEY=sk-ant-api03-example
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ANTHROPIC_PROMPT_CACHING=true
+# In-flight Message Batches allowed per workload before the hourly submit skips.
+ANTHROPIC_BATCH_MAX_ACTIVE=1
 ANTHROPIC_BATCH_MAX_BYTES=251658240
 ANTHROPIC_BATCH_RETENTION_DAYS=35
 NARRATIVE_PROMOTION_VALIDATION_MODEL=claude-haiku-4-5-20251001

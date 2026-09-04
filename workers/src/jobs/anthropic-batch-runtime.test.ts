@@ -10,7 +10,9 @@ import type { AnthropicMessageBatchRecord } from "@market-themes/db";
 import {
   anthropicBatchCustomId,
   assertAnthropicBatchRequestLimits,
+  mergeBatchSummaries,
   reconcileActiveAnthropicBatch,
+  resolveMaxActiveBatches,
   submitPersistedAnthropicBatch
 } from "./anthropic-batch-runtime";
 
@@ -246,6 +248,79 @@ test("waits through the provider window before abandoning unknown submissions", 
   });
   assert.equal(stale.status, "failed");
   assert.deepEqual(staleEvents, ["abandon", "finish:failed"]);
+});
+
+test("a workload below its in-flight limit reports capacity while a slow batch is still processing", async () => {
+  const events: string[] = [];
+  const slow = batchRecord({ id: "slow", providerBatchId: "batch-slow", status: "in_progress" });
+  const store = { ...fakeStore(events), listActive: async () => [slow] };
+  const api: AnthropicBatchApi = {
+    create: async () => providerBatch("in_progress"),
+    retrieve: async () => ({ ...providerBatch("in_progress"), id: "batch-slow" }),
+    results: async () => asyncIterable([])
+  };
+  const options = {
+    workload: "classification",
+    api,
+    processResults: async () => ({}),
+    abandon: async () => undefined,
+    store
+  };
+
+  const single = await reconcileActiveAnthropicBatch({ ...options, maxActive: 1 });
+  assert.equal(single.status, "in_progress", "at the limit the caller must wait");
+  assert.equal(single.activeBatches, 1);
+
+  const concurrent = await reconcileActiveAnthropicBatch({ ...options, maxActive: 3 });
+  assert.equal(concurrent.status, "none", "below the limit the caller may submit another batch");
+  assert.equal(concurrent.activeBatches, 1);
+});
+
+test("reconciling several active batches applies every completed one and merges summaries", async () => {
+  const events: string[] = [];
+  const done1 = batchRecord({ id: "done-1", providerBatchId: "ended-1", items: [batchItem("a")] });
+  const done2 = batchRecord({ id: "done-2", providerBatchId: "ended-2", items: [batchItem("b")] });
+  const busy = batchRecord({ id: "busy", providerBatchId: "busy-1", status: "in_progress" });
+  const store = { ...fakeStore(events), listActive: async () => [done1, done2, busy] };
+  const api: AnthropicBatchApi = {
+    create: async () => providerBatch("ended"),
+    retrieve: async (id: string) => ({
+      ...providerBatch(id.startsWith("ended") ? "ended" : "in_progress"),
+      id
+    }),
+    results: async (id: string) =>
+      asyncIterable([{ ...canceledResult, custom_id: id === "ended-1" ? "a" : "b" }])
+  };
+  const result = await reconcileActiveAnthropicBatch({
+    workload: "classification",
+    api,
+    processResults: async (batch) => {
+      events.push(`processed:${batch.id}`);
+      return { documentsProcessed: 1, tokenUsage: { inputTokens: 10 } };
+    },
+    abandon: async () => undefined,
+    store,
+    maxActive: 3
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.activeBatches, 1);
+  assert.deepEqual(result.summary, { documentsProcessed: 2, tokenUsage: { inputTokens: 20 } });
+  assert.deepEqual(
+    events.filter((event) => event.startsWith("processed:")),
+    ["processed:done-1", "processed:done-2"]
+  );
+});
+
+test("max active batches defaults to one and parses the environment", () => {
+  assert.equal(resolveMaxActiveBatches(undefined), 1);
+  assert.equal(resolveMaxActiveBatches("3"), 3);
+  assert.equal(resolveMaxActiveBatches("0"), 1);
+  assert.equal(resolveMaxActiveBatches("abc"), 1);
+  assert.deepEqual(
+    mergeBatchSummaries([{ a: 1, label: "x", nested: { b: 2 } }, { a: 2, label: "y", nested: { b: 3, c: 1 } }]),
+    { a: 3, label: "y", nested: { b: 5, c: 1 } }
+  );
 });
 
 function fakeApi(
