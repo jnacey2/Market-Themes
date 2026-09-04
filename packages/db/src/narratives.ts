@@ -2023,13 +2023,28 @@ async function loadNarrativeBoard(options: {
     }
     const evidenceVersions = resolveCompatibleClassificationPromptVersions(promptVersion);
     const evidenceVersionSql = observationVersionSql(evidenceVersions, "$2", "$3");
+    // With a single prompt version the unique key (definition, document, model,
+    // version) already yields one observation per document, so "latest" is the row
+    // itself and the approved filter can be applied first: the partial review-queue
+    // index returns the few approved rows instead of scanning every observation for
+    // the tracked definitions (125k+ rows and growing ~12k/hour). Only when compatible
+    // versions are configured must the newest row be resolved before filtering.
+    const latestObservationsCte =
+      evidenceVersions.length === 1
+        ? `select *
+           from narrative_observations
+           where narrative_definition_id = any($1::text[])
+             and ${evidenceVersionSql.predicate}
+             and matched
+             and review_status = 'approved'`
+        : `select distinct on (narrative_definition_id, document_id) *
+           from narrative_observations
+           where narrative_definition_id = any($1::text[])
+             and ${evidenceVersionSql.predicate}
+           order by narrative_definition_id, document_id, ${evidenceVersionSql.order}`;
     const evidence = await client.query<NarrativeHomepageEvidenceRow>(
       `with latest_observations as (
-         select distinct on (narrative_definition_id, document_id) *
-         from narrative_observations
-         where narrative_definition_id = any($1::text[])
-           and ${evidenceVersionSql.predicate}
-         order by narrative_definition_id, document_id, ${evidenceVersionSql.order}
+         ${latestObservationsCte}
        ),
        evidence_with_story as (
          select no.id, no.narrative_definition_id, d.title, d.publisher,

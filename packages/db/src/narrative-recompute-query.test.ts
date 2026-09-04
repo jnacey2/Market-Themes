@@ -71,3 +71,13 @@ test("compatible prompt versions always lead with the current version and dedupe
     ["v7", "v6", "v5"]
   );
 });
+
+test("board evidence filters approved rows first when a single prompt version is in use", () => {
+  const board = narratives.slice(
+    narratives.indexOf("const latestObservationsCte ="),
+    narratives.indexOf("evidence_with_story as (", narratives.indexOf("const latestObservationsCte ="))
+  );
+  assert.match(board, /evidenceVersions\.length === 1/);
+  assert.match(board, /and matched\s+and review_status = 'approved'/, "fast path filters on the partial review-queue index");
+  assert.match(board, /select distinct on \(narrative_definition_id, document_id\) \*/, "multi-version path still resolves the latest row first");
+});
