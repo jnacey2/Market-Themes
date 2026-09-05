@@ -1,18 +1,12 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import {
   getThemeDetailStatus,
   getNarrativeDetailStatus,
-  type NarrativeTrendSummary,
   type ThemeDetailStatus,
   type ThemeTrendPoint,
   type TrendSummary
 } from "@market-themes/db";
-import {
-  LifecycleBadge,
-  peakSummary
-} from "../../../components/narratives/LifecycleBadge";
-import { NarrativeExplorer } from "../../../components/narratives/NarrativeExplorer";
+import { isNarrativeDefinitionId, narrativeDataPath } from "../../../lib/narrative-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +18,15 @@ type ThemePageProps = {
 
 export default async function ThemeDetailPage({ params }: ThemePageProps) {
   const { themeId } = await params;
-  const narrative = await getNarrativeDetailStatus(decodeURIComponent(themeId));
+  const decodedId = decodeURIComponent(themeId);
 
-  if (narrative) {
-    return <NarrativeDetailPage narrative={narrative} />;
+  // Narrative definitions used to render here under their raw id. They now have
+  // slug routes; keep the old links working.
+  if (isNarrativeDefinitionId(decodedId)) {
+    const narrative = await getNarrativeDetailStatus(decodedId);
+    if (narrative) {
+      permanentRedirect(narrativeDataPath(narrative.slug));
+    }
   }
 
   const detail = await getThemeDetailStatus(decodeURIComponent(themeId));
@@ -144,144 +143,6 @@ export default async function ThemeDetailPage({ params }: ThemePageProps) {
         </div>
       </section>
     </div>
-  );
-}
-
-function NarrativeDetailPage({ narrative }: { narrative: NarrativeTrendSummary }) {
-  return (
-    <div className="shell wide-shell">
-      <section className="hero narrative-detail-hero">
-        <div>
-          <p className="eyebrow">
-            {narrative.category} · {narrative.kind ?? "structural"} · Version{" "}
-            {narrative.version}
-          </p>
-          <h1>{narrative.name}</h1>
-          {narrative.eventLabel ? <p className="label">{narrative.eventLabel}</p> : null}
-          <p className="lede">{narrative.proposition}</p>
-          <div className="pill-row">
-            <LifecycleBadge state={narrative.lifecycleState} />
-            {narrative.status === "probationary" ? (
-              <span className="pill">probationary</span>
-            ) : null}
-            {narrative.parentName ? (
-              <span className="pill">
-                {narrative.parentName} · {narrative.dimension}
-              </span>
-            ) : null}
-            <span className="pill">
-              {narrative.coverageStatus === "no_corpus"
-                ? "No recent corpus"
-                : narrative.coverageStatus === "backfill_pending"
-                  ? "Classification pending"
-                  : narrative.coverageStatus === "measured_zero"
-                    ? "Measured zero"
-                    : narrative.lowHistory
-                      ? `${narrative.percentileRank}th percentile (provisional)`
-                      : `${narrative.percentileRank}th percentile`}
-            </span>
-            {narrative.coverageStatus === "measured" ||
-            narrative.coverageStatus === "measured_zero" ? (
-              <>
-                <span className="pill">
-                  z {narrative.zScore.toFixed(1)}
-                  {narrative.lowHistory ? " (provisional)" : ""}
-                </span>
-                <span className="pill">attention z {narrative.attentionZScore.toFixed(1)}</span>
-              </>
-            ) : null}
-            {peakSummary(narrative) ? (
-              <span className="pill">{peakSummary(narrative)}</span>
-            ) : null}
-            <span className="pill">{narrative.publisherOwnerBreadth} publisher groups</span>
-            <span className="pill">{narrative.storyBreadth} unique stories</span>
-            {narrative.eventExpiresAt ? (
-              <span className="pill">
-                event expires {formatNarrativeDate(narrative.eventExpiresAt)}
-              </span>
-            ) : null}
-          </div>
-          <div className="button-row">
-            <Link className="button" href={`/storyboards/${encodeURIComponent(narrative.slug)}`}>
-              Open live storyboard
-            </Link>
-          </div>
-        </div>
-        <div className="panel">
-          <p className="eyebrow">Current signal</p>
-          <div className="metric-row">
-            <Metric
-              label="Density"
-              value={
-                narrative.coverageStatus === "measured" ||
-                narrative.coverageStatus === "measured_zero"
-                  ? narrative.density.toFixed(1)
-                  : "—"
-              }
-            />
-            <Metric
-              label="7d change"
-              value={
-                narrative.coverageStatus === "measured" ||
-                narrative.coverageStatus === "measured_zero"
-                  ? signedMetric(narrative.change)
-                  : "—"
-              }
-            />
-            <Metric
-              label="Raw attention"
-              value={
-                narrative.coverageStatus === "measured" ||
-                narrative.coverageStatus === "measured_zero"
-                  ? narrative.attentionDensity.toFixed(1)
-                  : "—"
-              }
-            />
-            <Metric
-              label="Coverage"
-              value={`${narrative.classificationCoveragePercent}%`}
-            />
-          </div>
-          <p>
-            {narrative.matchedDocuments} approved documents represent{" "}
-            {narrative.storyBreadth} unique stories from{" "}
-            {narrative.publisherOwnerBreadth} publisher groups;{" "}
-            {narrative.attentionMatchedDocuments} documents matched the classifier
-            before review. {narrative.eligibleDocuments} of {narrative.corpusDocuments}{" "}
-            readable documents are classified; coverage is {narrative.coverageStatus}.
-            {narrative.peakDate
-              ? ` 90-day peak density ${narrative.peakDensity.toFixed(1)} on ${narrative.peakDate}.`
-              : ""}
-          </p>
-        </div>
-      </section>
-
-      <section className="panel">
-        <p className="eyebrow">Density vs historical baseline</p>
-        <NarrativeExplorer narrative={narrative} />
-      </section>
-
-      <section className="section grid two">
-        <div className="panel">
-          <p className="eyebrow">Included framing</p>
-          <p>{narrative.inclusionGuidance}</p>
-        </div>
-        <div className="panel">
-          <p className="eyebrow">Excluded framing</p>
-          <p>{narrative.exclusionGuidance}</p>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function signedMetric(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
-}
-
-function formatNarrativeDate(value: string) {
-  return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(
-    new Date(value)
   );
 }
 

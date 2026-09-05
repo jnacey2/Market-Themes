@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { AttentionBurstWatchlist } from "@market-themes/db";
+import { formatMeasurementDate, METRIC_GLOSSARY } from "../../lib/metric-glossary";
 
 const KIND_LABELS = {
   title_ngram: "headline phrase",
@@ -28,12 +29,14 @@ export function AttentionWatchlist({
     <div className="panel">
       <p className="eyebrow">
         {title}
-        {watchlist.date ? ` · ${watchlist.date}` : ""}
+        {watchlist.date ? ` · ${formatMeasurementDate(watchlist.date)}` : ""}
       </p>
-      <p className="lane-empty">
-        Terms that several independent publisher groups started covering this week,
-        measured across the whole corpus without a model. {watchlist.uncoveredCount} are
-        not mentioned by any tracked narrative.
+      <p className="lane-empty" title={METRIC_GLOSSARY.corpusBurst.description}>
+        Phrases, entities and extracted themes that several independent publisher groups
+        started covering this week, counted across the whole corpus without a model.
+        {watchlist.uncoveredCount > 0
+          ? ` ${watchlist.uncoveredCount} ${watchlist.uncoveredCount === 1 ? "is" : "are"} gaining coverage that no tracked narrative explains; these are the gaps in the board.`
+          : " Every burst is explained by a tracked narrative."}
       </p>
       {!watchlist.databaseConfigured ? (
         <p className="lane-empty">Narrative database is unavailable.</p>
@@ -48,8 +51,15 @@ export function AttentionWatchlist({
           {bursts.map((burst) => (
             <article className="change-row" key={burst.id}>
               <div>
-                <span className="change-kind">
-                  {burst.novel ? "New this week" : `z ${burst.zScore.toFixed(1)}`}
+                <span
+                  className="change-kind"
+                  title={
+                    burst.novel
+                      ? "No mentions in the prior twelve weeks."
+                      : `${burst.zScore.toFixed(1)} standard deviations above its own twelve-week weekly story count.`
+                  }
+                >
+                  {burst.novel ? "New this week" : `z ${burst.zScore.toFixed(1)} vs 12-week norm`}
                 </span>
                 <p className="change-detail">{KIND_LABELS[burst.kind]}</p>
               </div>
@@ -78,7 +88,12 @@ export function AttentionWatchlist({
               </div>
               <div className="score-stack">
                 <div className="score">
-                  <span className="label">Score</span>
+                  <span
+                    className="label"
+                    title="Burst strength: unusualness weighted by how many independent publisher groups are covering it. Higher ranks higher; the scale is relative to this scan."
+                  >
+                    Burst score
+                  </span>
                   <strong>{burst.score.toFixed(1)}</strong>
                 </div>
               </div>

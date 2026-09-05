@@ -18,7 +18,7 @@ export const NAVIGATION_GROUPS: NavigationGroup[] = [
       {
         href: "/trends",
         label: "Narrative Currents",
-        activePrefixes: ["/themes/", "/storyboards/"]
+        activePrefixes: ["/narratives/", "/themes/", "/storyboards/", "/how-to-read"]
       },
       { href: "/changes", label: "What Changed" }
     ]

@@ -6,9 +6,13 @@ import {
   type NarrativeHomepageStatus
 } from "@market-themes/db";
 import {
+  hasThinEvidence,
   LifecycleBadge,
-  peakSummary
+  peakSummary,
+  ThinEvidencePill
 } from "../components/narratives/LifecycleBadge";
+import { HowToReadLink, MetricTerm } from "../components/narratives/MetricTerm";
+import { formatMeasurementDate, METRIC_GLOSSARY } from "../lib/metric-glossary";
 
 export const dynamic = "force-dynamic";
 
@@ -32,11 +36,14 @@ const LANE_COPY: Record<
     empty: "No narrative is currently fading."
   },
   emerging: {
-    title: "New and emerging",
-    description: "Probationary, recently activated, or measured with a thin baseline.",
+    title: "New and probationary",
+    description:
+      "Recently promoted or activated definitions, and measured narratives whose history is still too short to compare against. Not a lifecycle state.",
     empty: "No new or probationary narratives are measured yet."
   }
 };
+
+const MOTION_LANES: NarrativeHomepageLane[] = ["rising", "peaking", "fading"];
 
 export default async function HomePage() {
   const dashboard = await getNarrativeHomepageStatus();
@@ -48,10 +55,11 @@ export default async function HomePage() {
   const summaryUnavailable =
     !dashboard.databaseConfigured ||
     (dashboard.degraded && dashboard.narratives.length === 0);
-  const laneCount = (Object.keys(LANE_COPY) as NarrativeHomepageLane[]).reduce(
+  const motionCount = MOTION_LANES.reduce(
     (total, lane) => total + dashboard.lanes[lane].length,
     0
   );
+  const latestMeasurement = formatMeasurementDate(dashboard.latestDate);
 
   return (
     <div className="shell">
@@ -61,6 +69,7 @@ export default async function HomePage() {
         <a href="#narratives">Most surprising</a>
         <a href="#brief">Daily Brief</a>
         <a href="#copilot">Copilot</a>
+        <HowToReadLink>How to read</HowToReadLink>
       </nav>
 
       <section className="hero">
@@ -79,15 +88,18 @@ export default async function HomePage() {
             {leadNarrative?.name ??
               (!dashboard.databaseConfigured
                 ? "Narrative database is unavailable"
-                : dashboard.degraded
+                : summaryUnavailable
                   ? "Narrative summary is delayed"
                   : "Awaiting a published 7-day signal")}
           </h2>
           {leadNarrative ? (
             <div className="pill-row">
               <LifecycleBadge state={leadNarrative.lifecycleState} />
+              {hasThinEvidence(leadNarrative) ? <ThinEvidencePill /> : null}
               {peakSummary(leadNarrative) ? (
-                <span className="pill">{peakSummary(leadNarrative)}</span>
+                <span className="pill" title={METRIC_GLOSSARY.peak.description}>
+                  {peakSummary(leadNarrative)}
+                </span>
               ) : null}
             </div>
           ) : null}
@@ -96,23 +108,29 @@ export default async function HomePage() {
               ? leadNarrative.proposition
               : !dashboard.databaseConfigured
                 ? "Connect the research database to load reviewed narratives."
-                : dashboard.degraded
+                : summaryUnavailable
                   ? "The lightweight narrative summary could not finish. Open Narrative Currents for the full live board."
                   : "Reviewed evidence may exist historically or await the next narrative trend publication."}
           </p>
           <div className="metric-row">
             <div className="metric">
-              <span>Attention z</span>
+              <span>
+                <MetricTerm term="attentionZScore" short />
+              </span>
               <strong>
                 {leadNarrative ? leadNarrative.attentionZScore.toFixed(1) : "—"}
               </strong>
             </div>
             <div className="metric">
-              <span>7d change</span>
+              <span>
+                <MetricTerm term="change" short />
+              </span>
               <strong>{leadNarrative ? signed(leadNarrative.change) : "—"}</strong>
             </div>
             <div className="metric">
-              <span>Unique stories</span>
+              <span>
+                <MetricTerm term="uniqueStories" />
+              </span>
               <strong>{leadNarrative?.storyBreadth ?? "—"}</strong>
             </div>
           </div>
@@ -127,24 +145,25 @@ export default async function HomePage() {
         </div>
         <div className="panel">
           <span className="label">In motion</span>
-          <h2>{summaryUnavailable ? "Unavailable" : `${laneCount} narratives`}</h2>
+          <h2>{summaryUnavailable ? "Unavailable" : `${motionCount} narratives`}</h2>
           <p>
-            Rising, peaking, fading, or emerging as of the latest measurement.{" "}
+            Rising, peaking, or fading as of the latest measurement.{" "}
             <Link href="/changes">See what changed</Link>.
           </p>
         </div>
         <div className="panel">
           <span className="label">Latest measurement</span>
           <h2>
-            {dashboard.latestDate ??
-              (dashboard.degraded ? "Temporarily unavailable" : "None yet")}
+            {latestMeasurement ??
+              (summaryUnavailable ? "Temporarily unavailable" : "None yet")}
           </h2>
           <p>
             {!dashboard.databaseConfigured
               ? "Connect the research database to measure current narratives."
-              : dashboard.degraded
-                ? "Some live summary data is temporarily unavailable; displayed zeroes should not be treated as measurements."
-                : "Reviewed density uses approved evidence only. Attention z-scores also count pending classifier matches."}
+              : summaryUnavailable
+                ? "The live summary query did not finish; nothing on this page is a measurement until it recovers."
+                : "Seven-day window ending on this UTC day. Reviewed density uses approved evidence only; attention z-scores also count pending classifier matches."}{" "}
+            <HowToReadLink>How to read these numbers</HowToReadLink>
           </p>
         </div>
       </section>
@@ -165,18 +184,24 @@ export default async function HomePage() {
 
       <section className="section" id="narratives">
         <p className="eyebrow">Most surprising versus own history</p>
+        {dashboard.degraded && !summaryUnavailable ? (
+          <p className="lane-empty">
+            Evidence previews are temporarily unavailable; the measurements below are
+            current.
+          </p>
+        ) : null}
         <div className="grid">
           {dashboard.narratives.length === 0 ? (
             <div className="panel">
               <h2>
-                {dashboard.degraded
+                {summaryUnavailable && dashboard.databaseConfigured
                   ? "Live narrative cards are delayed"
                   : !dashboard.databaseConfigured
                     ? "Narrative database is unavailable"
                     : "No measured 7-day narrative signals yet"}
               </h2>
               <p>
-                {dashboard.degraded
+                {summaryUnavailable && dashboard.databaseConfigured
                   ? "Open Narrative Currents for the complete live board."
                   : !dashboard.databaseConfigured
                     ? "Connect DATABASE_URL to load the live narrative board."
@@ -227,43 +252,53 @@ function Lane({
   unavailable: boolean;
 }) {
   const copy = LANE_COPY[lane];
+  const empty = !unavailable && items.length === 0;
   return (
-    <div className="lane" aria-label={`${copy.title} narratives`}>
+    <div className={`lane${empty ? " is-empty" : ""}`} aria-label={`${copy.title} narratives`}>
       <div className="lane-header">
         <h2>{copy.title}</h2>
         <small>{items.length}</small>
       </div>
-      <p className="lane-empty">{copy.description}</p>
       {unavailable ? (
         <p className="lane-empty">Unavailable.</p>
-      ) : items.length === 0 ? (
+      ) : empty ? (
         <p className="lane-empty">{copy.empty}</p>
       ) : (
-        items.map((item) => (
-          <Link
-            className="lane-item"
-            href={`/storyboards/${encodeURIComponent(item.slug)}`}
-            key={item.id}
-          >
-            <div className="pill-row">
-              <LifecycleBadge compact state={item.lifecycleState} />
-              {item.status === "probationary" ? (
-                <span className="pill">probationary</span>
-              ) : null}
-            </div>
-            <strong>{item.name}</strong>
-            <span>
-              {lane === "fading"
-                ? `${peakSummary(item) ?? "—"} · ${signed(item.change)} vs prior week`
-                : lane === "emerging"
-                  ? `${item.attentionMatchedDocuments} classifier matches · ${item.matchedDocuments} reviewed · ${item.publisherOwnerBreadth} publisher groups`
-                  : `attention z ${item.attentionZScore.toFixed(1)} · ${signed(item.change)} vs prior week · ${item.storyBreadth} stories`}
-            </span>
-          </Link>
-        ))
+        <>
+          <p className="lane-empty">{copy.description}</p>
+          {items.map((item) => (
+            <Link
+              className="lane-item"
+              href={`/narratives/${encodeURIComponent(item.slug)}`}
+              key={item.id}
+            >
+              <div className="pill-row">
+                <LifecycleBadge compact state={item.lifecycleState} />
+                {item.status === "probationary" ? (
+                  <span className="pill" title={METRIC_GLOSSARY.probationary.description}>
+                    probationary
+                  </span>
+                ) : null}
+                {hasThinEvidence(item) ? <ThinEvidencePill compact /> : null}
+              </div>
+              <strong>{item.name}</strong>
+              <span>{laneCaption(lane, item)}</span>
+            </Link>
+          ))}
+        </>
       )}
     </div>
   );
+}
+
+function laneCaption(lane: NarrativeHomepageLane, item: NarrativeHomepageItem) {
+  if (lane === "fading") {
+    return `${peakSummary(item) ?? "—"} · ${signed(item.change)} vs prior week`;
+  }
+  if (lane === "emerging") {
+    return `${item.attentionMatchedDocuments} classifier matches · ${item.matchedDocuments} reviewed · ${item.publisherOwnerBreadth} publisher groups`;
+  }
+  return `attention z ${item.attentionZScore.toFixed(1)} · ${signed(item.change)} vs prior week · ${item.storyBreadth} ${item.storyBreadth === 1 ? "story" : "stories"} from ${item.publisherOwnerBreadth} ${item.publisherOwnerBreadth === 1 ? "publisher group" : "publisher groups"}`;
 }
 
 function BriefPanel({
@@ -277,7 +312,7 @@ function BriefPanel({
   return (
     <div className="panel brief" id="brief">
       <p className="eyebrow">
-        Daily Brief{brief ? ` · ${brief.date}` : ""}
+        Daily Brief{brief ? ` · ${formatMeasurementDate(brief.date)}` : ""}
       </p>
       {unavailable ? (
         <>
@@ -335,13 +370,26 @@ function NarrativeCard({
           <span className="pill">{narrative.category}</span>
           <span className="pill">{narrative.kind ?? "structural"}</span>
           {narrative.status === "probationary" ? (
-            <span className="pill">probationary</span>
+            <span className="pill" title={METRIC_GLOSSARY.probationary.description}>
+              probationary
+            </span>
           ) : null}
-          <span className="pill">{narrative.storyBreadth} unique stories</span>
-          <span className="pill">{narrative.publisherOwnerBreadth} publisher groups</span>
-          {peak ? <span className="pill">{peak}</span> : null}
+          <span className="pill" title={METRIC_GLOSSARY.uniqueStories.description}>
+            {narrative.storyBreadth} unique stories
+          </span>
+          <span className="pill" title={METRIC_GLOSSARY.publisherGroups.description}>
+            {narrative.publisherOwnerBreadth} publisher groups
+          </span>
+          {peak ? (
+            <span className="pill" title={METRIC_GLOSSARY.peak.description}>
+              {peak}
+            </span>
+          ) : null}
+          {hasThinEvidence(narrative) ? <ThinEvidencePill /> : null}
           {narrative.lowHistory ? (
-            <span className="pill warning-pill">thin baseline</span>
+            <span className="pill warning-pill" title={METRIC_GLOSSARY.thinBaseline.description}>
+              thin baseline
+            </span>
           ) : null}
         </div>
         <h2>{narrative.name}</h2>
@@ -376,7 +424,7 @@ function NarrativeCard({
             </Link>
             <Link
               className="pill"
-              href={`/storyboards/${encodeURIComponent(narrative.slug)}`}
+              href={`/narratives/${encodeURIComponent(narrative.slug)}`}
             >
               Open live storyboard
             </Link>
@@ -385,20 +433,26 @@ function NarrativeCard({
       </div>
       <div className="score-stack">
         <div className="score">
-          <span className="label">Attention z</span>
+          <span className="label">
+            <MetricTerm term="attentionZScore" short />
+          </span>
           <strong>{narrative.attentionZScore.toFixed(1)}</strong>
         </div>
         <div className="score">
-          <span className="label">7d change</span>
+          <span className="label">
+            <MetricTerm term="change" short />
+          </span>
           <strong className={narrative.change >= 0 ? "rising" : "fading"}>
             {signed(narrative.change)}
           </strong>
         </div>
         <div className="score">
-          <span className="label">Reviewed density</span>
+          <span className="label">
+            <MetricTerm term="density" />
+          </span>
           <strong>{narrative.density.toFixed(1)}</strong>
         </div>
-        <Link className="pill" href={`/themes/${encodeURIComponent(narrative.id)}`}>
+        <Link className="pill" href={`/narratives/${encodeURIComponent(narrative.slug)}/detail`}>
           Details
         </Link>
       </div>
@@ -407,9 +461,17 @@ function NarrativeCard({
 }
 
 function narrativeSummary(narrative: NarrativeHomepageItem) {
+  if (narrative.density <= 0) {
+    return [
+      `No approved evidence this week; raw attention density is ${narrative.attentionDensity.toFixed(1)}% across ${narrative.attentionMatchedDocuments} classifier matches awaiting review.`,
+      narrative.lowHistory
+        ? `The baseline has ${narrative.baselineWindows} comparison windows so far; z-scores are provisional.`
+        : `Reviewed z-score ${narrative.zScore.toFixed(1)}, ${narrative.percentileRank}th percentile of its own history.`
+    ].join(" ");
+  }
   return [
     `Reviewed seven-day density is ${narrative.density.toFixed(1)}% (${signed(narrative.change)} vs the prior window); raw attention density is ${narrative.attentionDensity.toFixed(1)}% across ${narrative.attentionMatchedDocuments} classifier matches.`,
-    `${narrative.storyBreadth} unique stories span ${narrative.publisherOwnerBreadth} publisher groups and ${narrative.sourceClassBreadth} source classes.`,
+    `${narrative.storyBreadth} unique ${narrative.storyBreadth === 1 ? "story spans" : "stories span"} ${narrative.publisherOwnerBreadth} publisher ${narrative.publisherOwnerBreadth === 1 ? "group" : "groups"} and ${narrative.sourceClassBreadth} source ${narrative.sourceClassBreadth === 1 ? "class" : "classes"}.`,
     narrative.lowHistory
       ? `The baseline has ${narrative.baselineWindows} comparison windows so far; z-scores are provisional.`
       : `Reviewed z-score ${narrative.zScore.toFixed(1)}, ${narrative.percentileRank}th percentile of its own history.`

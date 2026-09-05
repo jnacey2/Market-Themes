@@ -6,10 +6,15 @@ import {
 } from "@market-themes/db";
 import { NarrativeSparkline } from "../../components/narratives/NarrativeSparkline";
 import {
+  hasThinEvidence,
   LifecycleBadge,
   LIFECYCLE_LABELS,
-  peakSummary
+  peakSummary,
+  ThinEvidencePill
 } from "../../components/narratives/LifecycleBadge";
+import { HowToReadLink, MetricTerm } from "../../components/narratives/MetricTerm";
+import { formatMeasurementDate, METRIC_GLOSSARY } from "../../lib/metric-glossary";
+import { narrativeDataPath } from "../../lib/narrative-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +59,7 @@ export default async function TrendsPage({
     activeState === "all"
       ? status.narratives
       : status.narratives.filter((narrative) => narrative.lifecycleState === activeState);
+  const coverage = boardCoverage(status.narratives);
 
   return (
     <div className="shell wide-shell">
@@ -64,16 +70,24 @@ export default async function TrendsPage({
           <p className="lede">
             Stable market propositions measured against their own history. Density is
             normalized by the eligible corpus, while publisher ownership and evidence
-            breadth show whether a move is genuinely independent.
+            breadth show whether a move is genuinely independent.{" "}
+            <HowToReadLink>How to read these numbers</HowToReadLink>
           </p>
         </div>
         <div className="panel">
           <p className="eyebrow">Latest measurement</p>
-          <h2>{status.latestDate ?? "Awaiting first run"}</h2>
+          <h2>{formatMeasurementDate(status.latestDate) ?? "Awaiting first run"}</h2>
           <p>
             {status.narratives.length} versioned narratives tracked.{" "}
             <Link href="/changes">What changed</Link>
           </p>
+          {coverage ? (
+            <p className="label" title={METRIC_GLOSSARY.coverage.description}>
+              Classification coverage this week: {coverage.classified.toLocaleString()} of{" "}
+              {coverage.corpus.toLocaleString()} readable documents (
+              {coverage.percent.toFixed(1)}%)
+            </p>
+          ) : null}
         </div>
       </section>
 
@@ -94,10 +108,16 @@ export default async function TrendsPage({
       <section className="currents-board" aria-label="Tracked market narratives">
         <div className="currents-header">
           <span>Narrative</span>
-          <span>90-day current</span>
-          <span>Now</span>
-          <span>Movement</span>
-          <span>Breadth</span>
+          <span title="Reviewed density over the trailing 90 days">90-day trend</span>
+          <span>
+            <MetricTerm term="density">Now</MetricTerm>
+          </span>
+          <span>
+            <MetricTerm term="change">Movement</MetricTerm>
+          </span>
+          <span>
+            <MetricTerm term="uniqueStories">Breadth</MetricTerm>
+          </span>
         </div>
         {loadError ? (
           <div className="panel">
@@ -120,7 +140,7 @@ export default async function TrendsPage({
         ) : visible.map((narrative) => (
           <Link
             className="current-row"
-            href={`/themes/${encodeURIComponent(narrative.id)}`}
+            href={narrativeDataPath(narrative.slug)}
             key={narrative.id}
           >
             <div className="current-name">
@@ -133,6 +153,7 @@ export default async function TrendsPage({
               <strong>{narrative.name}</strong>
               <div className="pill-row">
                 <LifecycleBadge compact state={narrative.lifecycleState} />
+                {hasThinEvidence(narrative) ? <ThinEvidencePill compact /> : null}
                 {peakSummary(narrative) ? <small>{peakSummary(narrative)}</small> : null}
               </div>
               <small>{narrative.proposition}</small>
@@ -154,11 +175,8 @@ export default async function TrendsPage({
             </div>
             <div className="current-breadth">
               <strong>{narrative.storyBreadth}</strong>
-              <span>unique stories</span>
-              <small>
-                {narrative.publisherOwnerBreadth} publisher groups ·{" "}
-                {narrative.eligibleDocuments}/{narrative.corpusDocuments} documents classified
-              </small>
+              <span>{narrative.storyBreadth === 1 ? "unique story" : "unique stories"}</span>
+              <small>{breadthCaption(narrative)}</small>
               {narrative.lowHistory && measured(narrative) ? (
                 <em>thin baseline · {narrative.baselineWindows} comparison windows</em>
               ) : null}
@@ -171,12 +189,14 @@ export default async function TrendsPage({
         <div className="panel">
           <p className="eyebrow">Reading the board</p>
           <p>
-            “Now” is the seven-day percentage density averaged across active source
-            classes. Coverage shows classified readable documents over the current
-            seven-day corpus; pending and partial coverage are not measured zeroes.
+            “Now” is the seven-day reviewed density: the share of this week&apos;s readable
+            documents approved as evidence, averaged across source classes. Pending and
+            partial classification coverage are shown as unmeasured, not as zero.
             Unique-story breadth deduplicates syndicated copies. Movement compares
-            adjacent seven-day windows. A high reading is attention—not a forecast,
-            recommendation, or measure of agreement.
+            adjacent seven-day windows. Rising and peaking need at least three unique
+            stories from two publisher groups. A high reading is attention—not a
+            forecast, recommendation, or measure of agreement. Dates are UTC.{" "}
+            <HowToReadLink>Full glossary</HowToReadLink>
           </p>
         </div>
       </section>
@@ -193,19 +213,40 @@ function measured(narrative: BoardNarrative) {
   );
 }
 
+/**
+ * Classification coverage is a property of the corpus window, not of any one
+ * narrative, so it is reported once at the top of the board.
+ */
+function boardCoverage(narratives: BoardNarrative[]) {
+  const withCorpus = narratives.filter((narrative) => narrative.corpusDocuments > 0);
+  if (withCorpus.length === 0) return null;
+  const corpus = Math.max(...withCorpus.map((narrative) => narrative.corpusDocuments));
+  const classified = Math.max(...withCorpus.map((narrative) => narrative.eligibleDocuments));
+  return {
+    corpus,
+    classified: Math.min(classified, corpus),
+    percent: corpus === 0 ? 0 : (Math.min(classified, corpus) / corpus) * 100
+  };
+}
+
 function levelCaption(narrative: BoardNarrative) {
   if (narrative.coverageStatus === "no_corpus") return "no readable corpus";
   if (narrative.coverageStatus === "backfill_pending") return "classification pending";
-  const attention = `attention ${narrative.attentionDensity.toFixed(1)} · z ${narrative.attentionZScore.toFixed(1)}`;
-  if (narrative.coverageStatus === "measured_zero") return `0 approved · ${attention}`;
+  const attention = `attention ${narrative.attentionDensity.toFixed(1)} · attention z ${narrative.attentionZScore.toFixed(1)}`;
+  if (narrative.coverageStatus === "measured_zero" || narrative.density <= 0) {
+    return narrative.attentionMatchedDocuments > 0
+      ? `no approved coverage this week · ${narrative.attentionMatchedDocuments} matches awaiting review`
+      : "no approved coverage this week";
+  }
   return narrative.lowHistory
     ? `${attention} · provisional`
-    : `${narrative.percentileRank}th pct · ${attention}`;
+    : `${narrative.percentileRank}th percentile · ${attention}`;
 }
 
 function movementLabel(narrative: BoardNarrative) {
   if (narrative.coverageStatus === "no_corpus") return "No recent corpus";
   if (narrative.coverageStatus === "backfill_pending") return "Classification pending";
+  if (narrative.change === 0) return "No change";
   return `${narrative.change >= 0 ? "↑" : "↓"} ${Math.abs(narrative.change).toFixed(1)}`;
 }
 
@@ -216,6 +257,12 @@ function movementCaption(narrative: BoardNarrative) {
     ? `z ${narrative.zScore.toFixed(1)} (provisional)`
     : `z ${narrative.zScore.toFixed(1)}`;
   return `${z} · accel ${signed(narrative.acceleration)}`;
+}
+
+function breadthCaption(narrative: BoardNarrative) {
+  if (narrative.storyBreadth === 0) return "no publisher groups this week";
+  const groups = `${narrative.publisherOwnerBreadth} publisher ${narrative.publisherOwnerBreadth === 1 ? "group" : "groups"}`;
+  return hasThinEvidence(narrative) ? `${groups} · too few to call a move` : groups;
 }
 
 function signed(value: number) {
