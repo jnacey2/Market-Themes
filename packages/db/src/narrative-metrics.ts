@@ -92,6 +92,7 @@ export function calculateNarrativeTrendSeries(
     Math.ceil(lowHistoryDays / stride)
   );
   const windows = daily.map((_, index) => summarizeWindow(daily, index, windowDays));
+  const breadthPolicy = resolveLifecycleBreadthPolicy();
 
   return daily.map((_, index) => {
     const current = windows[index];
@@ -127,8 +128,10 @@ export function calculateNarrativeTrendSeries(
       previousChange,
       peakDensity: peak.density,
       daysSincePeak: peak.daysSincePeak,
-      windowDays
-    });
+      windowDays,
+      storyBreadth: current.storyBreadth,
+      publisherOwnerBreadth: current.publisherOwnerBreadth
+    }, breadthPolicy);
 
     return {
       date: dates[index],
@@ -175,17 +178,62 @@ export function calculateNarrativeTrendSeries(
   });
 }
 
-export function deriveLifecycleState(input: {
-  hasCoverage: boolean;
-  lowHistory: boolean;
-  density: number;
-  previousDensity: number | null;
-  change: number;
-  previousChange: number;
-  peakDensity: number;
-  daysSincePeak: number | null;
-  windowDays: number;
-}): NarrativeLifecycleState {
+export const DEFAULT_LIFECYCLE_MINIMUM_STORIES = 3;
+export const DEFAULT_LIFECYCLE_MINIMUM_PUBLISHER_OWNERS = 2;
+
+export type LifecycleBreadthPolicy = {
+  minimumStories: number;
+  minimumPublisherOwners: number;
+};
+
+/**
+ * Evidence breadth a window needs before "rising" or "peaking" is a claim worth
+ * making. A single story from one publisher is at its own 90-day peak by
+ * construction; without this gate every new definition opens as "peaking".
+ */
+export function resolveLifecycleBreadthPolicy(
+  env: NodeJS.ProcessEnv = process.env
+): LifecycleBreadthPolicy {
+  return {
+    minimumStories: positiveInteger(
+      env.NARRATIVE_LIFECYCLE_MIN_STORIES,
+      DEFAULT_LIFECYCLE_MINIMUM_STORIES
+    ),
+    minimumPublisherOwners: positiveInteger(
+      env.NARRATIVE_LIFECYCLE_MIN_PUBLISHER_OWNERS,
+      DEFAULT_LIFECYCLE_MINIMUM_PUBLISHER_OWNERS
+    )
+  };
+}
+
+/** True when the window has too little independent evidence to support a movement claim. */
+export function isThinEvidence(
+  input: { storyBreadth: number; publisherOwnerBreadth: number },
+  policy: LifecycleBreadthPolicy = resolveLifecycleBreadthPolicy()
+) {
+  return (
+    input.storyBreadth < policy.minimumStories ||
+    input.publisherOwnerBreadth < policy.minimumPublisherOwners
+  );
+}
+
+export function deriveLifecycleState(
+  input: {
+    hasCoverage: boolean;
+    lowHistory: boolean;
+    density: number;
+    previousDensity: number | null;
+    change: number;
+    previousChange: number;
+    peakDensity: number;
+    daysSincePeak: number | null;
+    windowDays: number;
+    /** Omit to skip the breadth gate (legacy callers and pure movement tests). */
+    storyBreadth?: number;
+    publisherOwnerBreadth?: number;
+  },
+  policy: LifecycleBreadthPolicy = resolveLifecycleBreadthPolicy()
+): NarrativeLifecycleState {
   if (!input.hasCoverage) return "unmeasured";
   const zeroNow = input.density <= 0;
   const zeroBefore = input.previousDensity !== null && input.previousDensity <= 0;
@@ -203,9 +251,25 @@ export function deriveLifecycleState(input: {
     return "fading";
   }
   if (input.lowHistory) return "emerging";
+  const thin =
+    input.storyBreadth !== undefined &&
+    input.publisherOwnerBreadth !== undefined &&
+    isThinEvidence(
+      {
+        storyBreadth: input.storyBreadth,
+        publisherOwnerBreadth: input.publisherOwnerBreadth
+      },
+      policy
+    );
+  if (thin) return "steady";
   if (input.change > noise) return "rising";
   if (percentOfPeak >= 85 && !pastPeak) return "peaking";
   return "steady";
+}
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = value === undefined ? Number.NaN : Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : fallback;
 }
 
 export function baselineStride(windowDays: number) {
