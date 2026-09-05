@@ -1,11 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { authNotConfiguredHtml, authRequiredHtml } from "./lib/auth-wall";
+import { legacyNarrativeRedirect } from "./lib/narrative-paths";
 import { PROTECTED_PATHS } from "./lib/navigation";
 import { isAuthorized } from "./lib/ops-auth";
 
 const HTML_HEADERS = { "Content-Type": "text/html; charset=utf-8" };
 
 export function proxy(request: NextRequest) {
+  const legacyTarget = legacyNarrativeRedirect(request.nextUrl.pathname);
+  if (legacyTarget) {
+    const url = request.nextUrl.clone();
+    url.pathname = legacyTarget;
+    return NextResponse.redirect(url, 308);
+  }
+
   if (!PROTECTED_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {
     return NextResponse.next();
   }
@@ -48,6 +56,8 @@ function wantsHtml(request: NextRequest) {
 
 export const config = {
   matcher: [
+    "/storyboards/:path*",
+    "/themes/:path*",
     "/analysis/:path*",
     "/ingestion/:path*",
     "/theme-mappings/:path*",

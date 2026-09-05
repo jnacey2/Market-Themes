@@ -38,8 +38,27 @@ test("daily brief leads with the rising narrative and names the fading one", () 
   assert.match(brief.headline, /Private Credit Stress is gaining attention; Consumer Trade-Down is fading/);
   assert.match(brief.summary, /35% of its 90-day peak, 18 days past peak/);
   assert.match(brief.summary, /1 lifecycle transition/);
-  assert.deepEqual(brief.sections.map((section) => section.title), ["Rising", "Fading", "Emerging", "What changed"]);
+  assert.deepEqual(brief.sections.map((section) => section.title), ["Rising", "Fading", "New and probationary", "What changed"]);
   assert.deepEqual(brief.narrativeDefinitionIds, ["r", "f", "e"]);
+});
+
+test("a fade to zero is described as no coverage, not as 0% of peak", () => {
+  const lanes: NarrativeHomepageStatus["lanes"] = {
+    rising: [],
+    peaking: [],
+    fading: [item({ id: "f", name: "Margin Pressure", lifecycleState: "fading", density: 0, percentOfPeak: 0, daysSincePeak: 3, change: -0.2 })],
+    emerging: []
+  };
+  const brief = buildDailyBrief(
+    lanes,
+    { currentDate: "2026-09-05", previousDate: "2026-09-04", stateCounts: { ...emptyCounts, fading: 1 }, changes: [] },
+    "2026-09-05"
+  );
+  assert.match(brief.summary, /Margin Pressure: no approved coverage this week, 3 days past peak\./);
+  assert.doesNotMatch(brief.summary, /0% of/);
+  const fading = brief.sections.find((section) => section.title === "Fading");
+  assert.ok(fading);
+  assert.match(fading.items[0], /no approved coverage this week, peak 3d ago, change -0\.2/);
 });
 
 test("daily brief never headlines an unmeasured narrative as measurable", () => {

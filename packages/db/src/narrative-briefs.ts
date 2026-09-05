@@ -73,11 +73,7 @@ export function buildDailyBrief(
     );
   }
   if (fadingLead) {
-    summaryParts.push(
-      `${fadingLead.name}: ${fadingLead.percentOfPeak.toFixed(0)}% of its 90-day peak${
-        fadingLead.daysSincePeak !== null ? `, ${fadingLead.daysSincePeak} days past peak` : ""
-      }.`
-    );
+    summaryParts.push(`${fadingLead.name}: ${describePeakPosition(fadingLead, "long")}.`);
   }
   const transitions = report.changes.filter((change) => change.kind === "state_change");
   if (transitions.length > 0) {
@@ -98,11 +94,9 @@ export function buildDailyBrief(
       `${item.name} — ${item.percentOfPeak.toFixed(0)}% of 90-day peak, change ${signed(item.change)}.`
     ),
     section("Fading", lanes.fading, (item) =>
-      `${item.name} — ${item.percentOfPeak.toFixed(0)}% of peak${
-        item.daysSincePeak !== null ? `, ${item.daysSincePeak} days since peak` : ""
-      }, change ${signed(item.change)}.`
+      `${item.name} — ${describePeakPosition(item, "short")}, change ${signed(item.change)}.`
     ),
-    section("Emerging", lanes.emerging, (item) =>
+    section("New and probationary", lanes.emerging, (item) =>
       `${item.name} — ${item.attentionMatchedDocuments} classifier matches, ${item.matchedDocuments} reviewed, ${item.status === "probationary" ? "probationary" : "building baseline"}.`
     ),
     {
@@ -371,6 +365,25 @@ function describeChange(change: NarrativeChange) {
     default:
       return `${change.name}: ${change.detail}`;
   }
+}
+
+/**
+ * "0% of its 90-day peak" reads as missing data; say what actually happened.
+ */
+export function describePeakPosition(
+  item: { density: number; percentOfPeak: number; daysSincePeak: number | null },
+  style: "short" | "long"
+) {
+  const since =
+    item.daysSincePeak === null
+      ? ""
+      : style === "long"
+        ? `, ${item.daysSincePeak} ${item.daysSincePeak === 1 ? "day" : "days"} past peak`
+        : `, peak ${item.daysSincePeak}d ago`;
+  if (item.density <= 0) {
+    return `no approved coverage this week${since}`;
+  }
+  return `${item.percentOfPeak.toFixed(0)}% of ${style === "long" ? "its 90-day peak" : "peak"}${since}`;
 }
 
 function signed(value: number) {
