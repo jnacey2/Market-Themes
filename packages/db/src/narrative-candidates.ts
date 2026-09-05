@@ -996,6 +996,27 @@ export async function mergeNarrativeCandidate(
   }
 }
 
+export type NarrativeCandidateDuplicateOf = {
+  kind: "semantic" | "evidence";
+  definitionId: string;
+  name: string;
+};
+
+/**
+ * Thrown when a candidate is judged to be an existing tracked narrative under
+ * another name. Not a transient failure: retrying will not change the outcome
+ * until the candidate gains new evidence or a reviewer merges/refines it.
+ */
+export class NarrativeCandidateDuplicateError extends Error {
+  readonly duplicateOf: NarrativeCandidateDuplicateOf;
+
+  constructor(message: string, duplicateOf: NarrativeCandidateDuplicateOf) {
+    super(message);
+    this.name = "NarrativeCandidateDuplicateError";
+    this.duplicateOf = duplicateOf;
+  }
+}
+
 export type NarrativeCandidateAutomaticPolicy = CandidatePromotionPolicy;
 
 type NarrativeCandidatePromotionInput = {
@@ -1330,10 +1351,16 @@ export async function autoPromoteNarrativeCandidates(
     `publisher groups within ${evidenceWindowDays} days.`;
   const promotedDefinitionIds: string[] = [];
   const failures: Array<{ candidateId: string; error: string }> = [];
+  const duplicates: Array<{
+    candidateId: string;
+    duplicateOf: NarrativeCandidateDuplicateOf;
+    reason: string;
+  }> = [];
   let observationsCreated = 0;
   let candidatesSkippedAlreadyPromoted = 0;
   let candidatesBlocked = 0;
   for (const candidate of candidates) {
+    let promotionValidation: CandidatePromotionValidation | null = null;
     try {
       if (!options.validateCandidate) {
         throw new Error("Automatic candidate promotion validator is not configured.");
@@ -1347,9 +1374,7 @@ export async function autoPromoteNarrativeCandidates(
         candidatesSkippedAlreadyPromoted += 1;
         continue;
       }
-      const promotionValidation = await options.validateCandidate(
-        validationInput
-      );
+      promotionValidation = await options.validateCandidate(validationInput);
       await persistCandidatePromotionValidation(
         candidate.id,
         promotionValidation,
@@ -1382,6 +1407,26 @@ export async function autoPromoteNarrativeCandidates(
       promotedDefinitionIds.push(promoted.definitionId);
       observationsCreated += promoted.observationsCreated;
     } catch (error) {
+      if (
+        error instanceof NarrativeCandidateDuplicateError &&
+        promotionValidation
+      ) {
+        // A duplicate is a review outcome, not a job failure. Park the candidate
+        // for manual review so the next run does not re-validate (and re-bill)
+        // it; new evidence bumps updated_at and makes it eligible again.
+        await persistCandidatePromotionValidation(
+          candidate.id,
+          markValidationAsDuplicate(promotionValidation, error),
+          databaseUrl
+        );
+        candidatesBlocked += 1;
+        duplicates.push({
+          candidateId: candidate.id,
+          duplicateOf: error.duplicateOf,
+          reason: error.message
+        });
+        continue;
+      }
       failures.push({
         candidateId: candidate.id,
         error: error instanceof Error ? error.message : String(error)
@@ -1395,7 +1440,25 @@ export async function autoPromoteNarrativeCandidates(
     observationsCreated,
     candidatesSkippedAlreadyPromoted,
     promotedDefinitionIds,
+    duplicateCandidates: duplicates,
     failedCandidates: failures
+  };
+}
+
+export function markValidationAsDuplicate(
+  validation: CandidatePromotionValidation,
+  error: NarrativeCandidateDuplicateError,
+  now = new Date()
+): CandidatePromotionValidation {
+  const reason = `Duplicate of tracked narrative "${error.duplicateOf.name}" (${error.duplicateOf.definitionId}, ${error.duplicateOf.kind} match). ${error.message}`;
+  return {
+    ...validation,
+    status: "manual_review",
+    summaryReason: reason,
+    reasons: validation.reasons.includes(reason)
+      ? validation.reasons
+      : [...validation.reasons, reason],
+    evaluatedAt: now.toISOString()
   };
 }
 
@@ -1597,8 +1660,9 @@ export async function promoteNarrativeCandidate(
       )
     );
     if (semanticCollision) {
-      throw new Error(
-        `Candidate overlaps tracked narrative "${semanticCollision.name}" (${semanticCollision.id}); merge or refine it instead of creating another definition.`
+      throw new NarrativeCandidateDuplicateError(
+        `Candidate overlaps tracked narrative "${semanticCollision.name}" (${semanticCollision.id}); merge or refine it instead of creating another definition.`,
+        { kind: "semantic", definitionId: semanticCollision.id, name: semanticCollision.name }
       );
     }
     // Wording can differ while the evidence is the same. If most of the documents
@@ -1632,8 +1696,13 @@ export async function promoteNarrativeCandidate(
     );
     const sharedEvidence = evidenceCollision.rows[0];
     if (sharedEvidence) {
-      throw new Error(
-        `Candidate evidence already supports tracked narrative "${sharedEvidence.name}" (${sharedEvidence.narrative_definition_id}): ${sharedEvidence.shared} of ${evidenceDocumentIds.length} qualifying documents are matched to it; merge or refine instead of creating another definition.`
+      throw new NarrativeCandidateDuplicateError(
+        `Candidate evidence already supports tracked narrative "${sharedEvidence.name}" (${sharedEvidence.narrative_definition_id}): ${sharedEvidence.shared} of ${evidenceDocumentIds.length} qualifying documents are matched to it; merge or refine instead of creating another definition.`,
+        {
+          kind: "evidence",
+          definitionId: sharedEvidence.narrative_definition_id,
+          name: sharedEvidence.name
+        }
       );
     }
     const activeCollision = await client.query(

@@ -15,7 +15,9 @@ import {
   getOperationsStatus,
   mergeNarrativeCandidate,
   evidenceCollisionThreshold,
+  markValidationAsDuplicate,
   narrativeDescriptionsOverlap,
+  NarrativeCandidateDuplicateError,
   persistDocuments,
   persistNarrativeObservations,
   promoteNarrativeCandidate,
@@ -81,6 +83,50 @@ test("a name that repeats another's core tokens with extra qualifiers is a dupli
   assert.equal(evidenceCollisionThreshold(3), 3);
   assert.equal(evidenceCollisionThreshold(5), 4);
   assert.equal(evidenceCollisionThreshold(10), 7);
+});
+
+test("a duplicate collision parks the validation for manual review", () => {
+  const validation: CandidatePromotionValidation = {
+    candidateId: "narrative:candidate:dup",
+    status: "eligible",
+    candidateKind: "structural",
+    eventLabel: null,
+    summaryReason: "Validator approved.",
+    reasons: ["Three corroborating stories."],
+    supportedEvidenceIds: ["e1", "e2", "e3"],
+    breadth: {
+      storyBreadth: 3,
+      eventBreadth: 1,
+      primaryEntityBreadth: 1,
+      publisherOwnerBreadth: 3,
+      sourceClassBreadth: 1
+    },
+    evidence: [],
+    promptVersion: "validation-v1",
+    model: "validator",
+    evaluatedAt: "2026-09-04T00:00:00.000Z"
+  };
+  const error = new NarrativeCandidateDuplicateError(
+    'Candidate evidence already supports tracked narrative "Amazon Advertising Antitrust Risk" (narrative:def:amazon:v1): 3 of 4 qualifying documents are matched to it; merge or refine instead of creating another definition.',
+    {
+      kind: "evidence",
+      definitionId: "narrative:def:amazon:v1",
+      name: "Amazon Advertising Antitrust Risk"
+    }
+  );
+  const now = new Date("2026-09-05T08:00:00.000Z");
+  const parked = markValidationAsDuplicate(validation, error, now);
+  assert.equal(parked.status, "manual_review");
+  assert.equal(parked.evaluatedAt, now.toISOString());
+  assert.match(parked.summaryReason, /Duplicate of tracked narrative "Amazon Advertising Antitrust Risk"/);
+  assert.match(parked.summaryReason, /evidence match/);
+  assert.equal(parked.reasons.length, 2);
+  assert.equal(parked.reasons[0], "Three corroborating stories.");
+  assert.deepEqual(parked.supportedEvidenceIds, validation.supportedEvidenceIds);
+  // Idempotent: re-parking does not stack the same reason.
+  assert.equal(markValidationAsDuplicate(parked, error, now).reasons.length, 2);
+  // The original validation is not mutated.
+  assert.equal(validation.status, "eligible");
 });
 
 test(
