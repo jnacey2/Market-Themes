@@ -15,6 +15,9 @@ import {
   LifecycleBadge,
   LIFECYCLE_LABELS
 } from "../../components/narratives/LifecycleBadge";
+import { HowToReadLink, MetricTerm } from "../../components/narratives/MetricTerm";
+import { formatMeasurementDate } from "../../lib/metric-glossary";
+import { narrativePath } from "../../lib/narrative-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -81,17 +84,22 @@ export default async function ChangesPage() {
       <nav className="context-nav" aria-label="Narrative views">
         <span>What changed</span>
         <Link href="/trends">Open Narrative Currents</Link>
+        <HowToReadLink />
       </nav>
 
       <section className="hero">
         <div>
-          <p className="eyebrow">Daily delta</p>
+          <p className="eyebrow">Daily changes</p>
           <h1>What changed since the last measurement.</h1>
           <p className="lede">
             Lifecycle transitions, narratives entering or leaving the measured board,
             the largest density moves, and definitions that were activated or expired.
             {report.currentDate
-              ? ` Comparing ${report.currentDate} with ${report.previousDate ?? "no earlier measurement"}.`
+              ? ` Comparing ${formatMeasurementDate(report.currentDate)} with ${
+                  report.previousDate
+                    ? formatMeasurementDate(report.previousDate)
+                    : "no earlier measurement"
+                }.`
               : ""}
           </p>
         </div>
@@ -114,7 +122,7 @@ export default async function ChangesPage() {
 
       {brief ? (
         <section className="panel">
-          <p className="eyebrow">Daily Brief · {brief.date}</p>
+          <p className="eyebrow">Daily Brief · {formatMeasurementDate(brief.date)}</p>
           <h2>{brief.headline}</h2>
           <p>{brief.summary}</p>
         </section>
@@ -123,7 +131,7 @@ export default async function ChangesPage() {
       <section className="section">
         <AttentionWatchlist
           watchlist={watchlist}
-          title="Corpus attention no tracked narrative covers"
+          title="Rising topics with no tracked narrative"
           limit={8}
           showCovered={false}
         />
@@ -179,14 +187,16 @@ function ChangeRow({ change }: { change: NarrativeChange }) {
         </div>
       </div>
       <div>
-        <Link href={`/storyboards/${encodeURIComponent(change.slug)}`}>
+        <Link href={narrativePath(change.slug)}>
           <strong>{change.name}</strong>
         </Link>
         <p className="change-detail">{change.detail}</p>
       </div>
       <div className="score-stack">
         <div className="score">
-          <span className="label">Density</span>
+          <span className="label">
+            <MetricTerm term="density">Density</MetricTerm>
+          </span>
           <strong>
             {change.previousDensity !== null ? change.previousDensity.toFixed(1) : "—"} →{" "}
             {change.currentDensity !== null ? change.currentDensity.toFixed(1) : "—"}
@@ -194,7 +204,9 @@ function ChangeRow({ change }: { change: NarrativeChange }) {
         </div>
         {change.attentionZScore !== null ? (
           <div className="score">
-            <span className="label">Attention z</span>
+            <span className="label">
+              <MetricTerm term="attentionZScore" short />
+            </span>
             <strong>{change.attentionZScore.toFixed(1)}</strong>
           </div>
         ) : null}

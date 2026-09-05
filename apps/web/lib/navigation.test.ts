@@ -32,6 +32,8 @@ test("dynamic narrative pages keep Narrative Currents active", () => {
   assert.equal(isNavigationItemActive("/trends", currents), true);
   assert.equal(isNavigationItemActive("/themes/narrative-id", currents), true);
   assert.equal(isNavigationItemActive("/storyboards/narrative-id", currents), true);
+  assert.equal(isNavigationItemActive("/narratives/some-slug/data", currents), true);
+  assert.equal(isNavigationItemActive("/how-to-read", currents), true);
   assert.equal(isNavigationItemActive("/ingestion", currents), false);
 });
 

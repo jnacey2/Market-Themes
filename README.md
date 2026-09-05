@@ -617,6 +617,13 @@ NARRATIVE_PROMOTED_DEFINITION_HISTORY_DAYS=60
 # production uses 98 because ingestion lands at :00/:30 and classification
 # claims at :05, so the :55 recompute always sees a few unclassified documents.
 NARRATIVE_COVERAGE_MEASURED_PERCENT=98
+# Evidence breadth a 7-day window needs before it can be labelled rising or
+# peaking. Thinner windows are reported as steady (or emerging while history is
+# short) and carry a "thin evidence" tag on the board. A single story is at its
+# own 90-day peak by construction, so without this gate every new definition
+# opens as peaking.
+NARRATIVE_LIFECYCLE_MIN_STORIES=3
+NARRATIVE_LIFECYCLE_MIN_PUBLISHER_OWNERS=2
 # Query budget for the operator dashboards (/ingestion funnel and operations
 # status), which aggregate over the whole corpus and are cached for ten minutes.
 OPS_QUERY_TIMEOUT_MS=90000

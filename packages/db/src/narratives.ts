@@ -1794,19 +1794,30 @@ export async function getNarrativeHomepageStatus(
     let evidenceDegraded = false;
     if (evidenceNarrativeIds.length > 0 && latestDate) {
       try {
+        // Drive from the week's documents into approved matches (partial index on
+        // matched rows) rather than scanning every observation for the top
+        // narratives: ~0.5s instead of 20s+ once observations pass 100k rows.
         const evidence = await client.query<NarrativeHomepageEvidenceRow>(
-          `with latest_observations as (
+          `with window_documents as materialized (
+             select d.id, d.published_at,
+                    ${EVIDENCE_STORY_FINGERPRINT} as story_fingerprint
+             from documents d
+             where d.published_at >= $3::date - interval '6 days'
+               and d.published_at < $3::date + interval '1 day'
+           ),
+           latest_observations as (
              select distinct on (no.narrative_definition_id, no.document_id)
                     no.id, no.narrative_definition_id, no.document_id,
-                    d.published_at, no.matched,
+                    wd.published_at, no.matched,
                     no.match_score::float, no.review_status,
-                    ${EVIDENCE_STORY_FINGERPRINT} as story_fingerprint
-             from narrative_observations no
-             join documents d on d.id = no.document_id
+                    wd.story_fingerprint
+             from window_documents wd
+             join narrative_observations no
+               on no.document_id = wd.id
+              and no.matched
+              and no.review_status = 'approved'
              where no.prompt_version = $1
                and no.narrative_definition_id = any($2::text[])
-               and d.published_at >= $3::date - interval '6 days'
-               and d.published_at < $3::date + interval '1 day'
              order by no.narrative_definition_id, no.document_id,
                       no.observed_at desc, no.id
            ),

@@ -5,7 +5,9 @@ import {
   calculateNarrativeTrendSeries,
   deriveLifecycleState,
   deriveNarrativeCoverageState,
+  isThinEvidence,
   resolveCoverageMeasuredPercent,
+  resolveLifecycleBreadthPolicy,
   robustScale,
   type NarrativeMetricObservation
 } from "./narrative-metrics";
@@ -192,6 +194,100 @@ test("lifecycle state transitions follow peak and change rules", () => {
     deriveLifecycleState({ ...base, lowHistory: true, density: 2, change: 0.5 }),
     "emerging"
   );
+});
+
+test("rising and peaking require enough independent evidence", () => {
+  const base = {
+    hasCoverage: true,
+    lowHistory: false,
+    previousDensity: 4,
+    previousChange: 0,
+    peakDensity: 10,
+    daysSincePeak: 0,
+    windowDays: 7
+  };
+  const policy = { minimumStories: 3, minimumPublisherOwners: 2 };
+  // One story from one publisher is trivially at its own peak: not a movement claim.
+  assert.equal(
+    deriveLifecycleState(
+      { ...base, density: 9.5, change: 0.2, storyBreadth: 1, publisherOwnerBreadth: 1 },
+      policy
+    ),
+    "steady"
+  );
+  assert.equal(
+    deriveLifecycleState(
+      { ...base, density: 10, change: 6, storyBreadth: 2, publisherOwnerBreadth: 2 },
+      policy
+    ),
+    "steady"
+  );
+  // Three stories all from one owner is still one voice.
+  assert.equal(
+    deriveLifecycleState(
+      { ...base, density: 10, change: 6, storyBreadth: 3, publisherOwnerBreadth: 1 },
+      policy
+    ),
+    "steady"
+  );
+  assert.equal(
+    deriveLifecycleState(
+      { ...base, density: 10, change: 6, storyBreadth: 3, publisherOwnerBreadth: 2 },
+      policy
+    ),
+    "rising"
+  );
+  assert.equal(
+    deriveLifecycleState(
+      { ...base, density: 9.5, change: 0.2, storyBreadth: 4, publisherOwnerBreadth: 3 },
+      policy
+    ),
+    "peaking"
+  );
+  // Thin evidence never hides a decline or a fresh definition's low history.
+  assert.equal(
+    deriveLifecycleState(
+      { ...base, density: 0, change: -4, storyBreadth: 0, publisherOwnerBreadth: 0 },
+      policy
+    ),
+    "fading"
+  );
+  assert.equal(
+    deriveLifecycleState(
+      { ...base, lowHistory: true, density: 2, change: 0.5, storyBreadth: 1, publisherOwnerBreadth: 1 },
+      policy
+    ),
+    "emerging"
+  );
+  assert.equal(isThinEvidence({ storyBreadth: 1, publisherOwnerBreadth: 1 }, policy), true);
+  assert.equal(isThinEvidence({ storyBreadth: 3, publisherOwnerBreadth: 2 }, policy), false);
+  assert.deepEqual(resolveLifecycleBreadthPolicy({}), {
+    minimumStories: 3,
+    minimumPublisherOwners: 2
+  });
+  assert.deepEqual(
+    resolveLifecycleBreadthPolicy({
+      NARRATIVE_LIFECYCLE_MIN_STORIES: "5",
+      NARRATIVE_LIFECYCLE_MIN_PUBLISHER_OWNERS: "bogus"
+    }),
+    { minimumStories: 5, minimumPublisherOwners: 2 }
+  );
+});
+
+test("a single-publisher series does not open as peaking", () => {
+  const dates = enumerate("2026-01-01", 40);
+  const rows: NarrativeMetricObservation[] = [];
+  for (const [index, date] of dates.entries()) {
+    for (let doc = 0; doc < 10; doc += 1) {
+      // Flat 10% for 33 days, then 60% in the last week, but every match comes from one owner.
+      const matched = index >= 33 ? doc < 6 : doc < 1;
+      rows.push({ ...observation(`${date}:${doc}`, "newspaper", matched, "P", "O"), date });
+    }
+  }
+  const last = calculateNarrativeTrendSeries(rows, dates, 7, 14).at(-1)!;
+  assert.equal(last.publisherOwnerBreadth, 1);
+  assert.ok(last.zScore > 3);
+  assert.equal(last.lifecycleState, "steady");
 });
 
 test("distinguishes backfill, measured zero, measured, and empty coverage", () => {

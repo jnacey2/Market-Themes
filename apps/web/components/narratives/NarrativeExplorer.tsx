@@ -2,11 +2,16 @@
 
 import { useMemo, useState } from "react";
 import type { NarrativeTrendSummary, ToneDirection } from "@market-themes/db";
-
-const HORIZONS = [7, 30, 90] as const;
+import {
+  CHART_HORIZONS as HORIZONS,
+  defaultChartHorizon,
+  type ChartHorizon
+} from "../../lib/narrative-history";
 
 export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSummary }) {
-  const [horizon, setHorizon] = useState<(typeof HORIZONS)[number]>(90);
+  const [horizon, setHorizon] = useState<ChartHorizon>(() =>
+    defaultChartHorizon(narrative.history)
+  );
   const [source, setSource] = useState("all");
   const [tone, setTone] = useState<ToneDirection | "all">("all");
   const [activeDate, setActiveDate] = useState<string | null>(null);
@@ -107,7 +112,7 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
           <span><i className="legend-baseline" /> Baseline</span>
         </div>
         <div className="chart-readout" aria-live="polite">
-          <strong>{active?.date ?? "No observations"}</strong>
+          <strong>{active ? `${active.date} UTC` : "No observations"}</strong>
           <span>Density {active?.density.toFixed(1) ?? "0.0"}</span>
           <span>Attention {active?.attentionDensity.toFixed(1) ?? "0.0"}</span>
           <span>Baseline {active?.baselineMean.toFixed(1) ?? "0.0"}</span>
@@ -130,7 +135,7 @@ export function NarrativeExplorer({ narrative }: { narrative: NarrativeTrendSumm
         ) : evidence.map((item) => (
           <article className="evidence-card" key={item.id}>
             <span className="label">
-              {item.publisher} · {new Date(item.publishedAt).toLocaleDateString()}
+              {item.publisher} · {formatPublished(item.publishedAt)}
             </span>
             <h3>{item.title}</h3>
             <blockquote>{item.evidenceSnippet}</blockquote>
@@ -157,4 +162,11 @@ function coordinate(index: number, length: number, value: number, maximum: numbe
 
 function signed(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
+}
+
+function formatPublished(value: string) {
+  return `${new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeZone: "UTC"
+  }).format(new Date(value))} UTC`;
 }

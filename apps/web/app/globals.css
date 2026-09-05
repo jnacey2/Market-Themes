@@ -556,6 +556,7 @@ h3 {
 }
 
 .lane {
+  align-content: start;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -611,6 +612,61 @@ h3 {
 .lane-empty {
   color: var(--muted);
   font-size: 13px;
+}
+
+/* An empty lane collapses to its header and one-line explanation instead of a tall blank card. */
+.lane.is-empty {
+  align-self: start;
+  gap: 6px;
+  padding: 14px 18px;
+}
+
+.lane.is-empty .lane-empty {
+  margin: 0;
+}
+
+.metric-term {
+  cursor: help;
+  text-decoration: underline dotted rgba(148, 163, 184, 0.7);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.how-to-read-link {
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.how-to-read-link:hover,
+.how-to-read-link:focus-visible {
+  text-decoration: underline;
+}
+
+.glossary-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.glossary-entry {
+  padding: 18px;
+}
+
+.glossary-entry h3 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.glossary-entry p {
+  font-size: 14px;
+  margin: 10px 0 0;
+}
+
+.thin-evidence-pill {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
 }
 
 .change-list {
