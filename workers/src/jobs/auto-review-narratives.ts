@@ -34,6 +34,7 @@ export async function autoReviewNarratives() {
           candidatesBlocked: 0,
           observationsCreated: 0,
           promotedDefinitionIds: [],
+          duplicateCandidates: [],
           failedCandidates: []
         };
   const lifecycleResult = await reconcileNarrativeDefinitionLifecycle();
@@ -45,6 +46,7 @@ export async function autoReviewNarratives() {
     candidatesBlocked: candidateResult.candidatesBlocked,
     candidateObservationsCreated: candidateResult.observationsCreated,
     promotedDefinitionIds: candidateResult.promotedDefinitionIds,
+    duplicateCandidates: candidateResult.duplicateCandidates,
     failedCandidatePromotions: candidateResult.failedCandidates,
     ...lifecycleResult
   };
