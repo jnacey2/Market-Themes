@@ -196,3 +196,26 @@ function item(overrides: Partial<NarrativeHomepageItem> & { id: string }): Narra
     ...overrides
   };
 }
+
+test("a moving structural theme leads the brief ahead of a louder headline event", () => {
+  const lanes: NarrativeHomepageStatus["lanes"] = {
+    rising: [
+      item({ id: "ev", name: "Hormuz Tanker Attacks", lifecycleState: "rising", kind: "event", attentionZScore: 5 }),
+      item({ id: "st", name: "Margin Pressure", lifecycleState: "rising", kind: "structural", attentionZScore: 1.2 })
+    ],
+    peaking: [],
+    fading: [],
+    emerging: []
+  };
+  const brief = buildDailyBrief(
+    lanes,
+    {
+      currentDate: "2026-09-05",
+      previousDate: "2026-09-04",
+      stateCounts: { ...emptyCounts, rising: 2 },
+      changes: []
+    },
+    "2026-09-05"
+  );
+  assert.match(brief.headline, /^Margin Pressure is gaining attention/);
+});
