@@ -1362,7 +1362,7 @@ export async function autoPromoteNarrativeCandidates(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   let candidates: Array<{ id: string }>;
-  let candidatesAwaitingPersistence = 0;
+  let candidatesAwaitingPersistence: number;
   try {
     const result = await client.query<{ id: string; persistent: boolean }>(
       `select nc.id,
