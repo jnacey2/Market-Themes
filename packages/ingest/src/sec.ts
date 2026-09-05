@@ -8,6 +8,7 @@ const SEC_ARCHIVES_BASE_URL = "https://www.sec.gov/Archives/edgar/data";
 const DEFAULT_USER_AGENT = "MarketThemesBot/0.1 contact@example.com";
 const DEFAULT_RATE_LIMIT_MS = 220;
 const coreNarrativeForms = new Set(["10-K", "10-Q", "8-K"]);
+const periodicReportForms = new Set(["10-K", "10-Q"]);
 const proxyForms = new Set(["DEF 14A", "DEFA14A", "PRE 14A"]);
 const capitalMarketsForms = new Set([
   "S-1",
@@ -46,6 +47,8 @@ type FilingCategory =
 
 type SecFormConfig = {
   includeCoreForms: boolean;
+  /** When false, core forms are only the periodic reports (10-K, 10-Q); 8-Ks are skipped. */
+  include8kForms: boolean;
   includeProxyForms: boolean;
   includeCapitalMarketsForms: boolean;
   includeOwnershipForms: boolean;
@@ -534,11 +537,12 @@ function classifyExhibitRelevance(
   return "low";
 }
 
-function resolveSecFormConfig(
+export function resolveSecFormConfig(
   overrides: Partial<SecFormConfig> = {}
 ): SecFormConfig {
   return {
     includeCoreForms: envFlag("SEC_INCLUDE_CORE_FORMS", true),
+    include8kForms: envFlag("SEC_INCLUDE_8K_FORMS", true),
     includeProxyForms: envFlag("SEC_INCLUDE_PROXY_FORMS", true),
     includeCapitalMarketsForms: envFlag("SEC_INCLUDE_CAPITAL_MARKETS_FORMS", true),
     includeOwnershipForms: envFlag("SEC_INCLUDE_OWNERSHIP_FORMS", true),
@@ -552,11 +556,11 @@ function resolveSecFormConfig(
   };
 }
 
-function getEnabledForms(config: SecFormConfig) {
+export function getEnabledForms(config: SecFormConfig) {
   const forms = new Set<string>();
 
   if (config.includeCoreForms) {
-    addForms(forms, coreNarrativeForms);
+    addForms(forms, config.include8kForms ? coreNarrativeForms : periodicReportForms);
   }
 
   if (config.includeProxyForms) {
