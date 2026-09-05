@@ -848,8 +848,14 @@ export type NarrativeHomepageStatus = {
   degraded: boolean;
   latestDate: string | null;
   trackedNarrativeCount: number;
-  /** Ranked by surprise (attention z-score) among measured narratives; kept for the lead card. */
+  /**
+   * Measured narratives ranked structural-first, then by surprise (attention
+   * z-score). Structural themes are the board's primary view; event narratives
+   * follow so a week of headlines cannot crowd them out of the lead card.
+   */
   narratives: NarrativeHomepageItem[];
+  /** Every structural theme (any coverage state) ranked by surprise: the ebb-and-flow strip. */
+  structuralThemes: NarrativeHomepageItem[];
   lanes: Record<NarrativeHomepageLane, NarrativeHomepageItem[]>;
   brief: StoredBrief | null;
 };

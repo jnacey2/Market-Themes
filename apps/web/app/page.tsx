@@ -13,6 +13,7 @@ import {
 } from "../components/narratives/LifecycleBadge";
 import { HowToReadLink, MetricTerm } from "../components/narratives/MetricTerm";
 import { formatMeasurementDate, METRIC_GLOSSARY } from "../lib/metric-glossary";
+import { narrativeDataPath, narrativePath } from "../lib/narrative-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -47,11 +48,7 @@ const MOTION_LANES: NarrativeHomepageLane[] = ["rising", "peaking", "fading"];
 
 export default async function HomePage() {
   const dashboard = await getNarrativeHomepageStatus();
-  const leadNarrative =
-    dashboard.lanes.rising[0] ??
-    dashboard.lanes.peaking[0] ??
-    dashboard.narratives[0] ??
-    null;
+  const leadNarrative = pickLeadNarrative(dashboard);
   const summaryUnavailable =
     !dashboard.databaseConfigured ||
     (dashboard.degraded && dashboard.narratives.length === 0);
@@ -65,6 +62,7 @@ export default async function HomePage() {
     <div className="shell">
       <nav className="page-jump-nav" aria-label="On this page">
         <span>On this page</span>
+        <a href="#themes">Structural themes</a>
         <a href="#lanes">Lifecycle lanes</a>
         <a href="#narratives">Most surprising</a>
         <a href="#brief">Daily Brief</a>
@@ -168,6 +166,14 @@ export default async function HomePage() {
         </div>
       </section>
 
+      <section className="section" id="themes">
+        <p className="eyebrow">Structural themes</p>
+        <StructuralThemes
+          themes={dashboard.structuralThemes}
+          unavailable={summaryUnavailable}
+        />
+      </section>
+
       <section className="section" id="lanes">
         <p className="eyebrow">Lifecycle lanes</p>
         <div className="lane-grid">
@@ -184,6 +190,10 @@ export default async function HomePage() {
 
       <section className="section" id="narratives">
         <p className="eyebrow">Most surprising versus own history</p>
+        <p className="lane-empty">
+          Structural themes first, then event narratives, each ranked by attention
+          z-score.
+        </p>
         {dashboard.degraded && !summaryUnavailable ? (
           <p className="lane-empty">
             Evidence previews are temporarily unavailable; the measurements below are
@@ -242,6 +252,111 @@ export default async function HomePage() {
   );
 }
 
+/**
+ * Structural themes lead when one is moving; a week of headlines only takes the
+ * lead card when no structural theme is rising or peaking.
+ */
+function pickLeadNarrative(dashboard: NarrativeHomepageStatus) {
+  const structural = (item: NarrativeHomepageItem) =>
+    (item.kind ?? "structural") === "structural";
+  return (
+    dashboard.lanes.rising.find(structural) ??
+    dashboard.lanes.peaking.find(structural) ??
+    dashboard.lanes.rising[0] ??
+    dashboard.lanes.peaking[0] ??
+    dashboard.narratives[0] ??
+    null
+  );
+}
+
+function StructuralThemes({
+  themes,
+  unavailable
+}: {
+  themes: NarrativeHomepageItem[];
+  unavailable: boolean;
+}) {
+  if (unavailable) {
+    return (
+      <div className="panel">
+        <p className="lane-empty">Unavailable.</p>
+      </div>
+    );
+  }
+  if (themes.length === 0) {
+    return (
+      <div className="panel">
+        <p className="lane-empty">No structural themes are defined yet.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="panel theme-strip">
+      <p className="lane-empty">
+        The long-running propositions the board exists to track, ranked by how unusual
+        this week is against each theme&apos;s own history. Event narratives (headline
+        stories) are listed separately below.
+      </p>
+      <div className="theme-rows">
+        {themes.map((theme) => {
+          const measured =
+            theme.coverageStatus === "measured" || theme.coverageStatus === "measured_zero";
+          return (
+            <Link className="theme-row" href={narrativeDataPath(theme.slug)} key={theme.id}>
+              <div className="theme-row-name">
+                <strong>{theme.name}</strong>
+                <div className="pill-row">
+                  <LifecycleBadge compact state={theme.lifecycleState} />
+                  {hasThinEvidence(theme) ? <ThinEvidencePill compact /> : null}
+                </div>
+              </div>
+              <div className="theme-row-metric">
+                <span>
+                  <MetricTerm term="density">Density</MetricTerm>
+                </span>
+                <strong>{measured ? theme.density.toFixed(1) : "—"}</strong>
+              </div>
+              <div className="theme-row-metric">
+                <span>
+                  <MetricTerm term="change" short />
+                </span>
+                <strong className={!measured ? "" : theme.change >= 0 ? "rising" : "fading"}>
+                  {measured ? signed(theme.change) : "—"}
+                </strong>
+              </div>
+              <div className="theme-row-metric">
+                <span>
+                  <MetricTerm term="zScore" short />
+                </span>
+                <strong>{measured ? theme.zScore.toFixed(1) : "—"}</strong>
+              </div>
+              <div className="theme-row-metric">
+                <span>
+                  <MetricTerm term="uniqueStories" short />
+                </span>
+                <strong>{theme.storyBreadth}</strong>
+              </div>
+              <small className="theme-row-caption">{themeCaption(theme, measured)}</small>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function themeCaption(theme: NarrativeHomepageItem, measured: boolean) {
+  if (theme.coverageStatus === "backfill_pending") return "classification pending";
+  if (theme.coverageStatus === "no_corpus") return "no readable corpus this week";
+  if (!measured) return "unmeasured";
+  if (theme.density <= 0) {
+    return theme.attentionMatchedDocuments > 0
+      ? `no approved coverage · ${theme.attentionMatchedDocuments} awaiting review`
+      : peakSummary(theme) ?? "no approved coverage this week";
+  }
+  return `${theme.publisherOwnerBreadth} publisher ${theme.publisherOwnerBreadth === 1 ? "group" : "groups"} · ${peakSummary(theme) ?? ""}`.replace(/ · $/, "");
+}
+
 function Lane({
   lane,
   items,
@@ -269,11 +384,16 @@ function Lane({
           {items.map((item) => (
             <Link
               className="lane-item"
-              href={`/narratives/${encodeURIComponent(item.slug)}`}
+              href={narrativePath(item.slug)}
               key={item.id}
             >
               <div className="pill-row">
                 <LifecycleBadge compact state={item.lifecycleState} />
+                {(item.kind ?? "structural") === "event" ? (
+                  <span className="pill kind-pill" title="A headline-driven narrative tied to a specific event; expires when the event does.">
+                    event
+                  </span>
+                ) : null}
                 {item.status === "probationary" ? (
                   <span className="pill" title={METRIC_GLOSSARY.probationary.description}>
                     probationary
@@ -422,10 +542,7 @@ function NarrativeCard({
             <Link className="pill" href="/trends">
               Open full trend view
             </Link>
-            <Link
-              className="pill"
-              href={`/narratives/${encodeURIComponent(narrative.slug)}`}
-            >
+            <Link className="pill" href={narrativePath(narrative.slug)}>
               Open live storyboard
             </Link>
           </div>
@@ -452,7 +569,7 @@ function NarrativeCard({
           </span>
           <strong>{narrative.density.toFixed(1)}</strong>
         </div>
-        <Link className="pill" href={`/narratives/${encodeURIComponent(narrative.slug)}/detail`}>
+        <Link className="pill" href={narrativeDataPath(narrative.slug)}>
           Details
         </Link>
       </div>

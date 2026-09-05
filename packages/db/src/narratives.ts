@@ -1729,6 +1729,18 @@ export function compareBySurprise(
   );
 }
 
+/** Structural themes first, then the same surprise ordering within each kind. */
+export function compareByKindThenSurprise(
+  left: Pick<NarrativeTrendSummary, "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind">,
+  right: Pick<NarrativeTrendSummary, "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind">
+) {
+  return kindRank(left.kind) - kindRank(right.kind) || compareBySurprise(left, right);
+}
+
+function kindRank(kind: NarrativeTrendSummary["kind"]) {
+  return (kind ?? "structural") === "structural" ? 0 : 1;
+}
+
 export function buildHomepageLanes(
   narratives: NarrativeHomepageItem[],
   latestDate: string | null,
@@ -1949,6 +1961,9 @@ export async function getNarrativeHomepageStatus(
           item.coverageStatus === "measured" ||
           item.coverageStatus === "measured_zero"
       )
+      .sort(compareByKindThenSurprise);
+    const structuralThemes = narratives
+      .filter((item) => (item.kind ?? "structural") === "structural")
       .sort(compareBySurprise);
 
     return {
@@ -1957,6 +1972,7 @@ export async function getNarrativeHomepageStatus(
       latestDate,
       trackedNarrativeCount,
       narratives: measured,
+      structuralThemes,
       lanes: buildHomepageLanes(narratives, latestDate),
       brief
     };
@@ -2445,6 +2461,7 @@ function emptyNarrativeHomepageStatus(
     latestDate: null,
     trackedNarrativeCount: 0,
     narratives: [],
+    structuralThemes: [],
     lanes: { rising: [], peaking: [], fading: [], emerging: [] },
     brief: null
   };
