@@ -28,12 +28,17 @@ export async function autoReviewBacklog(input: {
     narrativesTouched: number;
   }> = [];
   let approvedObservations = 0;
+  const windowEnds: Date[] = [];
   for (
     let cursor = new Date(input.since);
-    cursor <= until;
+    cursor < until;
     cursor = new Date(cursor.getTime() + stepDays * 86_400_000)
   ) {
-    const windowEnd = cursor > until ? until : cursor;
+    windowEnds.push(cursor);
+  }
+  // Always finish with a window anchored at `until` so the most recent days are covered.
+  windowEnds.push(until);
+  for (const windowEnd of windowEnds) {
     const tiers = [
       { windowEnd, tier: "default" as const },
       ...(structural ? [{ ...structural, windowEnd }] : [])
