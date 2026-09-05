@@ -556,6 +556,7 @@ h3 {
 }
 
 .lane {
+  align-content: start;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 20px;

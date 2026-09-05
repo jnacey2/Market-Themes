@@ -232,15 +232,15 @@ function boardCoverage(narratives: BoardNarrative[]) {
 function levelCaption(narrative: BoardNarrative) {
   if (narrative.coverageStatus === "no_corpus") return "no readable corpus";
   if (narrative.coverageStatus === "backfill_pending") return "classification pending";
-  const attention = `attention ${narrative.attentionDensity.toFixed(1)} · attention z ${narrative.attentionZScore.toFixed(1)}`;
+  const attention = `attention ${narrative.attentionDensity.toFixed(1)} (z ${narrative.attentionZScore.toFixed(1)})`;
   if (narrative.coverageStatus === "measured_zero" || narrative.density <= 0) {
     return narrative.attentionMatchedDocuments > 0
-      ? `no approved coverage this week · ${narrative.attentionMatchedDocuments} matches awaiting review`
+      ? `no approved coverage · ${narrative.attentionMatchedDocuments} awaiting review`
       : "no approved coverage this week";
   }
   return narrative.lowHistory
     ? `${attention} · provisional`
-    : `${narrative.percentileRank}th percentile · ${attention}`;
+    : `${narrative.percentileRank}th pct · ${attention}`;
 }
 
 function movementLabel(narrative: BoardNarrative) {

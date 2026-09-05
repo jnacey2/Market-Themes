@@ -9,7 +9,7 @@ import {
 import { HowToReadLink, MetricTerm } from "./MetricTerm";
 import { NarrativeExplorer } from "./NarrativeExplorer";
 import { METRIC_GLOSSARY } from "../../lib/metric-glossary";
-import { countMeasuredDays } from "../../lib/narrative-history";
+import { activeSpanDays, countMeasuredDays } from "../../lib/narrative-history";
 import { narrativePath } from "../../lib/narrative-paths";
 
 export function NarrativeDataView({ narrative }: { narrative: NarrativeTrendSummary }) {
@@ -17,6 +17,7 @@ export function NarrativeDataView({ narrative }: { narrative: NarrativeTrendSumm
     narrative.coverageStatus === "measured" ||
     narrative.coverageStatus === "measured_zero";
   const measuredDays = countMeasuredDays(narrative.history);
+  const activeDays = activeSpanDays(narrative.history);
   return (
     <div className="shell wide-shell">
       <nav className="context-nav" aria-label="Narrative views">
@@ -129,10 +130,11 @@ export function NarrativeDataView({ narrative }: { narrative: NarrativeTrendSumm
 
       <section className="panel">
         <p className="eyebrow">Density vs historical baseline</p>
-        {measuredDays < 30 ? (
+        {activeDays < 30 ? (
           <p className="lane-empty">
-            {measuredDays} {measuredDays === 1 ? "day" : "days"} of measured history so far;
-            longer ranges will fill in as the narrative ages.
+            {activeDays === 0
+              ? `No approved or pending evidence yet across ${measuredDays} measured ${measuredDays === 1 ? "day" : "days"}.`
+              : `Evidence spans the last ${activeDays} ${activeDays === 1 ? "day" : "days"} of ${measuredDays} measured; the chart opens on the shortest range that shows it.`}
           </p>
         ) : null}
         <NarrativeExplorer narrative={narrative} />
