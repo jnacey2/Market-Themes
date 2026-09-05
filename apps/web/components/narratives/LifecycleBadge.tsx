@@ -21,7 +21,7 @@ export const LIFECYCLE_DESCRIPTIONS: Record<NarrativeLifecycleState, string> = {
   peaking:
     "Reviewed density is within 15% of its 90-day high and no longer accelerating, with at least three unique stories from two publisher groups.",
   steady: "Reviewed density is inside its normal range, or the week has too little independent evidence to call a move.",
-  fading: "Reviewed density has fallen below half of its 90-day peak or declined in consecutive windows."
+  fading: "Reviewed density has declined in consecutive windows, or sits below half of its 90-day peak without currently recovering."
 };
 
 export function LifecycleBadge({

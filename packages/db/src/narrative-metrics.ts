@@ -243,10 +243,14 @@ export function deriveLifecycleState(
     input.peakDensity > 0 ? (input.density / input.peakDensity) * 100 : 0;
   const pastPeak =
     input.daysSincePeak !== null && input.daysSincePeak >= input.windowDays;
+  // Well past the peak and below half of it reads as fading, unless the window
+  // is currently moving up by more than noise: a theme re-emerging from a trough
+  // is rising, not still fading from a peak it left weeks ago.
+  const recovering = input.change > noise;
   if (
     zeroNow ||
     (input.change <= -noise && input.previousChange <= 0) ||
-    (pastPeak && percentOfPeak < 50)
+    (pastPeak && percentOfPeak < 50 && !recovering)
   ) {
     return "fading";
   }

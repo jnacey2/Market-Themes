@@ -184,6 +184,23 @@ test("lifecycle state transitions follow peak and change rules", () => {
     deriveLifecycleState({ ...base, density: 3, change: 0.1, daysSincePeak: 20 }),
     "fading"
   );
+  // Re-emerging from a trough well past the old peak is rising, not fading.
+  assert.equal(
+    deriveLifecycleState({ ...base, density: 4, change: 1.5, daysSincePeak: 44 }),
+    "rising"
+  );
+  assert.equal(
+    deriveLifecycleState({
+      ...base,
+      density: 4,
+      change: 1.5,
+      daysSincePeak: 44,
+      storyBreadth: 1,
+      publisherOwnerBreadth: 1
+    }),
+    "steady",
+    "recovery on thin evidence is steady, still not fading"
+  );
   assert.equal(deriveLifecycleState({ ...base, density: 10, change: 6 }), "rising");
   assert.equal(deriveLifecycleState({ ...base, density: 9.5, change: 0.2 }), "peaking");
   assert.equal(
