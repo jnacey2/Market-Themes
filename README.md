@@ -896,7 +896,20 @@ The blueprint defines:
 - `discover-narratives`: hourly batched new-proposition candidate discovery.
 - `poll-anthropic-batches`: ten-minute reconciliation and result persistence.
 - `auto-review-narratives`: twice-hourly conservative evidence approval and
-  guarded candidate promotion.
+  guarded candidate promotion. Two approval tiers run: the default gate
+  (`NARRATIVE_AUTO_REVIEW_MIN_SCORE=90`, 2 stories from 2 publisher groups
+  within 7 days) for every definition, then a structural tier
+  (`NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_SCORE=70`, `_MIN_DOCUMENTS=2`,
+  `_MIN_PUBLISHER_OWNERS=2`, `_LOOKBACK_DAYS=14`; set
+  `NARRATIVE_AUTO_REVIEW_STRUCTURAL_ENABLED=false` to disable) for structural
+  definitions only, whose evidence matches more diffusely than a headline event.
+  70 is the classifier's own floor for a match (every match has already passed
+  the inclusion/exclusion contract audit), so in this tier corroboration across
+  independent publisher groups is the quality gate rather than the score.
+  Both tiers anchor their corroboration window at "now", so evidence classified
+  long after publication (definition backfills) never qualifies on its own; run
+  `AUTO_REVIEW_BACKLOG_SINCE=YYYY-MM-DD npm run narratives:auto-review-backlog --workspace @market-themes/workers`
+  once after a backfill to step the window through history.
 - `recompute-narrative-trends`: twice-hourly publication of approved evidence.
 
 Deployment steps:

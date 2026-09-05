@@ -567,6 +567,14 @@ services:
         value: "7"
       - key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS
         value: youtube,youtube-com,youtube.com,youtu.be
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_SCORE
+        value: "70"
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_DOCUMENTS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_PUBLISHER_OWNERS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_LOOKBACK_DAYS
+        value: "14"
       - key: NARRATIVE_AUTO_PROMOTE_CANDIDATES
         value: "true"
       - key: NARRATIVE_AUTO_PROMOTE_MIN_SCORE
