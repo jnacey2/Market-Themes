@@ -1,6 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { authNotConfiguredHtml, authRequiredHtml } from "./lib/auth-wall";
 import { PROTECTED_PATHS } from "./lib/navigation";
 import { isAuthorized } from "./lib/ops-auth";
+
+const HTML_HEADERS = { "Content-Type": "text/html; charset=utf-8" };
 
 export function proxy(request: NextRequest) {
   if (!PROTECTED_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {
@@ -15,17 +18,32 @@ export function proxy(request: NextRequest) {
       return NextResponse.next();
     }
 
-    return new NextResponse("Operational authentication is not configured.", { status: 503 });
+    return new NextResponse(
+      wantsHtml(request) ? authNotConfiguredHtml() : "Operational authentication is not configured.",
+      { status: 503, headers: wantsHtml(request) ? HTML_HEADERS : undefined }
+    );
   }
 
   if (isAuthorized(request.headers.get("authorization"), username, password)) {
     return NextResponse.next();
   }
 
-  return new NextResponse("Authentication required.", {
-    status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="Market Themes Operations"' }
-  });
+  return new NextResponse(
+    wantsHtml(request) ? authRequiredHtml(request.nextUrl.pathname) : "Authentication required.",
+    {
+      status: 401,
+      headers: {
+        "WWW-Authenticate": 'Basic realm="Market Themes Operations"',
+        ...(wantsHtml(request) ? HTML_HEADERS : {})
+      }
+    }
+  );
+}
+
+/** Browsers navigating to a page get the styled wall; API clients keep the plain text. */
+function wantsHtml(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/api/")) return false;
+  return request.headers.get("accept")?.includes("text/html") ?? false;
 }
 
 export const config = {
