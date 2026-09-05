@@ -665,6 +665,8 @@ SEC_BACKFILL_MONTHS=12
 SEC_BACKFILL_BATCH_SIZE=10
 SEC_BACKFILL_BATCH_INDEX=0
 SEC_RATE_LIMIT_MS=220
+# Per-request timeout for EDGAR fetches; a stalled connection otherwise hangs the poll.
+SEC_REQUEST_TIMEOUT_MS=60000
 SEC_INCLUDE_CORE_FORMS=true
 # Set false to limit core forms to periodic reports (10-K, 10-Q) for text-only backfills.
 SEC_INCLUDE_8K_FORMS=true

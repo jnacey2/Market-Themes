@@ -212,7 +212,18 @@ export async function fetchSecFilings({
 
     for (const filing of filings) {
       await sleep(rateLimitMs);
-      const body = await fetchFilingText(filing.archiveUrl, userAgent);
+      let body: string;
+      try {
+        body = await fetchFilingText(filing.archiveUrl, userAgent);
+      } catch (error) {
+        // One unreachable filing should not abandon the rest of the batch.
+        console.warn(
+          `[sec] skipping ${filing.form} ${filing.accessionNumber} for ${filing.ticker}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        continue;
+      }
 
       if (!body.trim()) {
         continue;
@@ -225,13 +236,19 @@ export async function fetchSecFilings({
 
         for (const exhibit of exhibits) {
           await sleep(rateLimitMs);
-          const exhibitBody = await fetchFilingText(exhibit.archiveUrl, userAgent);
-
-          if (!exhibitBody.trim()) {
-            continue;
+          try {
+            const exhibitBody = await fetchFilingText(exhibit.archiveUrl, userAgent);
+            if (!exhibitBody.trim()) {
+              continue;
+            }
+            documents.push(toPersistableDocument(exhibit, exhibitBody));
+          } catch (error) {
+            console.warn(
+              `[sec] skipping exhibit ${exhibit.accessionNumber} for ${exhibit.ticker}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
           }
-
-          documents.push(toPersistableDocument(exhibit, exhibitBody));
         }
       }
     }
@@ -373,17 +390,27 @@ async function fetchFilingText(url: string, userAgent: string) {
   return normalizeFilingText(text);
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+function requestTimeoutMs() {
+  const parsed = Number(process.env.SEC_REQUEST_TIMEOUT_MS ?? DEFAULT_REQUEST_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
 async function secFetch(url: string, userAgent: string, attempts = 3): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      // A stalled EDGAR connection otherwise hangs the whole poll: fetch has no
+      // default timeout, and the signal also aborts a stalled body read.
       const response = await fetch(url, {
         headers: {
           "User-Agent": userAgent,
           Accept: "application/json,text/html,text/plain,*/*",
           "Accept-Encoding": "gzip, deflate, br"
-        }
+        },
+        signal: AbortSignal.timeout(requestTimeoutMs())
       });
 
       if (response.ok) {
