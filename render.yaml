@@ -581,6 +581,10 @@ services:
         value: "90"
       - key: NARRATIVE_AUTO_PROMOTE_MIN_DOCUMENTS
         value: "3"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_SPAN_DAYS
+        value: "7"
+      - key: NARRATIVE_AUTO_PROMOTE_ATTACH_MIN_SHARE
+        value: "0.5"
       - key: NARRATIVE_AUTO_PROMOTE_MIN_PUBLISHER_OWNERS
         value: "3"
       - key: NARRATIVE_AUTO_PROMOTE_LOOKBACK_DAYS

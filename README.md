@@ -910,6 +910,15 @@ The blueprint defines:
   long after publication (definition backfills) never qualifies on its own; run
   `AUTO_REVIEW_BACKLOG_SINCE=YYYY-MM-DD npm run narratives:auto-review-backlog --workspace @market-themes/workers`
   once after a backfill to step the window through history.
+  Automatic candidate promotion additionally requires persistence: a
+  candidate's qualifying evidence must span at least
+  `NARRATIVE_AUTO_PROMOTE_MIN_SPAN_DAYS` (default 7; 0 disables) days, or a
+  structural theme must already match at least
+  `NARRATIVE_AUTO_PROMOTE_ATTACH_MIN_SHARE` (default 0.5) of its documents, in
+  which case an event candidate is promoted as that theme's child
+  (`parent_definition_id`) and nests under it on the board. Bursts that pass
+  breadth but not persistence stay pending without a validation call and are
+  re-evaluated when new evidence arrives.
 - `recompute-narrative-trends`: twice-hourly publication of approved evidence.
 
 Deployment steps:

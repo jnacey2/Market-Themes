@@ -163,7 +163,7 @@ export default async function TrendsPage({
               <div key={group.key}>
                 <p className="board-group-label">
                   {group.parentName
-                    ? `${group.parentName} · family`
+                    ? `Under ${group.parentName}`
                     : "Standalone events (no structural parent)"}
                 </p>
                 <section
@@ -233,7 +233,7 @@ function BoardRow({ narrative, child = false }: { narrative: BoardNarrative; chi
       <div className="current-name">
         <span className="label">
           {narrative.parentName
-            ? `${narrative.dimension ?? "dimension"}`
+            ? narrative.dimension ?? narrative.eventLabel ?? narrative.category
             : `${narrative.category} · ${narrative.kind ?? "structural"}`}
           {narrative.status === "probationary" ? " · probationary" : ""}
         </span>
