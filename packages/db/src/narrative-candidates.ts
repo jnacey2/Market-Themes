@@ -1147,6 +1147,8 @@ export type NarrativeCandidateAutoPromotionOptions = {
   evidenceWindowDays?: number;
   excludedPublisherOwners?: string[];
   limit?: number;
+  /** Defaults to the env-driven policy; tests pass `minimumSpanDays: 0` to exercise promotion alone. */
+  persistencePolicy?: CandidatePersistencePolicy;
   validateCandidate?: (
     input: CandidatePromotionValidationInput
   ) => Promise<CandidatePromotionValidation>;
@@ -1358,7 +1360,8 @@ export async function autoPromoteNarrativeCandidates(
         5
       )
     );
-  const persistencePolicy = resolveCandidatePersistencePolicy();
+  const persistencePolicy =
+    options.persistencePolicy ?? resolveCandidatePersistencePolicy();
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   let candidates: Array<{ id: string }>;
