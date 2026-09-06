@@ -7,6 +7,7 @@ import {
   finishPipelineRun,
   getActiveNarrativeDefinitions,
   getNarrativeReviewQueue,
+  listRecentlyObservedEvidenceWindows,
   persistDocuments,
   persistNarrativeObservations,
   reviewNarrativeObservation,
@@ -371,6 +372,162 @@ test(
     } finally {
       await eventClient.end();
     }
+  }
+);
+
+test(
+  "recently observed evidence published months ago is re-anchored on its own publish day",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const suffix = randomUUID();
+    context.after(() => cleanup(suffix));
+    const model = `auto-review-model:${suffix}`;
+    const promptVersion = `auto-review-prompt:${suffix}`;
+    const definitions = await getActiveNarrativeDefinitions();
+    const pricingPower = definitions.find((definition) => definition.slug === "pricing-power");
+    assert(pricingPower);
+
+    // Two corroborating stories from the same week roughly 90 days ago, plus one
+    // isolated story 60 days ago: the pair should approve once judged against its
+    // own week; the loner has no neighbour in any window.
+    const day = 24 * 60 * 60 * 1_000;
+    const weekAgo90 = new Date(Date.now() - 90 * day);
+    const fixtures = [
+      fixture("old-a", "Publisher A", `owner-a:${suffix}`, 95, pricingPower.id, {
+        publishedAt: weekAgo90.toISOString()
+      }),
+      fixture("old-b", "Publisher B", `owner-b:${suffix}`, 93, pricingPower.id, {
+        publishedAt: new Date(weekAgo90.getTime() - 2 * day).toISOString()
+      }),
+      fixture("lonely", "Publisher C", `owner-c:${suffix}`, 97, pricingPower.id, {
+        publishedAt: new Date(Date.now() - 60 * day).toISOString()
+      })
+    ];
+    for (const item of fixtures) {
+      await persistDocuments([
+        {
+          id: `${item.key}:${suffix}`,
+          sourceId: `auto-review-source:${item.key}:${suffix}`,
+          sourceClass: "filing",
+          title: `Backfilled evidence ${item.key} ${suffix}`,
+          publisher: item.publisher,
+          publisherId: item.publisher.toLowerCase().replaceAll(" ", "-"),
+          publisherOwner: item.publisherOwner,
+          url: `https://example.com/auto-review/${item.key}/${suffix}`,
+          publishedAt: item.publishedAt,
+          tickers: [],
+          summary: "Backfilled narrative review integration evidence.",
+          body: item.quote,
+          retrievalMethod: "api",
+          retentionPolicy: "full_text",
+          metadata: {}
+        }
+      ]);
+    }
+    await persistNarrativeObservations(
+      fixtures.map((item) => ({
+        id: `auto-review-observation:${item.key}:${suffix}`,
+        narrativeDefinitionId: item.definitionId,
+        documentId: `${item.key}:${suffix}`,
+        matched: true,
+        matchScore: item.score,
+        stance: "bullish",
+        riskTone: 10,
+        bullishTone: 80,
+        evidenceSnippet: item.quote,
+        interpretation: "The exact quotation supports the tracked proposition.",
+        affectedEntities: ["Integration"],
+        model,
+        promptVersion,
+        metadata: {
+          contractValidation: {
+            satisfied: true,
+            inclusionCriteriaSatisfied: ["Integration fixture"],
+            exclusionCriteriaTriggered: []
+          }
+        }
+      }))
+    );
+
+    // The now-anchored pass sees nothing: everything was published long ago.
+    const nowAnchored = await autoApproveNarrativeObservations({
+      model,
+      promptVersion,
+      minimumMatchScore: 90,
+      minimumDocuments: 2,
+      minimumPublisherOwners: 2,
+      lookbackDays: 7
+    });
+    assert.equal(nowAnchored.approvedObservations, 0);
+
+    const windows = await listRecentlyObservedEvidenceWindows({
+      recentHours: 24,
+      excludeWithinDays: 7,
+      model,
+      promptVersion
+    });
+    // One window per distinct publish day, oldest first, each ending at the
+    // close of that UTC day.
+    assert.equal(windows.length, 3);
+    for (const windowEnd of windows) {
+      assert.equal(windowEnd.getUTCHours(), 0);
+      assert.equal(windowEnd.getUTCMinutes(), 0);
+    }
+    assert.ok(windows[0] < windows[1] && windows[1] < windows[2]);
+    assert.equal(
+      windows[1].getTime() - windows[0].getTime(),
+      2 * day,
+      "old-b's day precedes old-a's by two days; the lonely story's day is last"
+    );
+    assert.deepEqual(
+      await listRecentlyObservedEvidenceWindows({
+        recentHours: 24,
+        excludeWithinDays: 7,
+        maxWindows: 1,
+        model,
+        promptVersion
+      }),
+      [windows[2]],
+      "the cap keeps the most recent days"
+    );
+    assert.deepEqual(
+      await listRecentlyObservedEvidenceWindows({
+        recentHours: 0,
+        excludeWithinDays: 7,
+        model,
+        promptVersion
+      }),
+      [],
+      "zero hours disables the sweep"
+    );
+
+    let approved = 0;
+    for (const windowEnd of windows) {
+      const pass = await autoApproveNarrativeObservations({
+        model,
+        promptVersion,
+        minimumMatchScore: 90,
+        minimumDocuments: 2,
+        minimumPublisherOwners: 2,
+        lookbackDays: 7,
+        windowEnd
+      });
+      approved += pass.approvedObservations;
+    }
+    assert.equal(approved, 2);
+    const queue = await getNarrativeReviewQueue(process.env.DATABASE_URL, promptVersion);
+    assert.equal(status(queue, `auto-review-observation:old-a:${suffix}`), "approved");
+    assert.equal(status(queue, `auto-review-observation:old-b:${suffix}`), "approved");
+    assert.equal(status(queue, `auto-review-observation:lonely:${suffix}`), "pending");
+
+    // Once approved, the pair no longer surfaces a window to sweep.
+    const remaining = await listRecentlyObservedEvidenceWindows({
+      recentHours: 24,
+      excludeWithinDays: 7,
+      model,
+      promptVersion
+    });
+    assert.equal(remaining.length, 1, "only the lonely story's day remains pending");
   }
 );
 

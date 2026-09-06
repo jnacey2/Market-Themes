@@ -69,6 +69,19 @@ export const MINIMUM_BASELINE_SCALE = 0.5;
 export const PEAK_LOOKBACK_DAYS = 90;
 /** Fewer than this many baseline windows always counts as low history. */
 export const MINIMUM_BASELINE_WINDOWS = 3;
+/**
+ * Windows whose eligible corpus is smaller than this are excluded from
+ * baselines and peaks. One story in a 30-document week reads as 3% density and
+ * would otherwise set the bar for weeks with thousands of documents.
+ */
+export const DEFAULT_BASELINE_MIN_CORPUS_DOCUMENTS = 100;
+
+export function resolveBaselineCorpusFloor(env: NodeJS.ProcessEnv = process.env) {
+  const parsed = Number.parseInt(env.NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS ?? "", 10);
+  return Number.isInteger(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_BASELINE_MIN_CORPUS_DOCUMENTS;
+}
 
 export function calculateNarrativeTrendSeries(
   observations: NarrativeMetricObservation[],
@@ -79,7 +92,8 @@ export function calculateNarrativeTrendSeries(
     date: row.date,
     documentId: row.documentId,
     sourceClass: row.sourceClass
-  }))
+  })),
+  options: { baselineCorpusFloor?: number } = {}
 ): NarrativeMetricPoint[] {
   const observationsByDate = groupBy(observations, (row) => row.date);
   const corpusByDate = groupBy(corpusDocuments, (row) => row.date);
@@ -93,12 +107,13 @@ export function calculateNarrativeTrendSeries(
   );
   const windows = daily.map((_, index) => summarizeWindow(daily, index, windowDays));
   const breadthPolicy = resolveLifecycleBreadthPolicy();
+  const corpusFloor = options.baselineCorpusFloor ?? resolveBaselineCorpusFloor();
 
   return daily.map((_, index) => {
     const current = windows[index];
     const previous = summarizeWindow(daily, index - windowDays, windowDays);
     const prior = summarizeWindow(daily, index - windowDays * 2, windowDays);
-    const baseline = collectBaseline(windows, index, windowDays, stride);
+    const baseline = collectBaseline(windows, index, windowDays, stride, corpusFloor);
     const hasCoverage = isMeasured(current.coverageState);
     const enoughBaseline = baseline.density.length >= 2;
     const lowHistory = !hasCoverage || baseline.density.length < minimumWindows;
@@ -114,7 +129,7 @@ export function calculateNarrativeTrendSeries(
       isMeasured(previous.coverageState) && isMeasured(prior.coverageState)
         ? previous.density - prior.density
         : 0;
-    const peak = locatePeak(windows, dates, index, hasCoverage);
+    const peak = locatePeak(windows, dates, index, hasCoverage, corpusFloor);
     const percentOfPeak =
       hasCoverage && peak.density > 0
         ? round((current.density / peak.density) * 100)
@@ -282,6 +297,47 @@ export function baselineStride(windowDays: number) {
 
 type DailySummary = ReturnType<typeof dailySummary>;
 
+type SourceClassStats = {
+  eligible: Set<string>;
+  matched: Set<string>;
+  /** Sum of confidence-weighted raw matches, deduplicated by document. */
+  attentionWeight: number;
+};
+
+/**
+ * Share of eligible documents matching, per source class, combined with
+ * log-volume weights so a high-volume feed cannot dominate and a one-document
+ * class cannot swing the result. Multiple days pool their documents per class.
+ */
+function pooledDensity(days: Array<Map<string, SourceClassStats>>) {
+  const byClass = new Map<string, SourceClassStats>();
+  for (const day of days) {
+    for (const [sourceClass, stats] of day) {
+      const merged = byClass.get(sourceClass) ?? {
+        eligible: new Set<string>(),
+        matched: new Set<string>(),
+        attentionWeight: 0
+      };
+      for (const id of stats.eligible) merged.eligible.add(id);
+      for (const id of stats.matched) merged.matched.add(id);
+      merged.attentionWeight += stats.attentionWeight;
+      byClass.set(sourceClass, merged);
+    }
+  }
+  const classDensities = [...byClass.values()].map((stats) => {
+    const eligible = stats.eligible.size;
+    return {
+      weight: Math.log1p(eligible),
+      density: eligible === 0 ? 0 : (stats.matched.size / eligible) * 100,
+      attention: eligible === 0 ? 0 : (stats.attentionWeight / eligible) * 100
+    };
+  });
+  return {
+    density: weightedAverage(classDensities.map((row) => [row.density, row.weight])),
+    attentionDensity: weightedAverage(classDensities.map((row) => [row.attention, row.weight]))
+  };
+}
+
 function dailySummary(
   rows: NarrativeMetricObservation[],
   corpusRows: NarrativeCorpusDocument[],
@@ -294,29 +350,25 @@ function dailySummary(
   const rawMatchedRows = rows.filter((row) => row.rawMatched ?? row.matched);
   const rawMatched = new Set(rawMatchedRows.map((row) => row.documentId));
   const bySourceClass = groupBy(rows, (row) => row.sourceClass);
-  const classDensities = [...bySourceClass.values()].map((sourceRows) => {
-    const sourceEligible = new Set(sourceRows.map((row) => row.documentId)).size;
-    const sourceMatched = new Set(
-      sourceRows.filter((row) => row.matched).map((row) => row.documentId)
-    ).size;
-    const attentionWeight = sum(
-      dedupeByDocument(sourceRows.filter((row) => row.rawMatched ?? row.matched)).map(
-        (row) => Math.min(Math.max(row.matchScore, 0), 100) / 100
+  const classStats = new Map<string, SourceClassStats>();
+  for (const [sourceClass, sourceRows] of bySourceClass) {
+    classStats.set(sourceClass, {
+      eligible: new Set(sourceRows.map((row) => row.documentId)),
+      matched: new Set(sourceRows.filter((row) => row.matched).map((row) => row.documentId)),
+      attentionWeight: sum(
+        dedupeByDocument(sourceRows.filter((row) => row.rawMatched ?? row.matched)).map(
+          (row) => Math.min(Math.max(row.matchScore, 0), 100) / 100
+        )
       )
-    );
-    return {
-      weight: Math.log1p(sourceEligible),
-      density: sourceEligible === 0 ? 0 : (sourceMatched / sourceEligible) * 100,
-      attention: sourceEligible === 0 ? 0 : (attentionWeight / sourceEligible) * 100
-    };
-  });
+    });
+  }
+  const pooled = pooledDensity([classStats]);
 
   return {
     date,
-    density: weightedAverage(classDensities.map((row) => [row.density, row.weight])),
-    attentionDensity: weightedAverage(
-      classDensities.map((row) => [row.attention, row.weight])
-    ),
+    density: pooled.density,
+    attentionDensity: pooled.attentionDensity,
+    classStats,
     riskTone: average(matchedRows.map((row) => row.riskTone)),
     bullishTone: average(matchedRows.map((row) => row.bullishTone)),
     eligibleDocuments: eligible.size,
@@ -346,9 +398,13 @@ function summarizeWindow(daily: DailySummary[], endIndex: number, windowDays: nu
     classifiedDocuments: classifiedDocumentIds.size,
     matchedDocuments: matchedDocumentIds.size
   });
+  // Density is pooled over the window's documents rather than averaged across
+  // days, so a 3-document day cannot count as much as a 500-document day. A thin
+  // week still reads high, which is what the baseline corpus floor is for.
+  const pooled = pooledDensity(rows.map((row) => row.classStats));
   return {
-    density: average(rows.map((row) => row.density)),
-    attentionDensity: average(rows.map((row) => row.attentionDensity)),
+    density: pooled.density,
+    attentionDensity: pooled.attentionDensity,
     riskTone: average(rows.map((row) => row.riskTone).filter((value) => value > 0)),
     bullishTone: average(rows.map((row) => row.bullishTone).filter((value) => value > 0)),
     eligibleDocuments: classifiedDocumentIds.size,
@@ -376,13 +432,14 @@ function collectBaseline(
   windows: WindowSummary[],
   index: number,
   windowDays: number,
-  stride: number
+  stride: number,
+  corpusFloor = 0
 ) {
   const density: number[] = [];
   const attention: number[] = [];
   for (let end = index - windowDays; end >= windowDays - 1; end -= stride) {
     const window = windows[end];
-    if (isMeasured(window.coverageState)) {
+    if (isMeasured(window.coverageState) && hasBaselineCorpus(window, corpusFloor)) {
       density.push(window.density);
       attention.push(window.attentionDensity);
     }
@@ -390,11 +447,17 @@ function collectBaseline(
   return { density, attention };
 }
 
+/** The current window always counts; the floor only filters history. */
+function hasBaselineCorpus(window: WindowSummary, corpusFloor: number) {
+  return window.corpusEligibleDocuments >= corpusFloor;
+}
+
 function locatePeak(
   windows: WindowSummary[],
   dates: string[],
   index: number,
-  hasCoverage: boolean
+  hasCoverage: boolean,
+  corpusFloor = 0
 ) {
   if (!hasCoverage) return { density: 0, date: null, daysSincePeak: null };
   let peakDensity = -1;
@@ -402,6 +465,7 @@ function locatePeak(
   for (let cursor = index; cursor >= Math.max(0, index - PEAK_LOOKBACK_DAYS + 1); cursor -= 1) {
     const window = windows[cursor];
     if (!isMeasured(window.coverageState)) continue;
+    if (cursor !== index && !hasBaselineCorpus(window, corpusFloor)) continue;
     if (window.density > peakDensity) {
       peakDensity = window.density;
       peakIndex = cursor;

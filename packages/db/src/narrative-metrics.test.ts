@@ -8,9 +8,13 @@ import {
   isThinEvidence,
   resolveCoverageMeasuredPercent,
   resolveLifecycleBreadthPolicy,
+  resolveBaselineCorpusFloor,
   robustScale,
   type NarrativeMetricObservation
 } from "./narrative-metrics";
+
+/** Synthetic series use a handful of documents per day, far below the production corpus floor. */
+const SYNTHETIC_CORPUS = { baselineCorpusFloor: 0 };
 
 test("normalizes density by eligible corpus within each source class, weighting classes by log volume", () => {
   const rows: NarrativeMetricObservation[] = [
@@ -85,7 +89,7 @@ test("a measured zero after a sustained baseline produces a negative z-score and
     rows.push({ ...observation(`${date}:a`, "newspaper", index < 22, "P", "O"), date });
     rows.push({ ...observation(`${date}:b`, "newspaper", false, "Q", "R"), date });
   }
-  const points = calculateNarrativeTrendSeries(rows, dates, 7, 14);
+  const points = calculateNarrativeTrendSeries(rows, dates, 7, 14, undefined, SYNTHETIC_CORPUS);
   const last = points.at(-1)!;
 
   assert.equal(last.matchedDocuments, 0);
@@ -109,7 +113,7 @@ test("a fresh burst after a flat history is rising, not silenced by the minimum 
       rows.push({ ...observation(`${date}:${doc}`, "newspaper", matched, `P${doc}`, `O${doc}`), date });
     }
   }
-  const points = calculateNarrativeTrendSeries(rows, dates, 7, 14);
+  const points = calculateNarrativeTrendSeries(rows, dates, 7, 14, undefined, SYNTHETIC_CORPUS);
   const last = points.at(-1)!;
 
   assert.equal(last.lowHistory, false);
@@ -118,6 +122,38 @@ test("a fresh burst after a flat history is rising, not silenced by the minimum 
   assert.equal(last.lifecycleState, "rising");
   assert.equal(last.percentOfPeak, 100);
   assert.equal(last.daysSincePeak, 0);
+});
+
+test("thin-corpus windows are excluded from the baseline and the peak", () => {
+  const dates = enumerate("2026-01-01", 40);
+  const rows: NarrativeMetricObservation[] = [];
+  for (const [index, date] of dates.entries()) {
+    // Days 10-16: a 3-document corpus with one match (33% density). Every other day:
+    // 20 documents with one match (5%). The last week: 20 documents, 3 matches (15%).
+    const thin = index >= 10 && index < 17;
+    const documents = thin ? 3 : 20;
+    for (let doc = 0; doc < documents; doc += 1) {
+      const matched = index >= 33 ? doc < 3 : doc < 1;
+      rows.push({ ...observation(`${date}:${doc}`, "newspaper", matched, `P${doc}`, `O${doc}`), date });
+    }
+  }
+  const unfiltered = calculateNarrativeTrendSeries(rows, dates, 7, 14, undefined, SYNTHETIC_CORPUS).at(-1)!;
+  const filtered = calculateNarrativeTrendSeries(rows, dates, 7, 14, undefined, {
+    baselineCorpusFloor: 50
+  }).at(-1)!;
+
+  assert.ok(unfiltered.peakDensity > filtered.peakDensity, "the thin week set the unfiltered peak");
+  assert.equal(filtered.percentOfPeak, 100, "the current week is the peak once thin windows are ignored");
+  assert.ok(filtered.zScore > unfiltered.zScore, "thin windows inflated the unfiltered baseline");
+  assert.ok(filtered.baselineWindows < unfiltered.baselineWindows);
+  assert.equal(filtered.lifecycleState, "rising");
+});
+
+test("baseline corpus floor reads its env with a production default", () => {
+  assert.equal(resolveBaselineCorpusFloor({}), 100);
+  assert.equal(resolveBaselineCorpusFloor({ NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS: "0" }), 0);
+  assert.equal(resolveBaselineCorpusFloor({ NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS: "250" }), 250);
+  assert.equal(resolveBaselineCorpusFloor({ NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS: "nope" }), 100);
 });
 
 test("raw attention counts pending classifier matches that reviewed density excludes", () => {
@@ -301,7 +337,7 @@ test("a single-publisher series does not open as peaking", () => {
       rows.push({ ...observation(`${date}:${doc}`, "newspaper", matched, "P", "O"), date });
     }
   }
-  const last = calculateNarrativeTrendSeries(rows, dates, 7, 14).at(-1)!;
+  const last = calculateNarrativeTrendSeries(rows, dates, 7, 14, undefined, SYNTHETIC_CORPUS).at(-1)!;
   assert.equal(last.publisherOwnerBreadth, 1);
   assert.ok(last.zScore > 3);
   assert.equal(last.lifecycleState, "steady");

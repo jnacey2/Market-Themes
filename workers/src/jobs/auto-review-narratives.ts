@@ -3,10 +3,37 @@ import { validateCandidateForPromotion } from "@market-themes/analysis";
 import {
   autoApproveNarrativeObservations,
   autoPromoteNarrativeCandidates,
+  listRecentlyObservedEvidenceWindows,
   reconcileNarrativeDefinitionLifecycle,
+  resolveRecentObservationHours,
   resolveStructuralAutoReviewOptions
 } from "@market-themes/db";
+import { autoReviewWindows } from "./auto-review-backlog";
 import { runRecordedJob } from "./recorded-job";
+
+const DEFAULT_LOOKBACK_DAYS = 7;
+
+/**
+ * Evidence classified in the last day but published weeks or months ago (a
+ * definition backfill, or filings and transcripts that arrive late) has no
+ * corroborating neighbours in the now-anchored window. Re-run the tiers with
+ * the window anchored at each such evidence week so history reviews itself as
+ * it arrives, without a manual backlog pass.
+ */
+export async function autoReviewRecentlyObservedHistory(
+  structural = resolveStructuralAutoReviewOptions()
+) {
+  const recentHours = resolveRecentObservationHours();
+  const lookbackDays = Number(
+    process.env.NARRATIVE_AUTO_REVIEW_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS
+  );
+  const windowEnds = await listRecentlyObservedEvidenceWindows({
+    recentHours,
+    excludeWithinDays: Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS
+  });
+  const result = await autoReviewWindows(windowEnds, structural);
+  return { recentHours, ...result };
+}
 
 export async function autoReviewNarratives() {
   if (process.env.NARRATIVE_AUTO_REVIEW_ENABLED !== "true") {
@@ -27,6 +54,7 @@ export async function autoReviewNarratives() {
   const structuralResult = structuralOptions
     ? await autoApproveNarrativeObservations(structuralOptions)
     : null;
+  const historical = await autoReviewRecentlyObservedHistory(structuralOptions);
   const candidateResult =
     process.env.NARRATIVE_AUTO_PROMOTE_CANDIDATES === "true"
       ? await autoPromoteNarrativeCandidates({
@@ -48,7 +76,9 @@ export async function autoReviewNarratives() {
     enabled: true,
     ...result,
     approvedObservations:
-      result.approvedObservations + (structuralResult?.approvedObservations ?? 0),
+      result.approvedObservations +
+      (structuralResult?.approvedObservations ?? 0) +
+      historical.approvedObservations,
     structuralTier: structuralResult
       ? {
           approvedObservations: structuralResult.approvedObservations,
@@ -56,6 +86,7 @@ export async function autoReviewNarratives() {
           reviewNote: structuralResult.reviewNote
         }
       : null,
+    historicalWindows: historical,
     candidatesEvaluated: candidateResult.candidatesEvaluated,
     candidatesPromoted: candidateResult.candidatesPromoted,
     candidatesBlocked: candidateResult.candidatesBlocked,
