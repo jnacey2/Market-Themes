@@ -575,6 +575,13 @@ services:
         value: "2"
       - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_LOOKBACK_DAYS
         value: "14"
+      # Evidence classified in the last day but published earlier than the
+      # now-anchored window is re-judged with the window anchored at its own
+      # publish day, so backfills review themselves as they arrive.
+      - key: NARRATIVE_AUTO_REVIEW_RECENT_OBSERVATION_HOURS
+        value: "24"
+      - key: NARRATIVE_AUTO_REVIEW_MAX_HISTORICAL_WINDOWS
+        value: "120"
       - key: NARRATIVE_AUTO_PROMOTE_CANDIDATES
         value: "true"
       - key: NARRATIVE_AUTO_PROMOTE_MIN_SCORE
@@ -639,6 +646,11 @@ services:
         value: "365"
       - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
         value: "14"
+      # Windows whose eligible corpus is thinner than this are left out of
+      # baselines and peaks: one story in a 30-document backfill week reads as 3%
+      # density and would set the bar for weeks with thousands of documents.
+      - key: NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS
+        value: "100"
       # poll-sources inserts at :00/:30, classification claims at :05, and this
       # job runs at :25/:55, so the :55 recompute always sees the :30 documents
       # unclassified. 98% of a ~5,000-document window tolerates ~1.5 hours of

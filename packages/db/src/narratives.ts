@@ -970,6 +970,84 @@ export function resolveStructuralAutoReviewOptions(
   };
 }
 
+/**
+ * Hours of `observed_at` history the scheduled review sweeps for evidence whose
+ * documents were published before the now-anchored window. "0" disables the sweep.
+ */
+export function resolveRecentObservationHours(env: NodeJS.ProcessEnv = process.env) {
+  const parsed = Number(env.NARRATIVE_AUTO_REVIEW_RECENT_OBSERVATION_HOURS ?? 24);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 24;
+}
+
+/** Upper bound on per-day historical windows one scheduled run will sweep. */
+export function resolveMaxHistoricalReviewWindows(env: NodeJS.ProcessEnv = process.env) {
+  const parsed = Number.parseInt(env.NARRATIVE_AUTO_REVIEW_MAX_HISTORICAL_WINDOWS ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 120;
+}
+
+/**
+ * Corroboration windows for pending, matched evidence that was classified in
+ * the last `recentHours` but published more than `excludeWithinDays` ago.
+ * Backfilled filings and transcripts arrive months after publication; judged
+ * against today's window they have no corroborating neighbours, so the
+ * scheduled review re-anchors on each evidence day instead. One window ends at
+ * the close of each distinct publish day (UTC), so a story is always judged
+ * together with everything published in the `lookbackDays` before it. The most
+ * recent days come first when the cap trims the list.
+ */
+export async function listRecentlyObservedEvidenceWindows(
+  input: {
+    recentHours: number;
+    excludeWithinDays: number;
+    maxWindows?: number;
+    model?: string;
+    promptVersion?: string;
+    now?: Date;
+  },
+  databaseUrl = process.env.DATABASE_URL
+): Promise<Date[]> {
+  if (input.recentHours <= 0) return [];
+  const model = input.model ?? process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
+  const promptVersion =
+    input.promptVersion ??
+    process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+    "narrative_classification_v7";
+  const now = input.now ?? new Date();
+  const maxWindows = input.maxWindows ?? resolveMaxHistoricalReviewWindows();
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result = await client.query<{ window_end: string }>(
+      `select distinct
+              least(date_trunc('day', d.published_at) + interval '1 day', $5::timestamptz)
+                as window_end
+       from narrative_observations no
+       join documents d on d.id = no.document_id
+       join narrative_definitions nd on nd.id = no.narrative_definition_id
+       where no.matched
+         and no.review_status = 'pending'
+         and no.model = $1
+         and no.prompt_version = $2
+         and no.observed_at >= $5::timestamptz - ($3::text || ' hours')::interval
+         and nd.status in ('active', 'probationary')
+         and d.published_at < $5::timestamptz - ($4::text || ' days')::interval
+       order by window_end desc
+       limit $6::int`,
+      [
+        model,
+        promptVersion,
+        input.recentHours,
+        input.excludeWithinDays,
+        now.toISOString(),
+        maxWindows
+      ]
+    );
+    return result.rows.map((row) => new Date(row.window_end)).reverse();
+  } finally {
+    await client.end();
+  }
+}
+
 export async function autoApproveNarrativeObservations(
   options: NarrativeAutoReviewOptions = {},
   databaseUrl = process.env.DATABASE_URL

@@ -189,13 +189,19 @@ only after enough evidence, clustering stability, and baseline history.
 Curated narratives use a separate, stable measurement contract. Each active or
 probationary measurement definition is evaluated against every eligible document
 and records both matches and non-matches; only active definitions are published.
-Daily density is the percentage of eligible unique documents
-matching the proposition, calculated per source class and then combined with
-log-volume weights so a high-volume feed cannot dominate the result and a
-single-document class cannot swing it. Baselines use non-overlapping prior
-windows with a robust (MAD-based, floored) scale, so a sustained run of zero
-matches after a real baseline produces a negative z-score and a `fading` state
-instead of being skipped.
+Density is the percentage of eligible unique documents matching the
+proposition, calculated per source class and then combined with log-volume
+weights so a high-volume feed cannot dominate the result and a single-document
+class cannot swing it. A 7-day window pools its documents rather than averaging
+seven daily readings, so a 3-document day cannot count as much as a
+500-document day. Baselines use non-overlapping prior windows with a robust
+(MAD-based, floored) scale, so a sustained run of zero matches after a real
+baseline produces a negative z-score and a `fading` state instead of being
+skipped. Windows whose eligible corpus is below
+`NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS` (default 100; 0 disables) are left
+out of baselines and 90-day peaks: one story in a 30-document backfill week
+reads as 3% density and would otherwise set the bar for weeks with thousands
+of documents. The current window is always measured.
 
 Two series are tracked per narrative. **Reviewed density** counts only approved
 evidence and drives the board. **Raw attention** counts every non-rejected
@@ -624,6 +630,14 @@ NARRATIVE_COVERAGE_MEASURED_PERCENT=98
 # opens as peaking.
 NARRATIVE_LIFECYCLE_MIN_STORIES=3
 NARRATIVE_LIFECYCLE_MIN_PUBLISHER_OWNERS=2
+# Prior windows with a thinner eligible corpus than this are excluded from
+# baselines and peaks (0 disables). See "Density" above.
+NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS=100
+# Evidence classified in the last N hours but published before the now-anchored
+# corroboration window is re-judged with the window anchored at its own publish
+# day (0 disables), capped at this many days per run.
+NARRATIVE_AUTO_REVIEW_RECENT_OBSERVATION_HOURS=24
+NARRATIVE_AUTO_REVIEW_MAX_HISTORICAL_WINDOWS=120
 # Query budget for the operator dashboards (/ingestion funnel and operations
 # status), which aggregate over the whole corpus and are cached for ten minutes.
 OPS_QUERY_TIMEOUT_MS=90000
@@ -910,10 +924,16 @@ The blueprint defines:
   70 is the classifier's own floor for a match (every match has already passed
   the inclusion/exclusion contract audit), so in this tier corroboration across
   independent publisher groups is the quality gate rather than the score.
-  Both tiers anchor their corroboration window at "now", so evidence classified
-  long after publication (definition backfills) never qualifies on its own; run
+  Both tiers anchor their corroboration window at "now". Evidence classified in
+  the last `NARRATIVE_AUTO_REVIEW_RECENT_OBSERVATION_HOURS` (default 24; 0
+  disables) but published before that window (definition backfills, late
+  filings and transcripts) is then re-judged with the window anchored at the
+  close of each such publish day, at most
+  `NARRATIVE_AUTO_REVIEW_MAX_HISTORICAL_WINDOWS` (default 120, most recent days
+  first) per run, so history corroborates itself as it arrives. After a policy
+  change that should apply retroactively (loosening a gate), run
   `AUTO_REVIEW_BACKLOG_SINCE=YYYY-MM-DD npm run narratives:auto-review-backlog --workspace @market-themes/workers`
-  once after a backfill to step the window through history.
+  once to step the window through history.
   Automatic candidate promotion additionally requires persistence: a
   candidate's qualifying evidence must span at least
   `NARRATIVE_AUTO_PROMOTE_MIN_SPAN_DAYS` (default 7; 0 disables) days, or a
