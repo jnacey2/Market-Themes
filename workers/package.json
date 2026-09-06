@@ -27,6 +27,7 @@
     "eval:export": "node --import tsx src/jobs/export-eval-cases.ts",
     "narratives:backtest": "node --import tsx src/jobs/backtest-narrative-emergence.ts",
     "narratives:auto-review": "node --import tsx src/jobs/auto-review-narratives.ts",
+    "narratives:auto-review-backlog": "node --import tsx src/jobs/auto-review-backlog.ts",
     "repair:document-texts": "node --import tsx src/jobs/repair-document-texts.ts",
     "themes:normalize": "node --import tsx src/jobs/normalize-themes.ts",
     "themes:normalize:backfill": "node --import tsx src/jobs/normalize-themes-backfill.ts",

@@ -13,6 +13,7 @@ import {
   ThinEvidencePill
 } from "../../components/narratives/LifecycleBadge";
 import { HowToReadLink, MetricTerm } from "../../components/narratives/MetricTerm";
+import { groupBoard } from "../../lib/board-sections";
 import { formatMeasurementDate, METRIC_GLOSSARY } from "../../lib/metric-glossary";
 import { narrativeDataPath } from "../../lib/narrative-paths";
 
@@ -60,6 +61,7 @@ export default async function TrendsPage({
       ? status.narratives
       : status.narratives.filter((narrative) => narrative.lifecycleState === activeState);
   const coverage = boardCoverage(status.narratives);
+  const sections = groupBoard(visible);
 
   return (
     <div className="shell wide-shell">
@@ -105,85 +107,83 @@ export default async function TrendsPage({
         ))}
       </nav>
 
-      <section className="currents-board" aria-label="Tracked market narratives">
-        <div className="currents-header">
-          <span>Narrative</span>
-          <span title="Reviewed density over the trailing 90 days">90-day trend</span>
-          <span>
-            <MetricTerm term="density">Now</MetricTerm>
-          </span>
-          <span>
-            <MetricTerm term="change">Movement</MetricTerm>
-          </span>
-          <span>
-            <MetricTerm term="uniqueStories">Breadth</MetricTerm>
-          </span>
-        </div>
-        {loadError ? (
-          <div className="panel">
-            <h2>The narrative board is temporarily unavailable</h2>
-            <p>The database query did not finish. Refresh in a moment; no measurements were lost.</p>
-          </div>
-        ) : visible.length === 0 ? (
-          <div className="panel">
-            <h2>
-              {status.narratives.length === 0
-                ? "No narrative measurements yet"
-                : `No narratives are ${activeState} right now`}
-            </h2>
+      {loadError ? (
+        <section className="panel">
+          <h2>The narrative board is temporarily unavailable</h2>
+          <p>The database query did not finish. Refresh in a moment; no measurements were lost.</p>
+        </section>
+      ) : visible.length === 0 ? (
+        <section className="panel">
+          <h2>
+            {status.narratives.length === 0
+              ? "No narrative measurements yet"
+              : `No narratives are ${activeState} right now`}
+          </h2>
+          <p>
+            {status.narratives.length === 0
+              ? "Apply migrations, classify documents, and recompute narrative trends to populate this board."
+              : "Clear the filter to see the full board."}
+          </p>
+        </section>
+      ) : (
+        <>
+          <div className="board-section-header">
+            <h2>Structural themes</h2>
             <p>
-              {status.narratives.length === 0
-                ? "Apply migrations, classify documents, and recompute narrative trends to populate this board."
-                : "Clear the filter to see the full board."}
+              {sections.structural.length} long-running propositions, ranked by how unusual
+              this week is against each theme&apos;s own history.
             </p>
           </div>
-        ) : visible.map((narrative) => (
-          <Link
-            className="current-row"
-            href={narrativeDataPath(narrative.slug)}
-            key={narrative.id}
-          >
-            <div className="current-name">
-              <span className="label">
-                {narrative.parentName
-                  ? `${narrative.parentName} · ${narrative.dimension ?? "dimension"}`
-                  : `${narrative.category} · ${narrative.kind ?? "structural"}`}
-                {narrative.status === "probationary" ? " · probationary" : ""}
-              </span>
-              <strong>{narrative.name}</strong>
-              <div className="pill-row">
-                <LifecycleBadge compact state={narrative.lifecycleState} />
-                {hasThinEvidence(narrative) ? <ThinEvidencePill compact /> : null}
-                {peakSummary(narrative) ? <small>{peakSummary(narrative)}</small> : null}
+          {sections.structural.length === 0 ? (
+            <section className="panel">
+              <p className="lane-empty">No structural themes match this filter.</p>
+            </section>
+          ) : (
+            <section className="currents-board" aria-label="Structural themes">
+              <BoardHeader />
+              {sections.structural.map((narrative) => (
+                <BoardRow key={narrative.id} narrative={narrative} />
+              ))}
+            </section>
+          )}
+
+          <div className="board-section-header">
+            <h2>Event narratives</h2>
+            <p>
+              {sections.eventCount} headline-driven propositions, grouped under their
+              structural family where one exists. Event narratives expire with the event.
+            </p>
+          </div>
+          {sections.eventGroups.length === 0 ? (
+            <section className="panel">
+              <p className="lane-empty">No event narratives match this filter.</p>
+            </section>
+          ) : (
+            sections.eventGroups.map((group) => (
+              <div key={group.key}>
+                <p className="board-group-label">
+                  {group.parentName
+                    ? `Under ${group.parentName}`
+                    : "Standalone events (no structural parent)"}
+                </p>
+                <section
+                  className="currents-board"
+                  aria-label={group.parentName ?? "Standalone event narratives"}
+                >
+                  <BoardHeader />
+                  {group.items.map((narrative) => (
+                    <BoardRow
+                      child={Boolean(group.parentId)}
+                      key={narrative.id}
+                      narrative={narrative}
+                    />
+                  ))}
+                </section>
               </div>
-              <small>{narrative.proposition}</small>
-            </div>
-            <NarrativeSparkline points={narrative.history} label={narrative.name} />
-            <div className="current-level">
-              <strong>{measured(narrative) ? narrative.density.toFixed(1) : "—"}</strong>
-              <span>{levelCaption(narrative)}</span>
-            </div>
-            <div className="current-movement">
-              <strong
-                className={
-                  !measured(narrative) ? "" : narrative.change >= 0 ? "rising" : "fading"
-                }
-              >
-                {movementLabel(narrative)}
-              </strong>
-              <span>{movementCaption(narrative)}</span>
-            </div>
-            <div className="current-breadth">
-              <strong>{narrative.storyBreadth}</strong>
-              <span>{narrative.storyBreadth === 1 ? "unique story" : "unique stories"}</span>
-              <small>{breadthCaption(narrative)}</small>
-              {narrative.lowHistory && measured(narrative) ? (
-                <em>thin baseline · {narrative.baselineWindows} comparison windows</em>
-              ) : null}
-            </div>
-          </Link>
-        ))}
-      </section>
+            ))
+          )}
+        </>
+      )}
 
       <section className="section methodology-note">
         <div className="panel">
@@ -205,6 +205,70 @@ export default async function TrendsPage({
 }
 
 type BoardNarrative = NarrativeBoardStatus["narratives"][number];
+
+function BoardHeader() {
+  return (
+    <div className="currents-header">
+      <span>Narrative</span>
+      <span title="Reviewed density over the trailing 90 days">90-day trend</span>
+      <span>
+        <MetricTerm term="density">Now</MetricTerm>
+      </span>
+      <span>
+        <MetricTerm term="change">Movement</MetricTerm>
+      </span>
+      <span>
+        <MetricTerm term="uniqueStories">Breadth</MetricTerm>
+      </span>
+    </div>
+  );
+}
+
+function BoardRow({ narrative, child = false }: { narrative: BoardNarrative; child?: boolean }) {
+  return (
+    <Link
+      className={`current-row${child ? " is-child" : ""}`}
+      href={narrativeDataPath(narrative.slug)}
+    >
+      <div className="current-name">
+        <span className="label">
+          {narrative.parentName
+            ? narrative.dimension ?? narrative.eventLabel ?? narrative.category
+            : `${narrative.category} · ${narrative.kind ?? "structural"}`}
+          {narrative.status === "probationary" ? " · probationary" : ""}
+        </span>
+        <strong>{narrative.name}</strong>
+        <div className="pill-row">
+          <LifecycleBadge compact state={narrative.lifecycleState} />
+          {hasThinEvidence(narrative) ? <ThinEvidencePill compact /> : null}
+          {peakSummary(narrative) ? <small>{peakSummary(narrative)}</small> : null}
+        </div>
+        <small>{narrative.proposition}</small>
+      </div>
+      <NarrativeSparkline points={narrative.history} label={narrative.name} />
+      <div className="current-level">
+        <strong>{measured(narrative) ? narrative.density.toFixed(1) : "—"}</strong>
+        <span>{levelCaption(narrative)}</span>
+      </div>
+      <div className="current-movement">
+        <strong
+          className={!measured(narrative) ? "" : narrative.change >= 0 ? "rising" : "fading"}
+        >
+          {movementLabel(narrative)}
+        </strong>
+        <span>{movementCaption(narrative)}</span>
+      </div>
+      <div className="current-breadth">
+        <strong>{narrative.storyBreadth}</strong>
+        <span>{narrative.storyBreadth === 1 ? "unique story" : "unique stories"}</span>
+        <small>{breadthCaption(narrative)}</small>
+        {narrative.lowHistory && measured(narrative) ? (
+          <em>thin baseline · {narrative.baselineWindows} comparison windows</em>
+        ) : null}
+      </div>
+    </Link>
+  );
+}
 
 function measured(narrative: BoardNarrative) {
   return (

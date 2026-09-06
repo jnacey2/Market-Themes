@@ -3,7 +3,8 @@ import { validateCandidateForPromotion } from "@market-themes/analysis";
 import {
   autoApproveNarrativeObservations,
   autoPromoteNarrativeCandidates,
-  reconcileNarrativeDefinitionLifecycle
+  reconcileNarrativeDefinitionLifecycle,
+  resolveStructuralAutoReviewOptions
 } from "@market-themes/db";
 import { runRecordedJob } from "./recorded-job";
 
@@ -22,6 +23,10 @@ export async function autoReviewNarratives() {
   }
 
   const result = await autoApproveNarrativeObservations();
+  const structuralOptions = resolveStructuralAutoReviewOptions();
+  const structuralResult = structuralOptions
+    ? await autoApproveNarrativeObservations(structuralOptions)
+    : null;
   const candidateResult =
     process.env.NARRATIVE_AUTO_PROMOTE_CANDIDATES === "true"
       ? await autoPromoteNarrativeCandidates({
@@ -32,6 +37,7 @@ export async function autoReviewNarratives() {
           candidatesEvaluated: 0,
           candidatesPromoted: 0,
           candidatesBlocked: 0,
+          candidatesAwaitingPersistence: 0,
           observationsCreated: 0,
           promotedDefinitionIds: [],
           duplicateCandidates: [],
@@ -41,9 +47,19 @@ export async function autoReviewNarratives() {
   const summary = {
     enabled: true,
     ...result,
+    approvedObservations:
+      result.approvedObservations + (structuralResult?.approvedObservations ?? 0),
+    structuralTier: structuralResult
+      ? {
+          approvedObservations: structuralResult.approvedObservations,
+          narrativesTouched: structuralResult.narrativesTouched,
+          reviewNote: structuralResult.reviewNote
+        }
+      : null,
     candidatesEvaluated: candidateResult.candidatesEvaluated,
     candidatesPromoted: candidateResult.candidatesPromoted,
     candidatesBlocked: candidateResult.candidatesBlocked,
+    candidatesAwaitingPersistence: candidateResult.candidatesAwaitingPersistence,
     candidateObservationsCreated: candidateResult.observationsCreated,
     promotedDefinitionIds: candidateResult.promotedDefinitionIds,
     duplicateCandidates: candidateResult.duplicateCandidates,

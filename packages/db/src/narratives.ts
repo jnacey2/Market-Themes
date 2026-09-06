@@ -934,7 +934,41 @@ export type NarrativeAutoReviewOptions = {
   minimumPublisherOwners?: number;
   lookbackDays?: number;
   excludedPublisherOwners?: string[];
+  /** Restrict the pass to definitions of these kinds (default: all kinds). */
+  kinds?: Array<"structural" | "event">;
+  /**
+   * End of the corroboration window (default: now). Backlog passes step this
+   * through history so evidence published months ago is judged against its own
+   * week rather than against today's.
+   */
+  windowEnd?: Date;
+  /** Label recorded on the review note and provenance; defaults to "default". */
+  tier?: string;
 };
+
+/**
+ * Structural themes (pricing power, margin pressure, ...) match more diffusely
+ * and at lower scores than a headline event, so the single 90-point gate
+ * approved almost none of their evidence. This second tier applies only to
+ * structural definitions; event narratives keep the strict gate. 70 is the
+ * classifier's floor for a match (each has passed the contract audit), so the
+ * corroboration requirement, not the score, is the gate here.
+ */
+export function resolveStructuralAutoReviewOptions(
+  env: NodeJS.ProcessEnv = process.env
+): NarrativeAutoReviewOptions | null {
+  if (env.NARRATIVE_AUTO_REVIEW_STRUCTURAL_ENABLED === "false") return null;
+  return {
+    kinds: ["structural"],
+    tier: "structural",
+    minimumMatchScore: Number(env.NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_SCORE ?? 70),
+    minimumDocuments: Number(env.NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_DOCUMENTS ?? 2),
+    minimumPublisherOwners: Number(
+      env.NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_PUBLISHER_OWNERS ?? 2
+    ),
+    lookbackDays: Number(env.NARRATIVE_AUTO_REVIEW_STRUCTURAL_LOOKBACK_DAYS ?? 14)
+  };
+}
 
 export async function autoApproveNarrativeObservations(
   options: NarrativeAutoReviewOptions = {},
@@ -967,10 +1001,15 @@ export async function autoApproveNarrativeObservations(
         "youtube,youtube-com,youtube.com,youtu.be"
     )
   ).map((value) => value.toLowerCase());
+  const kinds = options.kinds ?? null;
+  const windowEnd = options.windowEnd ?? new Date();
+  const tier = options.tier ?? "default";
   const reviewNote =
-    `Auto-approved: score >= ${minimumMatchScore}; corroborated by >= ` +
+    `Auto-approved${tier === "default" ? "" : ` (${tier} tier)`}: score >= ${minimumMatchScore}; corroborated by >= ` +
     `${minimumDocuments} unique stories from >= ${minimumPublisherOwners} ` +
-    `publisher groups within ${lookbackDays} days.`;
+    `publisher groups within ${lookbackDays} days` +
+    (options.windowEnd ? ` ending ${windowEnd.toISOString().slice(0, 10)}` : "") +
+    ".";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -1007,8 +1046,9 @@ export async function autoApproveNarrativeObservations(
            and position(no.evidence_snippet in dt.content) > 0
            and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
            and no.metadata->'contractValidation'->>'satisfied' = 'true'
-           and d.published_at >= now() - ($4::text || ' days')::interval
-           and d.published_at <= now()
+           and d.published_at >= $11::timestamptz - ($4::text || ' days')::interval
+           and d.published_at <= $11::timestamptz
+           and ($10::text[] is null or nd.kind = any($10::text[]))
            and lower(coalesce(d.metadata->>'content', '')) <> 'preview'
            and not exists (
              select 1
@@ -1110,18 +1150,24 @@ export async function autoApproveNarrativeObservations(
         reviewNote,
         JSON.stringify({
           autoReview: {
+            tier,
             model,
             promptVersion,
             minimumMatchScore,
             minimumDocuments,
             minimumPublisherOwners,
             lookbackDays,
+            windowEnd: windowEnd.toISOString(),
+            kinds,
             excludedPublisherOwners
           }
-        })
+        }),
+        kinds,
+        windowEnd.toISOString()
       ]
     );
     return {
+      tier,
       approvedObservations: Number(result.rows[0]?.approved_count ?? 0),
       narrativesTouched: Number(result.rows[0]?.narratives_touched ?? 0),
       observationIds: result.rows[0]?.observation_ids ?? [],
@@ -1683,6 +1729,18 @@ export function compareBySurprise(
   );
 }
 
+/** Structural themes first, then the same surprise ordering within each kind. */
+export function compareByKindThenSurprise(
+  left: Pick<NarrativeTrendSummary, "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind">,
+  right: Pick<NarrativeTrendSummary, "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind">
+) {
+  return kindRank(left.kind) - kindRank(right.kind) || compareBySurprise(left, right);
+}
+
+function kindRank(kind: NarrativeTrendSummary["kind"]) {
+  return (kind ?? "structural") === "structural" ? 0 : 1;
+}
+
 export function buildHomepageLanes(
   narratives: NarrativeHomepageItem[],
   latestDate: string | null,
@@ -1903,6 +1961,9 @@ export async function getNarrativeHomepageStatus(
           item.coverageStatus === "measured" ||
           item.coverageStatus === "measured_zero"
       )
+      .sort(compareByKindThenSurprise);
+    const structuralThemes = narratives
+      .filter((item) => (item.kind ?? "structural") === "structural")
       .sort(compareBySurprise);
 
     return {
@@ -1911,6 +1972,7 @@ export async function getNarrativeHomepageStatus(
       latestDate,
       trackedNarrativeCount,
       narratives: measured,
+      structuralThemes,
       lanes: buildHomepageLanes(narratives, latestDate),
       brief
     };
@@ -2399,6 +2461,7 @@ function emptyNarrativeHomepageStatus(
     latestDate: null,
     trackedNarrativeCount: 0,
     narratives: [],
+    structuralThemes: [],
     lanes: { rising: [], peaking: [], fading: [], emerging: [] },
     brief: null
   };

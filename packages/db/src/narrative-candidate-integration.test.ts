@@ -533,7 +533,7 @@ test(
       evidenceWindowDays: 7,
       excludedPublisherOwners: ["youtube", "youtube.com", "youtu.be"]
     };
-    const result = await autoPromoteNarrativeCandidates({
+    const autoPromotionOptions = {
       discoveryPromptVersion,
       classificationModel: model,
       classificationPromptVersion: autoClassificationPrompt,
@@ -542,7 +542,36 @@ test(
       minimumPublisherOwners: 3,
       evidenceWindowDays: 7,
       excludedPublisherOwners: autoPolicy.excludedPublisherOwners,
-      limit: 5,
+      limit: 5
+    };
+    // All of the strong candidate's evidence was published today: a one-day
+    // burst passes breadth but not persistence, so it is held back without
+    // spending a validation call.
+    let validations = 0;
+    const gated = await autoPromoteNarrativeCandidates({
+      ...autoPromotionOptions,
+      persistencePolicy: {
+        minimumSpanDays: 7,
+        attachMinimumShare: 0.5,
+        attachMinimumDocuments: 2
+      },
+      validateCandidate: async (input) => {
+        validations += 1;
+        return eligibleValidation(input);
+      }
+    });
+    assert.equal(gated.candidatesEvaluated, 0);
+    assert.equal(gated.candidatesAwaitingPersistence, 1);
+    assert.equal(gated.candidatesPromoted, 0);
+    assert.equal(validations, 0);
+
+    const result = await autoPromoteNarrativeCandidates({
+      ...autoPromotionOptions,
+      persistencePolicy: {
+        minimumSpanDays: 0,
+        attachMinimumShare: 0.5,
+        attachMinimumDocuments: 2
+      },
       validateCandidate: async (input) => eligibleValidation(input)
     });
     assert.equal(result.candidatesEvaluated, 1);

@@ -665,7 +665,11 @@ SEC_BACKFILL_MONTHS=12
 SEC_BACKFILL_BATCH_SIZE=10
 SEC_BACKFILL_BATCH_INDEX=0
 SEC_RATE_LIMIT_MS=220
+# Per-request timeout for EDGAR fetches; a stalled connection otherwise hangs the poll.
+SEC_REQUEST_TIMEOUT_MS=60000
 SEC_INCLUDE_CORE_FORMS=true
+# Set false to limit core forms to periodic reports (10-K, 10-Q) for text-only backfills.
+SEC_INCLUDE_8K_FORMS=true
 SEC_INCLUDE_PROXY_FORMS=true
 SEC_INCLUDE_CAPITAL_MARKETS_FORMS=true
 SEC_INCLUDE_OWNERSHIP_FORMS=true
@@ -896,7 +900,29 @@ The blueprint defines:
 - `discover-narratives`: hourly batched new-proposition candidate discovery.
 - `poll-anthropic-batches`: ten-minute reconciliation and result persistence.
 - `auto-review-narratives`: twice-hourly conservative evidence approval and
-  guarded candidate promotion.
+  guarded candidate promotion. Two approval tiers run: the default gate
+  (`NARRATIVE_AUTO_REVIEW_MIN_SCORE=90`, 2 stories from 2 publisher groups
+  within 7 days) for every definition, then a structural tier
+  (`NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_SCORE=70`, `_MIN_DOCUMENTS=2`,
+  `_MIN_PUBLISHER_OWNERS=2`, `_LOOKBACK_DAYS=14`; set
+  `NARRATIVE_AUTO_REVIEW_STRUCTURAL_ENABLED=false` to disable) for structural
+  definitions only, whose evidence matches more diffusely than a headline event.
+  70 is the classifier's own floor for a match (every match has already passed
+  the inclusion/exclusion contract audit), so in this tier corroboration across
+  independent publisher groups is the quality gate rather than the score.
+  Both tiers anchor their corroboration window at "now", so evidence classified
+  long after publication (definition backfills) never qualifies on its own; run
+  `AUTO_REVIEW_BACKLOG_SINCE=YYYY-MM-DD npm run narratives:auto-review-backlog --workspace @market-themes/workers`
+  once after a backfill to step the window through history.
+  Automatic candidate promotion additionally requires persistence: a
+  candidate's qualifying evidence must span at least
+  `NARRATIVE_AUTO_PROMOTE_MIN_SPAN_DAYS` (default 7; 0 disables) days, or a
+  structural theme must already match at least
+  `NARRATIVE_AUTO_PROMOTE_ATTACH_MIN_SHARE` (default 0.5) of its documents, in
+  which case an event candidate is promoted as that theme's child
+  (`parent_definition_id`) and nests under it on the board. Bursts that pass
+  breadth but not persistence stay pending without a validation call and are
+  re-evaluated when new evidence arrives.
 - `recompute-narrative-trends`: twice-hourly publication of approved evidence.
 
 Deployment steps:

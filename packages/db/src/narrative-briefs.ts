@@ -44,7 +44,13 @@ export function buildDailyBrief(
   // those as measured, so only a lane item whose own state is measured can lead.
   const isMeasured = (item: NarrativeHomepageItem) =>
     item.lifecycleState !== "unmeasured";
+  // Structural themes lead the brief when one is moving; a headline event only
+  // leads when no structural theme is rising or peaking.
+  const isMeasuredStructural = (item: NarrativeHomepageItem) =>
+    isMeasured(item) && (item.kind ?? "structural") === "structural";
   const lead =
+    lanes.rising.find(isMeasuredStructural) ??
+    lanes.peaking.find(isMeasuredStructural) ??
     lanes.rising.find(isMeasured) ??
     lanes.peaking.find(isMeasured) ??
     lanes.emerging.find((item) => item.lifecycleState === "emerging") ??

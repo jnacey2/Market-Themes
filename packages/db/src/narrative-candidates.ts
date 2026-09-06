@@ -1017,7 +1017,101 @@ export class NarrativeCandidateDuplicateError extends Error {
   }
 }
 
+export class NarrativeCandidateNotPersistentError extends Error {
+  readonly persistence: CandidatePersistence;
+
+  constructor(message: string, persistence: CandidatePersistence) {
+    super(message);
+    this.name = "NarrativeCandidateNotPersistentError";
+    this.persistence = persistence;
+  }
+}
+
 export type NarrativeCandidateAutomaticPolicy = CandidatePromotionPolicy;
+
+export type CandidatePersistencePolicy = {
+  /** Qualifying evidence must span at least this many days (0 disables the gate). */
+  minimumSpanDays: number;
+  /** Share of qualifying documents a structural theme must also match to count as a parent. */
+  attachMinimumShare: number;
+  attachMinimumDocuments: number;
+};
+
+export type CandidatePersistence = {
+  spanDays: number;
+  distinctWeeks: number;
+  attachedTo: { definitionId: string; name: string; shared: number } | null;
+};
+
+/**
+ * Discovery clusters headlines, so a candidate with three stories from three
+ * outlets on one afternoon looks exactly like a real narrative. Before automatic
+ * promotion a candidate must recur (evidence spanning at least a week) or attach
+ * to a structural theme that already matches most of its documents, in which
+ * case it is promoted as that theme's child rather than as a standalone burst.
+ */
+export function resolveCandidatePersistencePolicy(
+  env: NodeJS.ProcessEnv = process.env
+): CandidatePersistencePolicy {
+  return {
+    minimumSpanDays: Math.max(
+      0,
+      finiteInteger(Number(env.NARRATIVE_AUTO_PROMOTE_MIN_SPAN_DAYS ?? 7), 7)
+    ),
+    attachMinimumShare: Math.min(
+      1,
+      Math.max(0, finiteNumber(Number(env.NARRATIVE_AUTO_PROMOTE_ATTACH_MIN_SHARE ?? 0.5), 0.5))
+    ),
+    attachMinimumDocuments: 2
+  };
+}
+
+export function evidenceSpan(publishedAts: Array<string | Date>) {
+  const times = publishedAts
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value));
+  if (times.length === 0) return { spanDays: 0, distinctWeeks: 0 };
+  const min = Math.min(...times);
+  const max = Math.max(...times);
+  const weeks = new Set(times.map((time) => Math.floor(time / (7 * 86_400_000))));
+  return { spanDays: (max - min) / 86_400_000, distinctWeeks: weeks.size };
+}
+
+export function structuralAttachmentThreshold(
+  qualifyingDocuments: number,
+  policy: Pick<CandidatePersistencePolicy, "attachMinimumShare" | "attachMinimumDocuments">
+) {
+  return Math.max(
+    policy.attachMinimumDocuments,
+    Math.ceil(qualifyingDocuments * policy.attachMinimumShare)
+  );
+}
+
+export function isPersistent(
+  persistence: Pick<CandidatePersistence, "spanDays" | "attachedTo">,
+  policy: Pick<CandidatePersistencePolicy, "minimumSpanDays">
+) {
+  return (
+    policy.minimumSpanDays <= 0 ||
+    persistence.spanDays >= policy.minimumSpanDays ||
+    persistence.attachedTo !== null
+  );
+}
+
+export function markValidationAsNotPersistent(
+  validation: CandidatePromotionValidation,
+  error: NarrativeCandidateNotPersistentError,
+  now = new Date()
+): CandidatePromotionValidation {
+  const reason = `Deferred until the evidence persists: ${error.message}`;
+  return {
+    ...validation,
+    status: "ineligible",
+    summaryReason: reason,
+    reasons: [...validation.reasons, reason],
+    evaluatedAt: now.toISOString()
+  };
+}
 
 type NarrativeCandidatePromotionInput = {
   id: string;
@@ -1038,6 +1132,7 @@ type NarrativeCandidatePromotionInput = {
       reviewActorType: "automatic";
       reviewMetadata?: Record<string, unknown>;
       automaticPolicy: NarrativeCandidateAutomaticPolicy;
+      persistencePolicy?: CandidatePersistencePolicy;
       promotionValidation: CandidatePromotionValidation;
     }
 );
@@ -1052,6 +1147,8 @@ export type NarrativeCandidateAutoPromotionOptions = {
   evidenceWindowDays?: number;
   excludedPublisherOwners?: string[];
   limit?: number;
+  /** Defaults to the env-driven policy; tests pass `minimumSpanDays: 0` to exercise promotion alone. */
+  persistencePolicy?: CandidatePersistencePolicy;
   validateCandidate?: (
     input: CandidatePromotionValidationInput
   ) => Promise<CandidatePromotionValidation>;
@@ -1263,12 +1360,53 @@ export async function autoPromoteNarrativeCandidates(
         5
       )
     );
+  const persistencePolicy =
+    options.persistencePolicy ?? resolveCandidatePersistencePolicy();
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   let candidates: Array<{ id: string }>;
+  let candidatesAwaitingPersistence: number;
   try {
-    const result = await client.query<{ id: string }>(
-      `select nc.id
+    const result = await client.query<{ id: string; persistent: boolean }>(
+      `select nc.id,
+              (
+                $8::int <= 0
+                or exists (
+                  select 1
+                  from narrative_candidate_evidence span_ce
+                  join documents span_d on span_d.id = span_ce.document_id
+                  where span_ce.candidate_id = nc.id
+                    and span_ce.prompt_version = nc.prompt_version
+                    and span_ce.match_score >= $2
+                    and span_d.published_at <= now()
+                  having max(span_d.published_at) - min(span_d.published_at)
+                    >= ($8::text || ' days')::interval
+                )
+                or exists (
+                  select 1
+                  from narrative_candidate_evidence attach_ce
+                  join narrative_observations no on no.document_id = attach_ce.document_id
+                  join narrative_definitions parent on parent.id = no.narrative_definition_id
+                  where attach_ce.candidate_id = nc.id
+                    and attach_ce.prompt_version = nc.prompt_version
+                    and attach_ce.match_score >= $2
+                    and no.matched
+                    and no.review_status <> 'rejected'
+                    and parent.kind = 'structural'
+                    and parent.status = 'active'
+                  group by parent.id
+                  having count(distinct no.document_id) >= greatest(
+                    $9::int,
+                    ceil($10::float * (
+                      select count(distinct total_ce.document_id)
+                      from narrative_candidate_evidence total_ce
+                      where total_ce.candidate_id = nc.id
+                        and total_ce.prompt_version = nc.prompt_version
+                        and total_ce.match_score >= $2
+                    ))
+                  )
+                )
+              ) as persistent
        from narrative_candidates nc
        join narrative_candidate_evidence ce on ce.candidate_id = nc.id
        join documents d on d.id = ce.document_id
@@ -1323,10 +1461,16 @@ export async function autoPromoteNarrativeCandidates(
         excludedPublisherOwners,
         minimumDocuments,
         minimumPublisherOwners,
-        limit
+        limit,
+        persistencePolicy.minimumSpanDays,
+        persistencePolicy.attachMinimumDocuments,
+        persistencePolicy.attachMinimumShare
       ]
     );
-    candidates = result.rows;
+    // Bursts that pass breadth but have not yet persisted are left pending
+    // without spending a validation call; new evidence re-evaluates them.
+    candidates = result.rows.filter((row) => row.persistent);
+    candidatesAwaitingPersistence = result.rows.length - candidates.length;
   } finally {
     await client.end();
   }
@@ -1339,11 +1483,12 @@ export async function autoPromoteNarrativeCandidates(
     excludedPublisherOwners
   };
   const policy = {
-    policyName: "candidate_auto_promotion_v1",
+    policyName: "candidate_auto_promotion_v2",
     discoveryPromptVersion,
     classificationModel,
     classificationPromptVersion,
-    ...automaticPolicy
+    ...automaticPolicy,
+    persistence: persistencePolicy
   };
   const note =
     `Auto-promoted: score >= ${minimumMatchScore}; corroborated by >= ` +
@@ -1396,6 +1541,7 @@ export async function autoPromoteNarrativeCandidates(
           reviewActorType: "automatic",
           reviewMetadata: policy,
           automaticPolicy,
+          persistencePolicy,
           promotionValidation
         },
         databaseUrl
@@ -1427,6 +1573,18 @@ export async function autoPromoteNarrativeCandidates(
         });
         continue;
       }
+      if (
+        error instanceof NarrativeCandidateNotPersistentError &&
+        promotionValidation
+      ) {
+        await persistCandidatePromotionValidation(
+          candidate.id,
+          markValidationAsNotPersistent(promotionValidation, error),
+          databaseUrl
+        );
+        candidatesAwaitingPersistence += 1;
+        continue;
+      }
       failures.push({
         candidateId: candidate.id,
         error: error instanceof Error ? error.message : String(error)
@@ -1437,6 +1595,7 @@ export async function autoPromoteNarrativeCandidates(
     candidatesEvaluated: candidates.length,
     candidatesPromoted: promotedDefinitionIds.length,
     candidatesBlocked,
+    candidatesAwaitingPersistence,
     observationsCreated,
     candidatesSkippedAlreadyPromoted,
     promotedDefinitionIds,
@@ -1665,10 +1824,14 @@ export async function promoteNarrativeCandidate(
         { kind: "semantic", definitionId: semanticCollision.id, name: semanticCollision.name }
       );
     }
+    const promotionKind =
+      semanticValidation?.candidateKind ?? candidate.kind;
     // Wording can differ while the evidence is the same. If most of the documents
     // that qualify this candidate are already matched to one tracked definition
     // (including the approved seed observations a promotion writes), the candidate
-    // is that definition under another name.
+    // is that definition under another name. An event candidate whose documents
+    // also match a structural theme is not a duplicate of that theme, though: it
+    // is an instance of it, handled as attachment below.
     const evidenceDocumentIds = [
       ...new Set(selectedRows.map((row) => row.document_id))
     ];
@@ -1685,13 +1848,15 @@ export async function promoteNarrativeCandidate(
          and no.matched
          and no.review_status <> 'rejected'
          and nd.status in ('active', 'probationary')
+         and ($3::text <> 'event' or nd.kind <> 'structural')
        group by no.narrative_definition_id, nd.name
        having count(distinct no.document_id) >= $2::int
        order by count(distinct no.document_id) desc
        limit 1`,
       [
         evidenceDocumentIds,
-        evidenceCollisionThreshold(evidenceDocumentIds.length)
+        evidenceCollisionThreshold(evidenceDocumentIds.length),
+        promotionKind
       ]
     );
     const sharedEvidence = evidenceCollision.rows[0];
@@ -1705,6 +1870,57 @@ export async function promoteNarrativeCandidate(
         }
       );
     }
+    const persistencePolicy =
+      input.reviewActorType === "automatic"
+        ? input.persistencePolicy ?? resolveCandidatePersistencePolicy()
+        : null;
+    const attachment = await client.query<{
+      narrative_definition_id: string;
+      name: string;
+      shared: string;
+    }>(
+      `select no.narrative_definition_id, nd.name,
+              count(distinct no.document_id)::text as shared
+       from narrative_observations no
+       join narrative_definitions nd on nd.id = no.narrative_definition_id
+       where no.document_id = any($1::text[])
+         and no.matched
+         and no.review_status <> 'rejected'
+         and nd.kind = 'structural'
+         and nd.status = 'active'
+       group by no.narrative_definition_id, nd.name
+       having count(distinct no.document_id) >= $2::int
+       order by count(distinct no.document_id) desc, nd.name
+       limit 1`,
+      [
+        evidenceDocumentIds,
+        structuralAttachmentThreshold(
+          evidenceDocumentIds.length,
+          persistencePolicy ?? resolveCandidatePersistencePolicy()
+        )
+      ]
+    );
+    const persistence: CandidatePersistence = {
+      ...evidenceSpan(selectedRows.map((row) => row.published_at)),
+      attachedTo: attachment.rows[0]
+        ? {
+            definitionId: attachment.rows[0].narrative_definition_id,
+            name: attachment.rows[0].name,
+            shared: Number(attachment.rows[0].shared)
+          }
+        : null
+    };
+    if (persistencePolicy && !isPersistent(persistence, persistencePolicy)) {
+      throw new NarrativeCandidateNotPersistentError(
+        `qualifying evidence spans ${persistence.spanDays.toFixed(1)} days (needs ${persistencePolicy.minimumSpanDays}) and no structural theme matches at least ${structuralAttachmentThreshold(evidenceDocumentIds.length, persistencePolicy)} of its ${evidenceDocumentIds.length} documents.`,
+        persistence
+      );
+    }
+    // Only event narratives nest under a structural parent; a structural
+    // candidate that overlaps an existing theme is a duplicate (caught above)
+    // or a genuinely separate proposition.
+    const parentDefinitionId =
+      promotionKind === "event" ? persistence.attachedTo?.definitionId ?? null : null;
     const activeCollision = await client.query(
       `select 1
        from narrative_definitions
@@ -1724,8 +1940,6 @@ export async function promoteNarrativeCandidate(
     );
     const version = Number(versionResult.rows[0]?.version ?? 1);
     const definitionId = `narrative:def:${slug}:v${version}`;
-    const promotionKind =
-      semanticValidation?.candidateKind ?? candidate.kind;
     const promotionEventLabel =
       promotionKind === "event"
         ? semanticValidation?.eventLabel ?? candidate.event_label
@@ -1746,10 +1960,10 @@ export async function promoteNarrativeCandidate(
          id, slug, version, name, proposition, category,
          inclusion_guidance, exclusion_guidance, positive_examples,
          negative_examples, status, kind, event_label, metadata,
-         event_expires_at, history_backfill_days
+         event_expires_at, history_backfill_days, parent_definition_id
        ) values (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', 'probationary',
-         $10, $11, $12::jsonb, $13::timestamptz, $14::int
+         $10, $11, $12::jsonb, $13::timestamptz, $14::int, $15
        )`,
       [
         definitionId,
@@ -1766,10 +1980,12 @@ export async function promoteNarrativeCandidate(
         JSON.stringify({
           origin: "candidate_promotion",
           candidateId: candidate.id,
-          promotionValidation: semanticValidation
+          promotionValidation: semanticValidation,
+          persistence
         }),
         eventExpiresAt,
-        resolvePromotedDefinitionHistoryDays()
+        resolvePromotedDefinitionHistoryDays(),
+        parentDefinitionId
       ]
     );
 

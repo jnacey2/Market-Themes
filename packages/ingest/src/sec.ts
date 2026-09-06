@@ -8,6 +8,7 @@ const SEC_ARCHIVES_BASE_URL = "https://www.sec.gov/Archives/edgar/data";
 const DEFAULT_USER_AGENT = "MarketThemesBot/0.1 contact@example.com";
 const DEFAULT_RATE_LIMIT_MS = 220;
 const coreNarrativeForms = new Set(["10-K", "10-Q", "8-K"]);
+const periodicReportForms = new Set(["10-K", "10-Q"]);
 const proxyForms = new Set(["DEF 14A", "DEFA14A", "PRE 14A"]);
 const capitalMarketsForms = new Set([
   "S-1",
@@ -46,6 +47,8 @@ type FilingCategory =
 
 type SecFormConfig = {
   includeCoreForms: boolean;
+  /** When false, core forms are only the periodic reports (10-K, 10-Q); 8-Ks are skipped. */
+  include8kForms: boolean;
   includeProxyForms: boolean;
   includeCapitalMarketsForms: boolean;
   includeOwnershipForms: boolean;
@@ -209,7 +212,18 @@ export async function fetchSecFilings({
 
     for (const filing of filings) {
       await sleep(rateLimitMs);
-      const body = await fetchFilingText(filing.archiveUrl, userAgent);
+      let body: string;
+      try {
+        body = await fetchFilingText(filing.archiveUrl, userAgent);
+      } catch (error) {
+        // One unreachable filing should not abandon the rest of the batch.
+        console.warn(
+          `[sec] skipping ${filing.form} ${filing.accessionNumber} for ${filing.ticker}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        continue;
+      }
 
       if (!body.trim()) {
         continue;
@@ -222,13 +236,19 @@ export async function fetchSecFilings({
 
         for (const exhibit of exhibits) {
           await sleep(rateLimitMs);
-          const exhibitBody = await fetchFilingText(exhibit.archiveUrl, userAgent);
-
-          if (!exhibitBody.trim()) {
-            continue;
+          try {
+            const exhibitBody = await fetchFilingText(exhibit.archiveUrl, userAgent);
+            if (!exhibitBody.trim()) {
+              continue;
+            }
+            documents.push(toPersistableDocument(exhibit, exhibitBody));
+          } catch (error) {
+            console.warn(
+              `[sec] skipping exhibit ${exhibit.accessionNumber} for ${exhibit.ticker}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
           }
-
-          documents.push(toPersistableDocument(exhibit, exhibitBody));
         }
       }
     }
@@ -370,17 +390,27 @@ async function fetchFilingText(url: string, userAgent: string) {
   return normalizeFilingText(text);
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+function requestTimeoutMs() {
+  const parsed = Number(process.env.SEC_REQUEST_TIMEOUT_MS ?? DEFAULT_REQUEST_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
 async function secFetch(url: string, userAgent: string, attempts = 3): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      // A stalled EDGAR connection otherwise hangs the whole poll: fetch has no
+      // default timeout, and the signal also aborts a stalled body read.
       const response = await fetch(url, {
         headers: {
           "User-Agent": userAgent,
           Accept: "application/json,text/html,text/plain,*/*",
           "Accept-Encoding": "gzip, deflate, br"
-        }
+        },
+        signal: AbortSignal.timeout(requestTimeoutMs())
       });
 
       if (response.ok) {
@@ -534,11 +564,12 @@ function classifyExhibitRelevance(
   return "low";
 }
 
-function resolveSecFormConfig(
+export function resolveSecFormConfig(
   overrides: Partial<SecFormConfig> = {}
 ): SecFormConfig {
   return {
     includeCoreForms: envFlag("SEC_INCLUDE_CORE_FORMS", true),
+    include8kForms: envFlag("SEC_INCLUDE_8K_FORMS", true),
     includeProxyForms: envFlag("SEC_INCLUDE_PROXY_FORMS", true),
     includeCapitalMarketsForms: envFlag("SEC_INCLUDE_CAPITAL_MARKETS_FORMS", true),
     includeOwnershipForms: envFlag("SEC_INCLUDE_OWNERSHIP_FORMS", true),
@@ -552,11 +583,11 @@ function resolveSecFormConfig(
   };
 }
 
-function getEnabledForms(config: SecFormConfig) {
+export function getEnabledForms(config: SecFormConfig) {
   const forms = new Set<string>();
 
   if (config.includeCoreForms) {
-    addForms(forms, coreNarrativeForms);
+    addForms(forms, config.include8kForms ? coreNarrativeForms : periodicReportForms);
   }
 
   if (config.includeProxyForms) {
