@@ -8,6 +8,9 @@ import type {
 } from "./types";
 
 type PublicationFeedRow = {
+  history_cursor: number;
+  history_complete: boolean;
+  history_started_at: string | null;
   id: string;
   name: string;
   homepage_url: string;
@@ -42,7 +45,7 @@ export async function listPublicationFeeds(
               publisher_id, publisher_owner, retention_policy, enabled,
               backfill_days, max_posts_per_poll, rate_limit_ms, tags, terms_notes,
               last_attempt_at::text, last_success_at::text,
-              last_published_at::text, last_error
+              last_published_at::text, last_error, history_cursor, history_complete, history_started_at::text
        from publication_feeds
        where ($1::boolean = false or enabled)
        order by platform, name`,
@@ -78,7 +81,7 @@ export async function createPublicationFeed(
                  publisher_id, publisher_owner, retention_policy, enabled,
                  backfill_days, max_posts_per_poll, rate_limit_ms, tags, terms_notes,
                  last_attempt_at::text, last_success_at::text,
-                 last_published_at::text, last_error`,
+                 last_published_at::text, last_error, history_cursor, history_complete, history_started_at::text`,
       [
         id,
         input.name.trim(),
@@ -86,13 +89,14 @@ export async function createPublicationFeed(
         input.feedUrl,
         input.platform,
         publisherId,
-        slug(input.publisherOwner ?? input.name),
+        slug(input.publisherOwner?.trim() || input.name),
         input.retentionPolicy ?? "full_text",
         input.backfillDays ?? 30,
         input.maxPostsPerPoll ?? 50,
         input.rateLimitMs ?? 500,
         input.tags ?? [],
-        input.termsNotes?.trim() ?? "Public feed/API content; no authenticated access."
+        input.termsNotes?.trim() ??
+          "Public feed/API content; no authenticated access."
       ]
     );
     return mapPublicationFeed(result.rows[0]);
@@ -129,6 +133,9 @@ export async function recordPublicationFeedPoll(
     success: boolean;
     lastPublishedAt?: string | null;
     error?: string;
+    historyCursor?: number;
+    historyComplete?: boolean;
+    historyStartedAt?: string;
   },
   databaseUrl = process.env.DATABASE_URL
 ) {
@@ -144,10 +151,21 @@ export async function recordPublicationFeedPoll(
                greatest(coalesce(last_published_at, $3::timestamptz), $3::timestamptz)
              else last_published_at
            end,
+           history_cursor = coalesce($5, history_cursor),
+           history_complete = coalesce($6, history_complete),
+           history_started_at = coalesce(history_started_at, $7::timestamptz),
            last_error = $4,
            updated_at = now()
        where id = $1`,
-      [id, result.success, result.lastPublishedAt ?? null, result.error ?? null]
+      [
+        id,
+        result.success,
+        result.lastPublishedAt ?? null,
+        result.error ?? null,
+        result.success ? (result.historyCursor ?? null) : null,
+        result.success ? (result.historyComplete ?? null) : null,
+        result.success ? (result.historyStartedAt ?? null) : null
+      ]
     );
   } finally {
     await client.end();
@@ -156,6 +174,9 @@ export async function recordPublicationFeedPoll(
 
 function mapPublicationFeed(row: PublicationFeedRow): PublicationFeed {
   return {
+    historyCursor: row.history_cursor,
+    historyComplete: row.history_complete,
+    historyStartedAt: row.history_started_at,
     id: row.id,
     name: row.name,
     homepageUrl: row.homepage_url,

@@ -80,3 +80,84 @@ function observation(
     affectedEntities: matched ? ["Example"] : []
   };
 }
+
+const dates = Array.from({ length: 60 }, (_, i) =>
+  new Date(Date.UTC(2026, 0, i + 1)).toISOString().slice(0, 10)
+);
+function stableRows() {
+  return dates.flatMap((date, i) =>
+    [true, false].map((matched, j) => ({
+      ...observation(`${i}:${j}`, "newspaper", matched, "Publisher", "Owner"),
+      date
+    }))
+  );
+}
+test("missing days cannot manufacture a fall from a stable 50 percent series", () => {
+  const rows = stableRows().filter((row) => row.date < dates.at(-3)!);
+  const point = calculateNarrativeTrendSeries(rows, dates, 7, 20).at(-1)!;
+  assert.equal(point.density, 50);
+  assert.equal(point.coveredDays, 4);
+  assert.equal(point.coverageComplete, false);
+  assert.equal(point.comparisonReady, false);
+  assert.equal(point.change, 0);
+  assert.equal(point.zScoreAvailable, false);
+});
+test("pending reviews and missing classifications both suppress comparisons", () => {
+  const rows = stableRows();
+  rows.at(-2)!.matched = false;
+  const pending = rows.map((row, i) => ({
+    ...row,
+    reviewPending: i === rows.length - 2
+  }));
+  assert.equal(
+    calculateNarrativeTrendSeries(pending, dates, 7, 20).at(-1)!
+      .comparisonReady,
+    false
+  );
+  const corpus = dates.map((date) => ({
+    date,
+    expectedDocuments: date === dates.at(-1) ? 3 : 2
+  }));
+  assert.equal(
+    calculateNarrativeTrendSeries(rows, dates, 7, 20, corpus).at(-1)!
+      .coverageComplete,
+    false
+  );
+});
+test("a fully observed disappearance remains a measured decline", () => {
+  const rows = stableRows().map((row) => ({
+    ...row,
+    matched: row.date > dates.at(-8)! ? false : row.matched
+  }));
+  const point = calculateNarrativeTrendSeries(rows, dates, 7, 20).at(-1)!;
+  assert.equal(point.comparisonReady, true);
+  assert.equal(point.change, -50);
+  assert.equal(point.percentileRank, 0);
+  assert.equal(point.zScoreAvailable, false); // flat baseline cannot support a z-score
+});
+test("ties use midpoint percentile and tone includes genuine zeros", () => {
+  const point = calculateNarrativeTrendSeries(stableRows(), dates, 7, 20).at(
+    -1
+  )!;
+  assert.equal(point.percentileRank, 50);
+  assert.equal(point.zScoreAvailable, false);
+  const rows = [
+    observation("a", "newspaper", true, "a", "a"),
+    { ...observation("b", "newspaper", true, "b", "b"), riskTone: 0 }
+  ];
+  assert.equal(
+    calculateNarrativeTrendSeries(rows, [dates[0]], 1, 1)[0].riskTone,
+    30
+  );
+});
+test("a source class entering the corpus invalidates adjacent comparisons", () => {
+  const rows = stableRows();
+  rows.push({
+    ...observation("new-source", "filing", true, "issuer", "issuer"),
+    date: dates.at(-1)!
+  });
+  assert.equal(
+    calculateNarrativeTrendSeries(rows, dates, 7, 20).at(-1)!.comparisonReady,
+    false
+  );
+});

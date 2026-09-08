@@ -34,9 +34,15 @@ type ClaudeBackfillOptions = {
 
 type BackfillDocumentResult =
   | { status: "completed"; insertedSignals: number; themesTouched: number }
-  | { status: "failed" };
+  | { status: "failed" }
+  | { status: "skipped" };
 
 export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
+  const heartbeat = setInterval(() => {
+    void updateBackfillJobProgress(job.id, {}).catch((error) =>
+      console.error("Backfill heartbeat failed", error)
+    );
+  }, 30_000);
   try {
     const result = await runClaudeExtractionBackfill({
       batchSize: job.batchSize,
@@ -45,7 +51,9 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
       documentTimeoutMs: job.documentTimeoutMs,
       lookbackDays: job.lookbackDays ?? undefined,
       excludedSecFilingCategories: job.excludedSecFilingCategories,
-      maxAnalysisAttempts: Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5),
+      maxAnalysisAttempts: Number(
+        process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5
+      ),
       model: job.model,
       promptVersion: job.promptVersion,
       maxEvidenceChars: Number(process.env.CLAUDE_MAX_EVIDENCE_CHARS ?? 800),
@@ -53,16 +61,22 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
       jobId: job.id,
       shouldStop: async () => {
         const currentJob = await getBackfillJobForWorker(job.id);
-        return !currentJob || currentJob.status === "stop_requested";
+        return !currentJob || currentJob.status !== "running";
       }
     });
 
     await updateBackfillJobProgress(job.id, {
-      status: result.stopRequested ? "cancelled" : "completed",
+      status: result.stopRequested
+        ? "cancelled"
+        : result.failedDocuments > 0
+          ? "failed"
+          : "completed",
       currentDocumentIds: [],
       lastMessage: result.stopRequested
         ? "Stopped after finishing in-flight documents."
-        : "Completed requested Claude extraction batches.",
+        : result.failedDocuments > 0
+          ? `Finished with ${result.failedDocuments} failed documents; inspect errors before retrying.`
+          : "Completed requested Claude extraction batches.",
       completedAtNow: true
     });
   } catch (error) {
@@ -74,10 +88,14 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
       completedAtNow: true
     });
     throw error;
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
-export async function runClaudeExtractionBackfill(options = defaultBackfillOptions()) {
+export async function runClaudeExtractionBackfill(
+  options = defaultBackfillOptions()
+) {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY is required for Claude extraction.");
   }
@@ -124,7 +142,9 @@ export async function runClaudeExtractionBackfill(options = defaultBackfillOptio
       break;
     }
 
-    console.log(`[claude-extract-backfill] selecting documents for batch=${batchIndex}`);
+    console.log(
+      `[claude-extract-backfill] selecting documents for batch=${batchIndex}`
+    );
     if (options.jobId) {
       await updateBackfillJobProgress(options.jobId, {
         lastMessage: `Selecting documents for batch ${batchIndex}.`
@@ -165,7 +185,9 @@ export async function runClaudeExtractionBackfill(options = defaultBackfillOptio
       () => shouldStop(options)
     );
 
-    const completed = results.filter((result) => result?.status === "completed");
+    const completed = results.filter(
+      (result) => result?.status === "completed"
+    );
     const failed = results.filter((result) => result?.status === "failed");
     const insertedSignals = completed.reduce(
       (sum, result) => sum + result.insertedSignals,
@@ -221,10 +243,11 @@ async function analyzeDocument(
     `[claude-extract-backfill] analyzing document=${document.id} source=${document.sourceId} published=${document.publishedAt}`
   );
 
-  const runId = await startDocumentAnalysisRun(document.id, {
+  const claim = await startDocumentAnalysisRun(document.id, {
     analysisType: marketSignalAnalysisType,
     model: options.model,
     promptVersion: options.promptVersion,
+    maxAttempts: options.maxAnalysisAttempts,
     metadata: {
       sourceId: document.sourceId,
       sourceClass: document.sourceClass,
@@ -234,17 +257,32 @@ async function analyzeDocument(
     }
   });
 
+  if (!claim) return { status: "skipped" };
+
+  const controller = new AbortController();
+  const cancellation = options.jobId
+    ? setInterval(() => {
+        void getBackfillJobForWorker(options.jobId!)
+          .then((job) => {
+            if (!job || !["running", "stop_requested"].includes(job.status))
+              controller.abort(new Error("Backfill cancelled."));
+          })
+          .catch((error) => console.error("Cancellation check failed", error));
+      }, 5_000)
+    : undefined;
   try {
     const signals = await withTimeout(
       extractWithRetry(document, {
         model: options.model,
         promptVersion: options.promptVersion,
-        maxEvidenceChars: options.maxEvidenceChars
+        maxEvidenceChars: options.maxEvidenceChars,
+        signal: controller.signal
       }),
       options.documentTimeoutMs,
-      `Claude extraction timed out after ${options.documentTimeoutMs}ms for ${document.id}`
+      `Claude extraction timed out after ${options.documentTimeoutMs}ms for ${document.id}`,
+      controller
     );
-    const result = await completeDocumentAnalysisRun(runId, signals);
+    const result = await completeDocumentAnalysisRun(claim, signals);
     console.log(
       `[claude-extract-backfill] completed document=${document.id} signals=${result.insertedSignals} themes=${result.themesTouched}`
     );
@@ -254,7 +292,7 @@ async function analyzeDocument(
       themesTouched: result.themesTouched
     };
   } catch (error) {
-    await failDocumentAnalysisRun(runId, error);
+    await failDocumentAnalysisRun(claim, error);
     console.error(
       `[claude-extract-backfill] failed document=${document.id} error=${
         error instanceof Error ? error.message : String(error)
@@ -263,10 +301,12 @@ async function analyzeDocument(
     return {
       status: "failed"
     };
+  } finally {
+    if (cancellation) clearInterval(cancellation);
   }
 }
 
-async function runWithConcurrency<T, R>(
+export async function runWithConcurrency<T, R>(
   items: T[],
   limit: number,
   worker: (item: T) => Promise<R>,
@@ -281,6 +321,8 @@ async function runWithConcurrency<T, R>(
         break;
       }
 
+      // The stop check yields; another worker may consume the final item.
+      if (nextIndex >= items.length) break;
       const currentIndex = nextIndex;
       nextIndex += 1;
       results[currentIndex] = await worker(items[currentIndex]);
@@ -298,7 +340,12 @@ async function shouldStop(options: ClaudeBackfillOptions) {
   return options.shouldStop ? options.shouldStop() : false;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  controller = new AbortController()
+) {
   let timeout: NodeJS.Timeout | undefined;
   const guardedPromise = promise.catch((error) => {
     throw error;
@@ -307,7 +354,10 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   return Promise.race([
     guardedPromise,
     new Promise<T>((_, reject) => {
-      timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      timeout = setTimeout(() => {
+        controller.abort(new Error(message));
+        reject(new Error(message));
+      }, timeoutMs);
     })
   ]).finally(() => {
     if (timeout) {
@@ -322,11 +372,13 @@ async function extractWithRetry(
     model: string;
     promptVersion: string;
     maxEvidenceChars: number;
+    signal?: AbortSignal;
   }
 ) {
   try {
     return await extractSignalsFromDocument(document, options);
   } catch (firstError) {
+    options.signal?.throwIfAborted();
     console.warn(
       `[claude-extract-backfill] retrying document=${document.id} after error=${
         firstError instanceof Error ? firstError.message : String(firstError)
@@ -370,6 +422,11 @@ function parseCsv(value: string) {
     .filter(Boolean);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runClaudeExtractionBackfill();
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  const result = await runClaudeExtractionBackfill();
+  if (result.failedDocuments > 0)
+    process.exitCode = result.completedDocuments > 0 ? 2 : 1;
 }

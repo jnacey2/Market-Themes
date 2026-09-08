@@ -1,8 +1,11 @@
+export const narrativeMetricVersion = "reviewed_density_v2";
+
 export type NarrativeMetricObservation = {
   narrativeDefinitionId: string;
   date: string;
   documentId: string;
   matched: boolean;
+  reviewPending?: boolean;
   matchScore: number;
   riskTone: number;
   bullishTone: number;
@@ -12,7 +15,17 @@ export type NarrativeMetricObservation = {
   affectedEntities: string[];
 };
 
-export type NarrativeMetricPoint = {
+export type NarrativeCorpusDay = { date: string; expectedDocuments: number };
+export type NarrativeQuality = {
+  coveredDays: number;
+  expectedDocuments: number;
+  pendingReview: number;
+  coverageComplete: boolean;
+  comparisonReady: boolean;
+  accelerationReady: boolean;
+  zScoreAvailable: boolean;
+};
+export type NarrativeMetricPoint = NarrativeQuality & {
   date: string;
   density: number;
   baselineMean: number;
@@ -32,61 +45,132 @@ export type NarrativeMetricPoint = {
   lowHistory: boolean;
 };
 
+/** Equal source-class weight, document weight within a source over the full window.
+ * Missing days and pending reviews are never treated as measured absence.
+ * A conservative comparison requires every calendar day covered, all ingested
+ * eligible documents classified, no pending positives, and the same source classes.
+ */
 export function calculateNarrativeTrendSeries(
   observations: NarrativeMetricObservation[],
   dates: string[],
   windowDays: number,
-  lowHistoryDays: number
+  lowHistoryDays: number,
+  corpus?: NarrativeCorpusDay[]
 ): NarrativeMetricPoint[] {
-  const daily = dates.map((date) => dailySummary(observations.filter((row) => row.date === date), date));
-
-  return daily.map((_, index) => {
-    const current = summarizeWindow(daily, index, windowDays);
-    const previous = summarizeWindow(daily, index - windowDays, windowDays);
-    const prior = summarizeWindow(daily, index - windowDays * 2, windowDays);
-    const baselineEnd = index - windowDays;
-    const baselineValues: number[] = [];
-
-    for (let end = windowDays - 1; end <= baselineEnd; end += 1) {
-      const baseline = summarizeWindow(daily, end, windowDays);
-      if (baseline.eligibleDocuments > 0) {
-        baselineValues.push(baseline.density);
-      }
-    }
-
+  if (!Number.isInteger(windowDays) || windowDays < 1 || lowHistoryDays < 1)
+    throw new Error("Invalid narrative window configuration.");
+  const byDate = new Map<string, NarrativeMetricObservation[]>();
+  for (const row of observations) {
+    const rows = byDate.get(row.date) ?? [];
+    rows.push(row);
+    byDate.set(row.date, rows);
+  }
+  const expected = new Map(
+    corpus?.map((day) => [day.date, day.expectedDocuments])
+  );
+  const windows = dates.map((_, index) => {
+    const windowDates = dates.slice(
+      Math.max(0, index - windowDays + 1),
+      index + 1
+    );
+    const rows = windowDates.flatMap((date) => byDate.get(date) ?? []);
+    // One observation per document/definition is the measurement unit.
+    const unique = [
+      ...new Map(rows.map((row) => [row.documentId, row])).values()
+    ];
+    const matched = unique.filter((row) => row.matched);
+    const sourceClasses = [
+      ...new Set(unique.map((row) => row.sourceClass))
+    ].sort();
+    const pendingReview = unique.filter((row) => row.reviewPending).length;
+    const expectedDocuments = windowDates.reduce(
+      (total, date) =>
+        total +
+        (expected.get(date) ??
+          new Set((byDate.get(date) ?? []).map((row) => row.documentId)).size),
+      0
+    );
+    const coveredDays = windowDates.filter(
+      (date) => (byDate.get(date)?.length ?? 0) > 0
+    ).length;
+    const density = average(
+      sourceClasses.map((source) => {
+        const eligible = unique.filter((row) => row.sourceClass === source);
+        return (
+          (100 * eligible.filter((row) => row.matched).length) / eligible.length
+        );
+      })
+    );
+    return {
+      density,
+      sourceSignature: sourceClasses.join(","),
+      coveredDays,
+      expectedDocuments,
+      pendingReview,
+      coverageComplete:
+        coveredDays === windowDays &&
+        unique.length >= expectedDocuments &&
+        pendingReview === 0,
+      eligibleDocuments: unique.length,
+      matchedDocuments: matched.length,
+      riskTone: average(matched.map((row) => row.riskTone)),
+      bullishTone: average(matched.map((row) => row.bullishTone)),
+      publisherBreadth: breadth(matched.map((row) => row.publisherId)),
+      publisherOwnerBreadth: breadth(matched.map((row) => row.publisherOwner)),
+      sourceClassBreadth: breadth(matched.map((row) => row.sourceClass)),
+      entityBreadth: breadth(matched.flatMap((row) => row.affectedEntities))
+    };
+  });
+  return windows.map((current, index) => {
+    const previous = windows[index - windowDays];
+    const prior = windows[index - windowDays * 2];
+    const comparable = (other: typeof current | undefined) =>
+      Boolean(
+        current.coverageComplete &&
+        other?.coverageComplete &&
+        current.sourceSignature === other.sourceSignature
+      );
+    const baselineValues = windows
+      .slice(0, Math.max(0, index - windowDays + 1))
+      .filter(
+        (row) =>
+          row.coverageComplete &&
+          row.sourceSignature === current.sourceSignature
+      )
+      .map((row) => row.density);
     const baselineMean = average(baselineValues);
-    const baselineStddev = Math.max(standardDeviation(baselineValues, baselineMean), 0.01);
-    const hasCoverage = current.eligibleDocuments > 0;
-    const hasMatch = current.matchedDocuments > 0;
-    const lowHistory = !hasCoverage || baselineValues.length < lowHistoryDays;
-    const change =
-      hasCoverage && previous.eligibleDocuments > 0
-        ? current.density - previous.density
-        : 0;
-    const previousChange =
-      previous.eligibleDocuments > 0 && prior.eligibleDocuments > 0
-        ? previous.density - prior.density
-        : 0;
-
+    const baselineStddev = standardDeviation(baselineValues, baselineMean);
+    const lowHistory = baselineValues.length < lowHistoryDays;
+    const comparisonReady = !lowHistory && comparable(previous);
+    const accelerationReady = comparisonReady && comparable(prior);
+    // A flat or effectively flat baseline cannot support a standardized score.
+    // Change and percentile still describe a genuine disappearance or appearance.
+    const zScoreAvailable =
+      current.coverageComplete && !lowHistory && baselineStddev >= 1;
+    const change = comparisonReady ? current.density - previous.density : 0;
+    const acceleration = accelerationReady
+      ? change - (previous.density - prior.density)
+      : 0;
+    const below = baselineValues.filter(
+      (value) => value < current.density
+    ).length;
+    const ties = baselineValues.filter(
+      (value) => value === current.density
+    ).length;
     return {
       date: dates[index],
       density: round(current.density),
       baselineMean: round(baselineMean),
       baselineStddev: round(baselineStddev),
-      zScore:
-        hasCoverage && hasMatch && !lowHistory
-          ? round((current.density - baselineMean) / baselineStddev)
-          : 0,
+      zScore: zScoreAvailable
+        ? round((current.density - baselineMean) / baselineStddev)
+        : 0,
       percentileRank:
-        !hasCoverage || !hasMatch || lowHistory
-          ? 0
-          : Math.round(
-              (baselineValues.filter((value) => value <= current.density).length /
-                baselineValues.length) *
-                100
-            ),
+        current.coverageComplete && !lowHistory
+          ? Math.round((100 * (below + ties / 2)) / baselineValues.length)
+          : 0,
       change: round(change),
-      acceleration: hasCoverage ? round(change - previousChange) : 0,
+      acceleration: round(acceleration),
       riskTone: round(current.riskTone),
       bullishTone: round(current.bullishTone),
       eligibleDocuments: current.eligibleDocuments,
@@ -95,76 +179,30 @@ export function calculateNarrativeTrendSeries(
       publisherOwnerBreadth: current.publisherOwnerBreadth,
       sourceClassBreadth: current.sourceClassBreadth,
       entityBreadth: current.entityBreadth,
-      lowHistory
+      coveredDays: current.coveredDays,
+      expectedDocuments: current.expectedDocuments,
+      pendingReview: current.pendingReview,
+      coverageComplete: current.coverageComplete,
+      comparisonReady,
+      accelerationReady,
+      zScoreAvailable,
+      lowHistory: lowHistory || !current.coverageComplete
     };
   });
 }
-
-function dailySummary(rows: NarrativeMetricObservation[], date: string) {
-  const eligible = new Set(rows.map((row) => row.documentId));
-  const matchedRows = rows.filter((row) => row.matched);
-  const matched = new Set(matchedRows.map((row) => row.documentId));
-  const sourceClasses = new Set(rows.map((row) => row.sourceClass));
-  const densityBySource = [...sourceClasses].map((sourceClass) => {
-    const sourceRows = rows.filter((row) => row.sourceClass === sourceClass);
-    const sourceEligible = new Set(sourceRows.map((row) => row.documentId)).size;
-    const sourceMatched = new Set(
-      sourceRows.filter((row) => row.matched).map((row) => row.documentId)
-    ).size;
-    return sourceEligible === 0 ? 0 : (sourceMatched / sourceEligible) * 100;
-  });
-
-  return {
-    date,
-    density: average(densityBySource),
-    riskTone: average(matchedRows.map((row) => row.riskTone)),
-    bullishTone: average(matchedRows.map((row) => row.bullishTone)),
-    eligibleDocuments: eligible.size,
-    matchedDocuments: matched.size,
-    publisherIds: new Set(matchedRows.map((row) => row.publisherId).filter(Boolean)),
-    publisherOwners: new Set(matchedRows.map((row) => row.publisherOwner).filter(Boolean)),
-    sourceClasses: new Set(matchedRows.map((row) => row.sourceClass)),
-    entities: new Set(matchedRows.flatMap((row) => row.affectedEntities))
-  };
+function breadth(values: string[]) {
+  return new Set(values.filter(Boolean)).size;
 }
-
-function summarizeWindow(
-  daily: ReturnType<typeof dailySummary>[],
-  endIndex: number,
-  windowDays: number
-) {
-  const start = Math.max(0, endIndex - windowDays + 1);
-  const rows = endIndex < 0 ? [] : daily.slice(start, endIndex + 1);
-  return {
-    density: average(rows.map((row) => row.density)),
-    riskTone: average(rows.map((row) => row.riskTone).filter((value) => value > 0)),
-    bullishTone: average(rows.map((row) => row.bullishTone).filter((value) => value > 0)),
-    eligibleDocuments: sum(rows.map((row) => row.eligibleDocuments)),
-    matchedDocuments: sum(rows.map((row) => row.matchedDocuments)),
-    publisherBreadth: unionSize(rows.map((row) => row.publisherIds)),
-    publisherOwnerBreadth: unionSize(rows.map((row) => row.publisherOwners)),
-    sourceClassBreadth: unionSize(rows.map((row) => row.sourceClasses)),
-    entityBreadth: unionSize(rows.map((row) => row.entities))
-  };
-}
-
-function unionSize(sets: Set<string>[]) {
-  return new Set(sets.flatMap((set) => [...set])).size;
-}
-
-function sum(values: number[]) {
-  return values.reduce((total, value) => total + value, 0);
-}
-
 function average(values: number[]) {
-  return values.length === 0 ? 0 : sum(values) / values.length;
+  return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
 }
-
 function standardDeviation(values: number[], mean: number) {
-  if (values.length < 2) return 0;
-  return Math.sqrt(
-    values.reduce((total, value) => total + (value - mean) ** 2, 0) / (values.length - 1)
-  );
+  return values.length < 2
+    ? 0
+    : Math.sqrt(
+        values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+          (values.length - 1)
+      );
 }
 
 function round(value: number) {

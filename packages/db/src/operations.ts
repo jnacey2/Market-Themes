@@ -2,26 +2,43 @@ import { randomUUID } from "node:crypto";
 import { createDatabaseClient } from "./persistence";
 import type { OperationsStatus } from "./types";
 
-export async function startPipelineRun(stage: string, metadata: Record<string, unknown> = {}) {
+export async function startPipelineRun(
+  stage: string,
+  metadata: Record<string, unknown> = {}
+) {
   const client = createDatabaseClient();
   const id = `pipeline:${stage}:${randomUUID()}`;
   await client.connect();
 
   try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [
+      `pipeline:${stage}`
+    ]);
     await client.query(
       `update pipeline_runs
        set status = 'failed',
            completed_at = now(),
            error_message = 'Superseded by a new pipeline run after the prior process stopped.'
-       where stage = $1 and status = 'running'`,
+       where stage = $1 and status = 'running' and heartbeat_at < now() - interval '5 minutes'`,
       [stage]
     );
+    const active = await client.query(
+      "select 1 from pipeline_runs where stage = $1 and status = 'running'",
+      [stage]
+    );
+    if (active.rowCount)
+      throw new Error(`A ${stage} pipeline is already running.`);
     await client.query(
       `insert into pipeline_runs (id, stage, status, metadata)
        values ($1, $2, 'running', $3::jsonb)`,
       [id, stage, JSON.stringify(metadata)]
     );
+    await client.query("commit");
     return id;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
   } finally {
     await client.end();
   }
@@ -36,8 +53,8 @@ export async function updatePipelineRunProgress(
   try {
     await client.query(
       `update pipeline_runs
-       set metadata = metadata || $2::jsonb
-       where id = $1`,
+       set metadata = metadata || $2::jsonb, heartbeat_at = now()
+       where id = $1 and status = 'running'`,
       [id, JSON.stringify(metadata)]
     );
   } finally {
@@ -48,7 +65,7 @@ export async function updatePipelineRunProgress(
 export async function finishPipelineRun(
   id: string,
   result: {
-    status: "completed" | "failed";
+    status: "completed" | "partial" | "failed";
     processedCount?: number;
     failedCount?: number;
     estimatedCostUsd?: number;

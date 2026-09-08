@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import type {
   AnalysisDocument,
   AnalysisRunStatus,
+  AnalysisRunClaim,
   AnalysisRunSummary,
   AnalysisSignalSummary,
   AnalysisStatus,
@@ -103,6 +104,7 @@ type AnalysisRunOptions = {
   analysisType: string;
   model: string;
   promptVersion: string;
+  maxAttempts?: number;
   metadata?: Record<string, unknown>;
 };
 
@@ -187,12 +189,13 @@ export function createDatabaseClient(
 
   const client = new Client({
     connectionString: databaseUrl,
+    options: "-c timezone=UTC",
     connectionTimeoutMillis: 10_000,
     keepAlive: true,
     query_timeout: queryTimeoutMs,
     statement_timeout: statementTimeoutMs,
-    ssl: databaseUrl.includes("render.com")
-      ? { rejectUnauthorized: false }
+    ssl: new URL(databaseUrl).hostname.endsWith(".render.com")
+      ? { rejectUnauthorized: true }
       : undefined
   });
 
@@ -202,7 +205,19 @@ export function createDatabaseClient(
     );
   });
 
-  return client;
+  const connect = client.connect.bind(client);
+  return Object.assign(client, {
+    async connect() {
+      try {
+        await connect();
+        // Set explicitly as well as in startup options for proxies that ignore options.
+        await client.query("set time zone 'UTC'");
+      } catch (error) {
+        await client.end().catch(() => undefined);
+        throw error;
+      }
+    }
+  });
 }
 
 export async function persistDocuments(
@@ -226,22 +241,64 @@ export async function persistDocuments(
     let insertedChunks = 0;
 
     for (const document of documents) {
-      await upsertSource(client, document);
-      const contentHash = document.contentHash ?? hashContent(document.body);
-      const documentId = await resolveDocumentId(client, document.id, contentHash);
-      const nearDuplicateKey =
-        document.nearDuplicateKey ?? hashContent(normalizeDuplicateText(document.title));
+      await client.query("begin");
+      try {
+        await upsertSource(client, document);
+        // A shared text fingerprint makes equivalent connector payloads deduplicate consistently.
+        const normalizedBody = normalizeText(document.body);
+        if (!normalizedBody && document.retentionPolicy !== "metadata_only")
+          throw new Error(`Document ${document.id} has no readable text.`);
+        const contentHash =
+          document.retentionPolicy === "metadata_only"
+            ? hashContent(
+                `${document.sourceId}:${document.canonicalUrl ?? document.url}:${document.publishedAt}`
+              )
+            : hashContent(normalizedBody);
+        const documentId = await resolveDocumentId(
+          client,
+          document.id,
+          contentHash
+        );
+        const nearDuplicateKey =
+          document.nearDuplicateKey ??
+          hashContent(normalizeDuplicateText(document.title));
 
-      if (
-        !documentId ||
-        (await hasNearDuplicate(client, nearDuplicateKey, document.publishedAt))
-      ) {
-        skippedDocuments += 1;
-        continue;
-      }
+        if (!documentId) {
+          // Repair older interrupted ingests even when their metadata already exists.
+          const existing = await client.query<{ id: string }>(
+            "select d.id from documents d left join document_texts dt on dt.document_id = d.id where d.content_hash = $1 or dt.content_hash = $1 limit 1",
+            [contentHash]
+          );
+          if (
+            existing.rows[0] &&
+            document.retentionPolicy !== "metadata_only"
+          ) {
+            await upsertDocumentText(
+              client,
+              existing.rows[0].id,
+              document.body,
+              "ingestion",
+              document.retentionPolicy
+            );
+            for (const [index, content] of chunkText(document.body).entries()) {
+              await client.query(
+                "insert into document_chunks (id, document_id, chunk_index, content) values ($1,$2,$3,$4) on conflict (document_id, chunk_index) do nothing",
+                [
+                  `${existing.rows[0].id}:chunk:${index}`,
+                  existing.rows[0].id,
+                  index,
+                  content
+                ]
+              );
+            }
+          }
+          skippedDocuments += 1;
+          await client.query("commit");
+          continue;
+        }
 
-      const insertResult = await client.query<{ id: string }>(
-        `insert into documents (
+        const insertResult = await client.query<{ id: string }>(
+          `insert into documents (
           id,
           source_id,
           source_class,
@@ -265,52 +322,66 @@ export async function persistDocuments(
         )
         on conflict (content_hash) do nothing
         returning id`,
-        [
+          [
+            documentId,
+            document.sourceId,
+            document.sourceClass,
+            document.title,
+            document.publisher,
+            document.url,
+            document.publishedAt,
+            document.tickers,
+            document.summary,
+            document.retrievalMethod,
+            JSON.stringify(document.metadata ?? {}),
+            contentHash,
+            document.canonicalUrl ?? canonicalizeUrl(document.url),
+            document.publisherId ?? normalizePublisherId(document.publisher),
+            document.publisherOwner?.trim() ||
+              normalizePublisherId(document.publisher),
+            document.retentionPolicy ?? "full_text",
+            nearDuplicateKey
+          ]
+        );
+
+        if (insertResult.rowCount === 0) {
+          skippedDocuments += 1;
+          await client.query("commit");
+          continue;
+        }
+
+        insertedDocuments += 1;
+        if (document.retentionPolicy === "metadata_only") {
+          await client.query("commit");
+          continue;
+        }
+
+        await upsertDocumentText(
+          client,
           documentId,
-          document.sourceId,
-          document.sourceClass,
-          document.title,
-          document.publisher,
-          document.url,
-          document.publishedAt,
-          document.tickers,
-          document.summary,
-          document.retrievalMethod,
-          JSON.stringify(document.metadata ?? {}),
-          contentHash,
-          document.canonicalUrl ?? canonicalizeUrl(document.url),
-          document.publisherId ?? normalizePublisherId(document.publisher),
-          document.publisherOwner ?? normalizePublisherId(document.publisher),
-          document.retentionPolicy ?? "full_text",
-          nearDuplicateKey
-        ]
-      );
+          document.body,
+          "ingestion",
+          document.retentionPolicy
+        );
+        const chunks = chunkText(document.body);
 
-      if (insertResult.rowCount === 0) {
-        skippedDocuments += 1;
-        continue;
-      }
-
-      insertedDocuments += 1;
-      if (document.retentionPolicy === "metadata_only") {
-        continue;
-      }
-
-      await upsertDocumentText(client, documentId, document.body, "ingestion");
-      const chunks = chunkText(document.body);
-
-      for (const [index, content] of chunks.entries()) {
-        await client.query(
-          `insert into document_chunks (
+        for (const [index, content] of chunks.entries()) {
+          await client.query(
+            `insert into document_chunks (
             id,
             document_id,
             chunk_index,
             content
           ) values ($1, $2, $3, $4)
           on conflict (document_id, chunk_index) do nothing`,
-          [`${documentId}:chunk:${index}`, documentId, index, content]
-        );
-        insertedChunks += 1;
+            [`${documentId}:chunk:${index}`, documentId, index, content]
+          );
+          insertedChunks += 1;
+        }
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
       }
     }
 
@@ -557,8 +628,12 @@ export async function createBackfillJob(
         options.staleAfterMinutes ?? 90,
         options.lookbackDays ?? null,
         options.excludedSecFilingCategories ?? ["capital_markets"],
-        options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
-        options.promptVersion ?? process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1",
+        options.model ??
+          process.env.ANTHROPIC_MODEL ??
+          "claude-sonnet-4-5-20250929",
+        options.promptVersion ??
+          process.env.CLAUDE_PROMPT_VERSION ??
+          "market_signal_extraction_v1",
         JSON.stringify(options.metadata ?? {}),
         "Queued Claude extraction backfill."
       ]
@@ -580,7 +655,11 @@ export async function requestBackfillStop(
   try {
     await ensureBackfillJobsSchema(client);
 
-    const params = [options.jobId ?? null, options.jobType ?? "claude_extraction"];
+    await client.query("begin");
+    const params = [
+      options.jobId ?? null,
+      options.jobType ?? "claude_extraction"
+    ];
     const result = await client.query<BackfillJobRow>(
       `update backfill_jobs
        set
@@ -622,13 +701,16 @@ export async function requestBackfillStop(
          where status = 'running'
           and (
             metadata->>'backfillJobId' = $1
-            or metadata ? 'backfillJobId'
           )`,
         [options.jobId]
       );
     }
 
+    await client.query("commit");
     return stoppedJob ? rowToBackfillJob(stoppedJob) : null;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
   } finally {
     await client.end();
   }
@@ -682,6 +764,13 @@ export async function claimNextBackfillJob(
 
   try {
     await ensureBackfillJobsSchema(client);
+
+    await client.query(`update backfill_jobs
+      set status = 'failed', completed_at = now(),
+          last_error = 'Worker lease expired. Start a new job to resume unread documents.',
+          updated_at = now()
+      where status in ('running', 'stop_requested')
+        and updated_at < now() - interval '5 minutes'`);
 
     const result = await client.query<ClaimableBackfillJobRow>(
       `with next_job as (
@@ -747,27 +836,39 @@ export async function updateBackfillJobProgress(
     }
 
     if (progress.selectedDocumentsDelta) {
-      updates.push(`selected_documents = selected_documents + ${addValue(progress.selectedDocumentsDelta)}`);
+      updates.push(
+        `selected_documents = selected_documents + ${addValue(progress.selectedDocumentsDelta)}`
+      );
     }
 
     if (progress.completedDocumentsDelta) {
-      updates.push(`completed_documents = completed_documents + ${addValue(progress.completedDocumentsDelta)}`);
+      updates.push(
+        `completed_documents = completed_documents + ${addValue(progress.completedDocumentsDelta)}`
+      );
     }
 
     if (progress.failedDocumentsDelta) {
-      updates.push(`failed_documents = failed_documents + ${addValue(progress.failedDocumentsDelta)}`);
+      updates.push(
+        `failed_documents = failed_documents + ${addValue(progress.failedDocumentsDelta)}`
+      );
     }
 
     if (progress.insertedSignalsDelta) {
-      updates.push(`inserted_signals = inserted_signals + ${addValue(progress.insertedSignalsDelta)}`);
+      updates.push(
+        `inserted_signals = inserted_signals + ${addValue(progress.insertedSignalsDelta)}`
+      );
     }
 
     if (progress.themesTouchedDelta) {
-      updates.push(`themes_touched = themes_touched + ${addValue(progress.themesTouchedDelta)}`);
+      updates.push(
+        `themes_touched = themes_touched + ${addValue(progress.themesTouchedDelta)}`
+      );
     }
 
     if (progress.currentDocumentIds) {
-      updates.push(`current_document_ids = ${addValue(progress.currentDocumentIds)}`);
+      updates.push(
+        `current_document_ids = ${addValue(progress.currentDocumentIds)}`
+      );
     }
 
     if (progress.lastMessage !== undefined) {
@@ -786,7 +887,7 @@ export async function updateBackfillJobProgress(
     const result = await client.query<BackfillJobRow>(
       `update backfill_jobs
        set ${updates.join(",\n        ")}
-       where id = ${idParam}
+       where id = ${idParam} and status in ('running', 'stop_requested')
        returning ${backfillJobSelectColumns}`,
       values
     );
@@ -824,58 +925,70 @@ export async function startDocumentAnalysisRun(
   documentId: string,
   options: AnalysisRunOptions,
   databaseUrl = process.env.DATABASE_URL
-) {
+): Promise<AnalysisRunClaim | null> {
+  const maxAttempts = options.maxAttempts ?? 5;
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error("Analysis maxAttempts must be a positive integer.");
+  }
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
-
-  try {
-    const runId = analysisRunId(
+  const claim = {
+    id: analysisRunId(
       documentId,
       options.analysisType,
       options.model,
       options.promptVersion
-    );
-    await client.query(
+    ),
+    attemptToken: randomUUID()
+  };
+  try {
+    await client.query("begin");
+    const jobId = options.metadata?.backfillJobId;
+    if (typeof jobId === "string") {
+      const job = await client.query(
+        "select status from backfill_jobs where id = $1 for update",
+        [jobId]
+      );
+      if (job.rows[0]?.status !== "running") {
+        await client.query("rollback");
+        return null;
+      }
+    }
+    const result = await client.query(
       `insert into document_analysis_runs (
-        id,
-        document_id,
-        analysis_type,
-        model,
-        prompt_version,
-        status,
-        attempt_count,
-        error_message,
-        started_at,
-        completed_at,
-        metadata,
-        updated_at
-      ) values ($1, $2, $3, $4, $5, 'running', 1, null, now(), null, $6, now())
+        id, document_id, analysis_type, model, prompt_version, status,
+        attempt_count, attempt_token, started_at, metadata, updated_at
+      ) values ($1, $2, $3, $4, $5, 'running', 1, $6, now(), $7::jsonb, now())
       on conflict (document_id, analysis_type, model, prompt_version) do update set
-        status = 'running',
-        attempt_count = document_analysis_runs.attempt_count + 1,
-        error_message = null,
-        started_at = now(),
-        completed_at = null,
-        metadata = excluded.metadata,
-        updated_at = now()`,
+        status = 'running', attempt_count = document_analysis_runs.attempt_count + 1,
+        attempt_token = excluded.attempt_token, error_message = null,
+        started_at = now(), completed_at = null, metadata = excluded.metadata, updated_at = now()
+      where document_analysis_runs.status not in ('running', 'completed')
+        and document_analysis_runs.attempt_count < $8
+      returning id`,
       [
-        runId,
+        claim.id,
         documentId,
         options.analysisType,
         options.model,
         options.promptVersion,
-        JSON.stringify(options.metadata ?? {})
+        claim.attemptToken,
+        JSON.stringify(options.metadata ?? {}),
+        maxAttempts
       ]
     );
-
-    return runId;
+    await client.query("commit");
+    return result.rowCount ? claim : null;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
   } finally {
     await client.end();
   }
 }
 
 export async function completeDocumentAnalysisRun(
-  runId: string,
+  claim: AnalysisRunClaim,
   signals: ExtractedSignalInput[],
   databaseUrl = process.env.DATABASE_URL
 ) {
@@ -885,10 +998,44 @@ export async function completeDocumentAnalysisRun(
   try {
     await client.query("begin");
 
+    const runInfo = await client.query<{ job_id: string | null }>(
+      "select metadata->>'backfillJobId' as job_id from document_analysis_runs where id = $1",
+      [claim.id]
+    );
+    const jobId = runInfo.rows[0]?.job_id;
+    if (jobId) {
+      const job = await client.query(
+        "select status from backfill_jobs where id = $1 for update",
+        [jobId]
+      );
+      if (
+        !job.rows[0] ||
+        !["running", "stop_requested"].includes(job.rows[0].status)
+      )
+        throw new Error(
+          "Backfill is no longer active; late results were discarded."
+        );
+    }
+    const run = await client.query(
+      "select status, document_id, attempt_token from document_analysis_runs where id = $1 for update",
+      [claim.id]
+    );
+    if (
+      run.rows[0]?.status !== "running" ||
+      run.rows[0]?.attempt_token !== claim.attemptToken
+    )
+      throw new Error(
+        "Analysis run is no longer active; late results were discarded."
+      );
+
     let insertedSignals = 0;
     const touchedThemeIds = new Set<string>();
 
     for (const signal of signals) {
+      if (signal.documentId !== run.rows[0].document_id)
+        throw new Error(
+          "Signal document does not match its extraction attempt."
+        );
       await client.query(
         `insert into themes (
           id,
@@ -966,7 +1113,7 @@ export async function completeDocumentAnalysisRun(
         error_message = null,
         updated_at = now()
        where id = $1`,
-      [runId]
+      [claim.id]
     );
 
     await client.query("commit");
@@ -984,7 +1131,7 @@ export async function completeDocumentAnalysisRun(
 }
 
 export async function failDocumentAnalysisRun(
-  runId: string,
+  claim: AnalysisRunClaim,
   error: unknown,
   databaseUrl = process.env.DATABASE_URL
 ) {
@@ -998,8 +1145,12 @@ export async function failDocumentAnalysisRun(
         error_message = $2,
         completed_at = now(),
         updated_at = now()
-       where id = $1`,
-      [runId, error instanceof Error ? error.message : String(error)]
+       where id = $1 and status = 'running' and attempt_token = $3`,
+      [
+        claim.id,
+        error instanceof Error ? error.message : String(error),
+        claim.attemptToken
+      ]
     );
   } finally {
     await client.end();
@@ -1008,7 +1159,7 @@ export async function failDocumentAnalysisRun(
 
 export async function repairMissingDocumentTextsFromChunks(
   options: { limit?: number } = {},
-  databaseUrl = process.env.DATABASE_URL
+  databaseUrl = process.env.DATABASE_URL,
 ): Promise<RepairDocumentTextsResult> {
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
@@ -1047,11 +1198,16 @@ export async function repairMissingDocumentTextsFromChunks(
       from candidates c
       join document_chunks dc on dc.document_id = c.id
       group by c.id`,
-      [limit]
+      [limit],
     );
 
     for (const row of result.rows) {
-      await upsertDocumentText(client, row.document_id, row.content, "reconstructed_chunks");
+      await upsertDocumentText(
+        client,
+        row.document_id,
+        row.content,
+        "reconstructed_chunks",
+      );
     }
 
     const remaining = await client.query<{ count: string }>(
@@ -1068,12 +1224,12 @@ export async function repairMissingDocumentTextsFromChunks(
           select 1
           from document_chunks dc
           where dc.document_id = d.id
-        )`
+        )`,
     );
 
     return {
       repairedDocuments: result.rows.length,
-      remainingMissingTextDocuments: Number(remaining.rows[0]?.count ?? 0)
+      remainingMissingTextDocuments: Number(remaining.rows[0]?.count ?? 0),
     };
   } finally {
     await client.end();
@@ -1563,7 +1719,11 @@ export async function recomputeThemeTrends(
     const storageDays = options.storageDays ?? 45;
     const storageStartDate = addDays(asOfDate, -(storageDays - 1));
     options.onProgress?.(`loading signals from ${startDate} to ${asOfDate}`);
-    const signals = await loadSignalsForTrendComputation(client, startDate, asOfDate);
+    const signals = await loadSignalsForTrendComputation(
+      client,
+      startDate,
+      asOfDate
+    );
     options.onProgress?.(`loaded ${signals.length} signals`);
     const themes = groupSignalsByTheme(signals, startDate, asOfDate);
     options.onProgress?.(`grouped ${themes.size} themes`);
@@ -1572,7 +1732,12 @@ export async function recomputeThemeTrends(
     let themesStored = 0;
     const latestTrends: TrendSummary[] = [];
     await client.query("begin");
-    await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
+    await deleteTrendRowsForDateRange(
+      client,
+      storageStartDate,
+      asOfDate,
+      options.onProgress
+    );
 
     for (const theme of themes.values()) {
       const themeTrendRows: TrendRowInput[] = [];
@@ -1897,17 +2062,20 @@ export async function getThemeDetailStatus(
       };
     }
 
-    const latestTrendResult = await client.query<{ latest_trend_date: string | null }>(
+    const latestTrendResult = await client.query<{
+      latest_trend_date: string | null;
+    }>(
       `select max(date)::text as latest_trend_date
        from theme_trends
        where theme_id = $1`,
       [themeId]
     );
-    const latestTrendDate = latestTrendResult.rows[0]?.latest_trend_date ?? null;
+    const latestTrendDate =
+      latestTrendResult.rows[0]?.latest_trend_date ?? null;
     const trendRows = latestTrendDate
       ? (
           await client.query<ThemeTrendDbRow>(
-          `select
+            `select
             tt.id,
             tt.theme_id,
             t.label as theme_label,
@@ -1927,7 +2095,7 @@ export async function getThemeDetailStatus(
            where tt.theme_id = $1
             and tt.date = $2::date
            order by tt.trend_window`,
-          [themeId, latestTrendDate]
+            [themeId, latestTrendDate]
           )
         ).rows
       : [];
@@ -1935,8 +2103,20 @@ export async function getThemeDetailStatus(
       trendRows.map((row) => themeTrendSummaryFromRow(client, row))
     );
     const history = await loadThemeTrendHistory(client, themeId);
-    const affectedEntities = await loadTrendAffectedEntities(client, themeId, latestTrendDate, 30, 30);
-    const citations = await loadTrendEvidence(client, themeId, latestTrendDate, 30, 12);
+    const affectedEntities = await loadTrendAffectedEntities(
+      client,
+      themeId,
+      latestTrendDate,
+      30,
+      30
+    );
+    const citations = await loadTrendEvidence(
+      client,
+      themeId,
+      latestTrendDate,
+      30,
+      12
+    );
     const relatedSubthemes = await loadRelatedSubthemes(client, themeId);
 
     return {
@@ -1957,7 +2137,10 @@ export async function getThemeDetailStatus(
       affectedEntities,
       citations,
       relatedSubthemes,
-      followUpQuestions: buildThemeFollowUpQuestions(theme.label, affectedEntities)
+      followUpQuestions: buildThemeFollowUpQuestions(
+        theme.label,
+        affectedEntities
+      )
     };
   } catch {
     return emptyThemeDetailStatus(true);
@@ -2075,23 +2258,6 @@ function normalizePublisherId(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-async function hasNearDuplicate(
-  client: DbClient,
-  nearDuplicateKey: string,
-  publishedAt: string
-) {
-  const result = await client.query(
-    `select 1
-     from documents
-     where near_duplicate_key = $1
-       and published_at between $2::timestamptz - interval '72 hours'
-                            and $2::timestamptz + interval '72 hours'
-     limit 1`,
-    [nearDuplicateKey, publishedAt]
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-
 async function loadSignalsForTrendComputation(
   client: DbClient,
   startDate: string,
@@ -2192,7 +2358,9 @@ async function insertTrendRows(
       ]
     );
 
-    onProgress?.(`inserted ${Math.min(index + batch.length, rows.length)}/${rows.length} trend rows`);
+    onProgress?.(
+      `inserted ${Math.min(index + batch.length, rows.length)}/${rows.length} trend rows`
+    );
   }
 }
 
@@ -2212,7 +2380,9 @@ async function deleteTrendRowsForDateRange(
     );
 
     if ((index + 1) % 10 === 0 || index === dates.length - 1) {
-      onProgress?.(`deleted trend rows for ${index + 1}/${dates.length} stored dates`);
+      onProgress?.(
+        `deleted trend rows for ${index + 1}/${dates.length} stored dates`
+      );
     }
   }
 }
@@ -2861,7 +3031,8 @@ async function upsertDocumentText(
   client: DbClient,
   documentId: string,
   text: string,
-  textSource: "ingestion" | "reconstructed_chunks"
+  textSource: "ingestion" | "reconstructed_chunks",
+  retentionPolicy?: string
 ) {
   const normalized = normalizeText(text);
 
@@ -2877,16 +3048,25 @@ async function upsertDocumentText(
       retention_policy,
       text_source,
       updated_at
-    ) values ($1, $2, $3, 'full_text', $4, now())
+    ) values ($1, $2, $3, coalesce($5, (select retention_policy from documents where id = $1), 'full_text'), $4, now())
     on conflict (document_id) do update set
       content = excluded.content,
       content_hash = excluded.content_hash,
+      retention_policy = excluded.retention_policy,
       text_source = case
         when document_texts.text_source = 'ingestion' then document_texts.text_source
         else excluded.text_source
       end,
-      updated_at = now()`,
-    [documentId, normalized, hashContent(normalized), textSource]
+      updated_at = now()
+    where document_texts.content_hash is distinct from excluded.content_hash
+       or document_texts.retention_policy is distinct from excluded.retention_policy`,
+    [
+      documentId,
+      normalized,
+      hashContent(normalized),
+      textSource,
+      retentionPolicy ?? null
+    ]
   );
 }
 
@@ -2904,10 +3084,15 @@ async function resolveDocumentId(
   preferredId: string,
   contentHash: string
 ) {
-  const existing = await client.query<{ id: string; content_hash: string }>(
-    `select id, content_hash
-     from documents
-     where id = $1 or content_hash = $2
+  const existing = await client.query<{
+    id: string;
+    content_hash: string;
+    text_hash: string | null;
+  }>(
+    `select d.id, d.content_hash, dt.content_hash as text_hash
+     from documents d left join document_texts dt on dt.document_id = d.id
+     where d.id = $1 or d.content_hash = $2 or dt.content_hash = $2
+     order by case when d.content_hash = $2 or dt.content_hash = $2 then 0 else 1 end
      limit 1`,
     [preferredId, contentHash]
   );
@@ -2918,7 +3103,7 @@ async function resolveDocumentId(
     return preferredId;
   }
 
-  if (row.content_hash === contentHash) {
+  if (row.content_hash === contentHash || row.text_hash === contentHash) {
     return null;
   }
 

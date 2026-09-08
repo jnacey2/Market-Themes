@@ -153,3 +153,98 @@ test("applies strict proposition-specific evidence guards", () => {
     true
   );
 });
+
+test("fails closed on malformed, missing, duplicate, or contradictory classifications", async () => {
+  const { validateNarrativeResponse } =
+    await import("./narrative-classification");
+  const valid = {
+    narrativeDefinitionId: definition.id,
+    matched: false,
+    matchScore: 20,
+    stance: "neutral",
+    riskTone: 0,
+    bullishTone: 0,
+    evidenceSnippet: "",
+    interpretation: "No support",
+    affectedEntities: []
+  };
+  for (const response of [
+    {},
+    { observations: [] },
+    { observations: [valid, valid] },
+    { observations: [{ ...valid, matched: "false" }] },
+    { observations: [{ ...valid, matched: true }] },
+    { observations: [{ ...valid, narrativeDefinitionId: "unknown" }] }
+  ]) {
+    assert.throws(() => validateNarrativeResponse(response, [definition]));
+  }
+  assert.equal(
+    validateNarrativeResponse({ observations: [valid] }, [definition]).length,
+    1
+  );
+});
+test("classifies evidence beyond the first section and rejects truncated responses", async () => {
+  const { classifyDocumentNarratives } =
+    await import("./narrative-classification");
+  const quote = "Demand is rising quickly";
+  const longDocument = { ...document, text: "Background. ".repeat(40) + quote };
+  let requests = 0;
+  const fetchImpl = (async (_url: unknown, init: RequestInit) => {
+    requests++;
+    const request = JSON.parse(String(init.body));
+    const sourceText = JSON.parse(request.messages[0].content).document
+      .text as string;
+    const matched = sourceText.includes(quote);
+    return Response.json({
+      id: "msg_test",
+      type: "message",
+      role: "assistant",
+      model: "test",
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 10 },
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            observations: [
+              {
+                narrativeDefinitionId: definition.id,
+                matched,
+                matchScore: matched ? 95 : 10,
+                stance: matched ? "bullish" : "neutral",
+                riskTone: 0,
+                bullishTone: matched ? 80 : 0,
+                evidenceSnippet: matched ? quote : "",
+                interpretation: "Source classification",
+                affectedEntities: []
+              }
+            ]
+          })
+        }
+      ]
+    });
+  }) as typeof fetch;
+  const result = await classifyDocumentNarratives(longDocument, [definition], {
+    apiKey: "fixture",
+    fetchImpl,
+    maxDocumentChars: 150
+  });
+  assert(requests > 1);
+  assert.equal(result[0].matched, true);
+  assert.equal(
+    result[0].metadata?.examinedCharacters,
+    longDocument.text.length
+  );
+  await assert.rejects(
+    classifyDocumentNarratives(document, [definition], {
+      apiKey: "fixture",
+      fetchImpl: (async () =>
+        Response.json({
+          content: [],
+          stop_reason: "max_tokens",
+          usage: { input_tokens: 1, output_tokens: 1 }
+        })) as typeof fetch
+    }),
+    /Incomplete classification/
+  );
+});

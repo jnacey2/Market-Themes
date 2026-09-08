@@ -58,7 +58,8 @@ test("backfills public Substack posts and skips paid-only bodies", async () => {
         subtitle: "A public macro argument",
         slug: "public-market-note",
         post_date: "2026-08-27T12:00:00.000Z",
-        canonical_url: "https://example.substack.com/p/public-market-note?utm_source=email",
+        canonical_url:
+          "https://example.substack.com/p/public-market-note?utm_source=email",
         audience: "everyone",
         body_html: `<p>${"Public evidence about market conditions and corporate behavior. ".repeat(3)}</p>`,
         wordcount: 1200
@@ -80,7 +81,10 @@ test("backfills public Substack posts and skips paid-only bodies", async () => {
     "https://example.substack.com/p/public-market-note"
   );
   assert.equal(documents[0].metadata?.audience, "everyone");
-  assert.equal(requested.some((url) => url.includes("paid-market-note")), false);
+  assert.equal(
+    requested.some((url) => url.includes("paid-market-note")),
+    false
+  );
 });
 
 function feed(): PublicationFeed {
@@ -106,3 +110,52 @@ function feed(): PublicationFeed {
     lastError: null
   };
 }
+
+test("historical pagination continues beyond the newest poll even with a high-water mark", async () => {
+  let progress:
+    | {
+        historyCursor: number;
+        historyComplete: boolean;
+        historyStartedAt: string;
+      }
+    | undefined;
+  const posts = Array.from({ length: 24 }, (_, i) => ({
+    id: i,
+    slug: `post-${i}`,
+    title: `Post ${i}`,
+    post_date: new Date(Date.UTC(2026, 7, 27 - i)).toISOString(),
+    canonical_url: `https://example.substack.com/p/post-${i}`,
+    audience: "everyone",
+    body_html: `<p>${"Market evidence. ".repeat(10)} ${i}</p>`
+  }));
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    return Response.json(
+      url.pathname.endsWith("archive")
+        ? posts.slice(
+            Number(url.searchParams.get("offset")),
+            Number(url.searchParams.get("offset")) +
+              Number(url.searchParams.get("limit"))
+          )
+        : posts.find((p) => url.pathname.endsWith(p.slug))
+    );
+  }) as typeof fetch;
+  const options = {
+    fetchImpl,
+    skipNetworkValidation: true,
+    now: () => Date.UTC(2026, 7, 28),
+    onProgress: (value: NonNullable<typeof progress>) => {
+      progress = value;
+    }
+  };
+  const first = await fetchSubstackPosts(feed(), options);
+  assert.equal(first.length, 12);
+  assert.equal(progress?.historyCursor, 12);
+  const second = await fetchSubstackPosts(
+    { ...feed(), ...progress, lastPublishedAt: first[0].publishedAt },
+    options
+  );
+  assert.equal(second.length, 12);
+  assert.equal(progress?.historyCursor, 24);
+  assert.equal(new Set([...first, ...second].map((doc) => doc.id)).size, 24);
+});

@@ -5,3 +5,7 @@ export * from "./operations";
 export * from "./persistence";
 export * from "./publication-feeds";
 export * from "./types";
+
+export * from "./classification-jobs";
+export * from "./narrative-evidence";
+export * from "./briefs";

@@ -42,7 +42,7 @@ for (const document of documents) {
     `[claude-extract-smoke] analyzing document=${document.id} source=${document.sourceId} published=${document.publishedAt}`
   );
 
-  const runId = await startDocumentAnalysisRun(document.id, {
+  const claim = await startDocumentAnalysisRun(document.id, {
     analysisType: marketSignalAnalysisType,
     model,
     promptVersion,
@@ -53,13 +53,15 @@ for (const document of documents) {
     }
   });
 
+  if (!claim) continue;
+
   try {
     const signals = await extractWithRetry(document, {
       model,
       promptVersion,
       maxEvidenceChars
     });
-    const result = await completeDocumentAnalysisRun(runId, signals);
+    const result = await completeDocumentAnalysisRun(claim, signals);
     completedDocuments += 1;
     insertedSignals += result.insertedSignals;
     themesTouched += result.themesTouched;
@@ -68,7 +70,7 @@ for (const document of documents) {
     );
   } catch (error) {
     failedDocuments += 1;
-    await failDocumentAnalysisRun(runId, error);
+    await failDocumentAnalysisRun(claim, error);
     console.error(
       `[claude-extract-smoke] failed document=${document.id} error=${
         error instanceof Error ? error.message : String(error)

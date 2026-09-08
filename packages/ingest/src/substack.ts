@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { publicFetch } from "./public-fetch";import { createHash } from "node:crypto";
 import type { PersistableDocument, PublicationFeed } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
 import { assertPublicNetworkUrl, publicationLookbackHours } from "./publication-feed";
@@ -24,6 +24,11 @@ type SubstackConnectorOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
   skipNetworkValidation?: boolean;
+  onProgress?: (progress: {
+    historyCursor: number;
+    historyComplete: boolean;
+    historyStartedAt: string;
+  }) => void;
 };
 
 const ARCHIVE_PAGE_SIZE = 12;
@@ -32,12 +37,24 @@ export function createSubstackConnector(
   feed: PublicationFeed,
   options: SubstackConnectorOptions = {}
 ): SourceConnector {
+  let progress = {
+    historyCursor: feed.historyCursor ?? 0,
+    historyComplete: feed.historyComplete ?? false,
+    historyStartedAt: feed.historyStartedAt ?? new Date().toISOString()
+  };
   return {
+    checkpoint: () => progress,
     id: feed.id,
     sourceClass: "newspaper",
     description: `${feed.name} public Substack archive.`,
     async poll() {
-      return fetchSubstackPosts(feed, options);
+      return fetchSubstackPosts(feed, {
+        ...options,
+        onProgress: (value) => {
+          progress = value;
+          options.onProgress?.(value);
+        }
+      });
     }
   };
 }
@@ -46,27 +63,47 @@ export async function fetchSubstackPosts(
   feed: PublicationFeed,
   options: SubstackConnectorOptions = {}
 ): Promise<PersistableDocument[]> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? publicFetch;
   const now = options.now?.() ?? Date.now();
   const origin = options.skipNetworkValidation
     ? new URL(feed.homepageUrl).origin
     : (await assertPublicNetworkUrl(feed.homepageUrl)).origin;
-  const cutoff = now - publicationLookbackHours(feed, now) * 3_600_000;
+  const historical = !feed.historyComplete;
+  const historyStartedAt = feed.historyStartedAt ?? new Date(now).toISOString();
+  const cutoff = historical
+    ? new Date(historyStartedAt).getTime() - feed.backfillDays * 86_400_000
+    : now - publicationLookbackHours(feed, now) * 3_600_000;
+  const startOffset = historical ? (feed.historyCursor ?? 0) : 0;
+  let nextOffset = startOffset;
+  let complete = !historical;
   const documents: PersistableDocument[] = [];
   const seen = new Set<string>();
 
   for (
-    let offset = 0;
-    offset < feed.maxPostsPerPoll && documents.length < feed.maxPostsPerPoll;
+    let offset = startOffset;
+    offset < startOffset + feed.maxPostsPerPoll &&
+    documents.length < feed.maxPostsPerPoll;
     offset += ARCHIVE_PAGE_SIZE
   ) {
-    const limit = Math.min(ARCHIVE_PAGE_SIZE, feed.maxPostsPerPoll - offset);
+    const limit = Math.min(
+      ARCHIVE_PAGE_SIZE,
+      startOffset + feed.maxPostsPerPoll - offset
+    );
     const archiveUrl = new URL("/api/v1/archive", origin);
     archiveUrl.searchParams.set("sort", "new");
     archiveUrl.searchParams.set("offset", String(offset));
     archiveUrl.searchParams.set("limit", String(limit));
-    const archive = await fetchJson<SubstackPost[]>(fetchImpl, archiveUrl, feed.rateLimitMs);
-    if (!Array.isArray(archive) || archive.length === 0) break;
+    const archive = await fetchJson<SubstackPost[]>(
+      fetchImpl,
+      archiveUrl,
+      feed.rateLimitMs
+    );
+    if (!Array.isArray(archive))
+      throw new Error("Invalid Substack archive response.");
+    if (archive.length === 0) {
+      complete = true;
+      break;
+    }
 
     let reachedCutoff = false;
     for (const preview of archive) {
@@ -80,26 +117,37 @@ export async function fetchSubstackPosts(
       }
 
       await sleep(feed.rateLimitMs);
-      try {
-        const detailUrl = new URL(`/api/v1/posts/${encodeURIComponent(preview.slug)}`, origin);
-        const post = await fetchJson<SubstackPost>(fetchImpl, detailUrl, feed.rateLimitMs);
+      {
+        const detailUrl = new URL(
+          `/api/v1/posts/${encodeURIComponent(preview.slug)}`,
+          origin
+        );
+        const post = await fetchJson<SubstackPost>(
+          fetchImpl,
+          detailUrl,
+          feed.rateLimitMs
+        );
         const document = toSubstackDocument(feed, { ...preview, ...post });
         if (document && !seen.has(document.canonicalUrl ?? document.url)) {
           seen.add(document.canonicalUrl ?? document.url);
           documents.push(document);
         }
-      } catch (error) {
-        console.warn(
-          `[substack] feed=${feed.id} slug=${preview.slug} failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
       }
     }
 
-    if (reachedCutoff || archive.length < limit) break;
+    nextOffset = offset + archive.length;
+    if (reachedCutoff || archive.length < limit) {
+      complete = true;
+      break;
+    }
   }
 
+  if (historical)
+    options.onProgress?.({
+      historyCursor: nextOffset,
+      historyComplete: complete,
+      historyStartedAt
+    });
   return documents;
 }
 
@@ -122,11 +170,10 @@ function toSubstackDocument(
     post.truncated_body_text ?? post.description ?? post.subtitle ?? ""
   );
   const body =
-    feed.retentionPolicy === "snippet"
-      ? previewBody.slice(0, 2_000)
-      : fullBody;
+    feed.retentionPolicy === "snippet" ? previewBody.slice(0, 2_000) : fullBody;
   if (body.length < 80) return null;
 
+  if (!/^https:\/\//i.test(post.canonical_url)) return null;
   const canonicalUrl = canonicalizeUrl(post.canonical_url);
   const title = cleanHtml(post.title);
   return {
@@ -141,13 +188,21 @@ function toSubstackDocument(
     canonicalUrl,
     publishedAt: new Date(post.post_date).toISOString(),
     tickers: [],
-    summary: cleanHtml(post.subtitle ?? post.description ?? title).slice(0, 500),
+    summary: cleanHtml(post.subtitle ?? post.description ?? title).slice(
+      0,
+      500
+    ),
     body,
     retrievalMethod: "api",
     retentionPolicy: feed.retentionPolicy,
     contentHash: createHash("sha256").update(body).digest("hex"),
     nearDuplicateKey: createHash("sha256")
-      .update(title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
+      .update(
+        title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim()
+      )
       .digest("hex"),
     metadata: {
       sourceName: feed.name,
@@ -156,7 +211,9 @@ function toSubstackDocument(
       audience: post.audience,
       substackPostId: post.id,
       wordCount: post.wordcount,
-      authors: post.publishedBylines?.map((author) => author.name).filter(Boolean) ?? [],
+      authors:
+        post.publishedBylines?.map((author) => author.name).filter(Boolean) ??
+        [],
       tags: post.postTags?.map((tag) => tag.name).filter(Boolean) ?? []
     }
   };
@@ -179,7 +236,9 @@ async function fetchJson<T>(
         signal: AbortSignal.timeout(20_000)
       });
       if (response.ok) return (await response.json()) as T;
-      lastError = new Error(`Substack returned ${response.status} for ${url.pathname}`);
+      lastError = new Error(
+        `Substack returned ${response.status} for ${url.pathname}`
+      );
       if (response.status < 500 && response.status !== 429) break;
     } catch (error) {
       lastError = error;

@@ -19,8 +19,8 @@ const migrationsPath = join(__dirname, "../migrations");
 
 const client = new Client({
   connectionString: databaseUrl,
-  ssl: databaseUrl.includes("render.com")
-    ? { rejectUnauthorized: false }
+  ssl: new URL(databaseUrl).hostname.endsWith(".render.com")
+    ? { rejectUnauthorized: true }
     : undefined
 });
 

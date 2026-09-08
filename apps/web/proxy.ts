@@ -13,7 +13,13 @@ const PROTECTED_PATHS = [
 ];
 
 export function proxy(request: NextRequest) {
-  if (!PROTECTED_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {
+  const pathname = request.nextUrl.pathname;
+  const publicResearch = process.env.RESEARCH_PUBLIC_READS === "true";
+  if (
+    pathname === "/api/health" ||
+    (publicResearch &&
+      !PROTECTED_PATHS.some((path) => pathname.startsWith(path)))
+  ) {
     return NextResponse.next();
   }
 
@@ -25,7 +31,9 @@ export function proxy(request: NextRequest) {
       return NextResponse.next();
     }
 
-    return new NextResponse("Operational authentication is not configured.", { status: 503 });
+    return new NextResponse("Operational authentication is not configured.", {
+      status: 503
+    });
   }
 
   if (isAuthorized(request.headers.get("authorization"), username, password)) {
@@ -39,14 +47,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    "/analysis/:path*",
-    "/ingestion/:path*",
-    "/theme-mappings/:path*",
-    "/narrative-review/:path*",
-    "/sources/:path*",
-    "/api/narrative-observations/:path*",
-    "/api/publication-feeds/:path*",
-    "/api/backfill/:path*"
-  ]
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]
 };

@@ -1,4 +1,4 @@
-export type ToneDirection = "risk" | "bullish" | "mixed" | "neutral";
+import type { NarrativeQuality } from "./narrative-metrics";export type ToneDirection = "risk" | "bullish" | "mixed" | "neutral";
 
 export type SourceClass =
   | "filing"
@@ -65,6 +65,8 @@ export type ExtractedSignalInput = {
   metadata?: Record<string, unknown>;
   scoreContribution: number;
 };
+
+export type AnalysisRunClaim = { id: string; attemptToken: string };
 
 export type AnalysisRunStatus = "pending" | "running" | "completed" | "failed";
 
@@ -359,6 +361,9 @@ export type ConnectorCheckpointSummary = {
 export type PublicationFeedPlatform = "substack" | "rss";
 
 export type PublicationFeed = {
+  historyCursor?: number;
+  historyComplete?: boolean;
+  historyStartedAt?: string | null;
   id: string;
   name: string;
   homepageUrl: string;
@@ -450,7 +455,8 @@ export type NarrativeObservationInput = {
   metadata?: Record<string, unknown>;
 };
 
-export type NarrativeTrendPoint = {
+export type NarrativeTrendPoint = Partial<NarrativeQuality> & {
+  lowHistory?: boolean;
   date: string;
   density: number;
   baselineMean: number;
@@ -491,6 +497,7 @@ export type NarrativeReviewItem = NarrativeEvidence & {
 };
 
 export type NarrativeReviewQueue = {
+  hasMore?: boolean;
   databaseConfigured: boolean;
   promptVersion: string;
   pendingCount: number;
@@ -499,27 +506,30 @@ export type NarrativeReviewQueue = {
   items: NarrativeReviewItem[];
 };
 
-export type NarrativeTrendSummary = NarrativeDefinition & {
-  trendWindow: TrendWindow;
-  latestDate: string | null;
-  density: number;
-  baselineMean: number;
-  zScore: number;
-  percentileRank: number;
-  change: number;
-  acceleration: number;
-  riskTone: number;
-  bullishTone: number;
-  eligibleDocuments: number;
-  matchedDocuments: number;
-  publisherBreadth: number;
-  publisherOwnerBreadth: number;
-  sourceClassBreadth: number;
-  entityBreadth: number;
-  lowHistory: boolean;
-  history: NarrativeTrendPoint[];
-  evidence: NarrativeEvidence[];
-};
+export type NarrativeTrendSummary = NarrativeDefinition &
+  Partial<NarrativeQuality> & {
+    measurementPending?: boolean;
+    measuredAt?: string | null;
+    trendWindow: TrendWindow;
+    latestDate: string | null;
+    density: number;
+    baselineMean: number;
+    zScore: number;
+    percentileRank: number;
+    change: number;
+    acceleration: number;
+    riskTone: number;
+    bullishTone: number;
+    eligibleDocuments: number;
+    matchedDocuments: number;
+    publisherBreadth: number;
+    publisherOwnerBreadth: number;
+    sourceClassBreadth: number;
+    entityBreadth: number;
+    lowHistory: boolean;
+    history: NarrativeTrendPoint[];
+    evidence: NarrativeEvidence[];
+  };
 
 export type NarrativeBoardStatus = {
   databaseConfigured: boolean;

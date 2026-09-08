@@ -16,6 +16,7 @@ const DEFAULT_MAX_EVIDENCE_CHARS = 800;
 export const marketSignalAnalysisType = "market_signal_extraction";
 
 export type ExtractSignalsOptions = {
+  signal?: AbortSignal;
   apiKey?: string;
   model?: string;
   promptVersion?: string;
@@ -32,8 +33,11 @@ export async function extractSignalsFromDocument(
 ): Promise<ExtractedSignalInput[]> {
   const model = options.model ?? process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
   const promptVersion =
-    options.promptVersion ?? process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion;
-  const maxDocumentChars = options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS;
+    options.promptVersion ??
+    process.env.CLAUDE_PROMPT_VERSION ??
+    signalExtractionPromptVersion;
+  const maxDocumentChars =
+    options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS;
 
   const sections =
     document.text.length <= maxDocumentChars
@@ -47,6 +51,7 @@ export async function extractSignalsFromDocument(
   const allSignals: ExtractedSignalInput[] = [];
 
   for (const section of sections) {
+    options.signal?.throwIfAborted();
     const signals = await extractSignalsFromText(document, section, {
       ...options,
       model,
@@ -67,25 +72,29 @@ async function extractSignalsFromText(
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.create({
-    model: options.model,
-    max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-    temperature: 0,
-    system: signalExtractionSystemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: buildUserPrompt(document, section)
-      }
-    ]
-  });
+  const message = await client.messages.create(
+    {
+      model: options.model,
+      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      temperature: 0,
+      system: signalExtractionSystemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: buildUserPrompt(document, section)
+        }
+      ]
+    },
+    { signal: options.signal }
+  );
   const responseText = message.content
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n")
     .trim();
   const parsed = parseClaudeJson(responseText);
-  const maxEvidenceChars = options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS;
+  const maxEvidenceChars =
+    options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS;
 
   return validateSignals(parsed, document, section, {
     model: options.model,
@@ -182,7 +191,10 @@ function validateSignal(
       throw new Error(`Signal ${index} must be an object.`);
     }
 
-    const rawThemeLabel = requiredString(candidate.rawThemeLabel, `signals[${index}].rawThemeLabel`);
+    const rawThemeLabel = requiredString(
+      candidate.rawThemeLabel,
+      `signals[${index}].rawThemeLabel`
+    );
     const canonicalThemeLabel = requiredString(
       candidate.canonicalThemeLabel,
       `signals[${index}].canonicalThemeLabel`
@@ -192,9 +204,18 @@ function validateSignal(
       `signals[${index}].themeDescription`
     );
     const stance = validateStance(candidate.stance, index);
-    const riskTone = validateScore(candidate.riskTone, `signals[${index}].riskTone`);
-    const bullishTone = validateScore(candidate.bullishTone, `signals[${index}].bullishTone`);
-    const confidence = validateScore(candidate.confidence, `signals[${index}].confidence`);
+    const riskTone = validateScore(
+      candidate.riskTone,
+      `signals[${index}].riskTone`
+    );
+    const bullishTone = validateScore(
+      candidate.bullishTone,
+      `signals[${index}].bullishTone`
+    );
+    const confidence = validateScore(
+      candidate.confidence,
+      `signals[${index}].confidence`
+    );
     const evidenceSnippet = requiredString(
       candidate.evidenceSnippet,
       `signals[${index}].evidenceSnippet`
@@ -205,17 +226,26 @@ function validateSignal(
     );
 
     if (evidenceSnippet.length > options.maxEvidenceChars) {
-      throw new Error(`Signal ${index} evidence snippet exceeds ${options.maxEvidenceChars} chars.`);
+      throw new Error(
+        `Signal ${index} evidence snippet exceeds ${options.maxEvidenceChars} chars.`
+      );
     }
 
     if (!containsSnippet(section.text, evidenceSnippet)) {
-      throw new Error(`Signal ${index} evidence snippet was not copied from the source text.`);
+      throw new Error(
+        `Signal ${index} evidence snippet was not copied from the source text.`
+      );
     }
 
     const themeId = `theme:${slugify(canonicalThemeLabel)}`;
 
     return {
-      id: signalId(document.id, options.promptVersion, themeId, evidenceSnippet),
+      id: signalId(
+        document.id,
+        options.promptVersion,
+        themeId,
+        evidenceSnippet
+      ),
       documentId: document.id,
       themeId,
       rawThemeLabel,
@@ -349,7 +379,9 @@ function validateStance(value: unknown, index: number): ToneDirection {
     return value;
   }
 
-  throw new Error(`signals[${index}].stance must be risk, bullish, mixed, or neutral.`);
+  throw new Error(
+    `signals[${index}].stance must be risk, bullish, mixed, or neutral.`
+  );
 }
 
 function validateScore(value: unknown, field: string) {

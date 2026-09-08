@@ -54,44 +54,57 @@ export async function runPipeline() {
     trigger: process.env.PIPELINE_TRIGGER ?? "scheduled",
     executionMode: "isolated_processes"
   });
-  const selectedStages = selectStages(stages);
   const completedStages: string[] = [];
+  const partialStages: string[] = [];
+  let currentStage = "configuration";
+  const heartbeat = setInterval(() => {
+    void updatePipelineRunProgress(runId, {}).catch((error) =>
+      console.error("Pipeline heartbeat failed", error)
+    );
+  }, 30_000);
 
   try {
+    const selectedStages = selectStages(stages);
     for (const stage of selectedStages) {
       if (!stage.enabled()) {
         console.log(`[pipeline] stage=${stage.name} skipped`);
         continue;
       }
 
-      console.log(`[pipeline] stage=${stage.name} starting script=${stage.script}`);
+      console.log(
+        `[pipeline] stage=${stage.name} starting script=${stage.script}`
+      );
       await updatePipelineRunProgress(runId, {
         currentStage: stage.name,
         completedStages
       });
-      await runStage(stage);
+      currentStage = stage.name;
+      if ((await runStage(stage)) === "partial") partialStages.push(stage.name);
       completedStages.push(stage.name);
       console.log(`[pipeline] stage=${stage.name} completed`);
     }
 
     await finishPipelineRun(runId, {
-      status: "completed",
+      status: partialStages.length ? "partial" : "completed",
+      failedCount: partialStages.length,
       processedCount: completedStages.length,
-      metadata: { currentStage: null, completedStages }
+      metadata: { currentStage: null, completedStages, partialStages }
     });
     console.log(`[pipeline] completed stages=${completedStages.join(",")}`);
-    return { completedStages };
+    return { completedStages, partialStages };
   } catch (error) {
     await finishPipelineRun(runId, {
       status: "failed",
       failedCount: 1,
       errorMessage: error instanceof Error ? error.message : String(error),
       metadata: {
-        failedStage: selectedStages[completedStages.length]?.name ?? "unknown",
+        failedStage: currentStage,
         completedStages
       }
     });
     throw error;
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -112,7 +125,7 @@ export function selectStages(availableStages: PipelineStage[]) {
 }
 
 function runStage(stage: PipelineStage) {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<"completed" | "partial">((resolve, reject) => {
     const child = spawn("npm", ["run", stage.script], {
       cwd: process.cwd(),
       env: process.env,
@@ -121,8 +134,8 @@ function runStage(stage: PipelineStage) {
 
     child.once("error", reject);
     child.once("exit", (code, signal) => {
-      if (code === 0) {
-        resolve();
+      if (code === 0 || code === 2) {
+        resolve(code === 2 ? "partial" : "completed");
         return;
       }
       reject(
@@ -136,6 +149,10 @@ function runStage(stage: PipelineStage) {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runPipeline();
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  const result = await runPipeline();
+  if (result.partialStages.length) process.exitCode = 2;
 }

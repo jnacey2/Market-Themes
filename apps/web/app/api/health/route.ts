@@ -26,11 +26,11 @@ export async function GET() {
       commit: process.env.RENDER_GIT_COMMIT ?? null
     });
   } catch (error) {
+    console.error("Health database check failed", error);
     return Response.json(
       {
         ok: false,
-        database: "error",
-        error: error instanceof Error ? error.message : String(error)
+        database: "error"
       },
       { status: 503 }
     );

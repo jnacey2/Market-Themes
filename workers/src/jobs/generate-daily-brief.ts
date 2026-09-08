@@ -1,4 +1,3 @@
-import { dailyBrief } from "@market-themes/db";
-
-console.log("[generate-daily-brief]", dailyBrief.headline);
-console.log(dailyBrief.summary);
+import { generateDailyNarrativeBrief } from "@market-themes/db";
+const brief = await generateDailyNarrativeBrief();
+console.log(`[generate-daily-brief] saved ${brief.date}: ${brief.headline}`);

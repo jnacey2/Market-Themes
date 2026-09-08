@@ -11,6 +11,11 @@ export type SourceConnector = {
   sourceClass: SourceClass;
   description: string;
   poll: () => Promise<RawDocument[]>;
+  checkpoint?: () => {
+    historyCursor: number;
+    historyComplete: boolean;
+    historyStartedAt: string;
+  };
 };
 
 export function createManualConnector(documents: RawDocument[]): SourceConnector {

@@ -683,3 +683,42 @@ h3 {
     flex-direction: column;
   }
 }
+
+/* Compact research pages and navigation remain usable on narrow screens. */
+.nav { gap: 20px; margin-bottom: 32px; flex-wrap: wrap; }
+.nav-links { flex-wrap: wrap; row-gap: 12px; }
+.nav-links a { padding-block: 5px; }
+.panel, .current-row > *, .evidence-card { min-width: 0; overflow-wrap: anywhere; }
+.board-heading { margin-bottom: 24px; }
+.board-heading h1 { font-size: clamp(30px, 4vw, 48px); letter-spacing: -0.04em; line-height: 1.1; }
+.board-heading .lede { font-size: 16px; }
+.board-quote { margin: 12px 0 0; font-size: 13px; line-height: 1.5; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.board-quote cite { display: block; margin-top: 4px; }
+.pill[aria-current="page"] { background: var(--accent); color: var(--background); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.narrative-controls input, .filter-form input, .filter-form select { background: #0d1427; border: 1px solid var(--line); color: var(--text); padding: 9px 12px; max-width: 100%; }
+.chart-axis { fill: var(--muted); font-size: 12px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 20px; color: var(--muted); font-size: 13px; }
+.chart-readout { margin-top: 12px; }
+.date-slider { width: 100%; accent-color: var(--accent); }
+.filter-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.filter-form label { display: grid; gap: 6px; font-size: 13px; }
+@media (max-width: 1100px) {
+  .currents-header { display: none; }
+  .current-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .current-name, .sparkline, .sparkline-empty { grid-column: 1 / -1; }
+}
+@media (max-width: 480px) {
+  .shell { padding-inline: 16px; }
+  .panel { padding: 18px; }
+  .current-row { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 18px; gap: 16px; }
+  .current-breadth { grid-column: 1 / -1; }
+  .metric-row { grid-template-columns: 1fr; }
+  .nav-links { gap: 10px 16px; }
+}
+
+@media (max-width: 480px) {
+  .chart-axis { font-size: 30px; }
+  .narrative-timeline { height: auto; min-height: 140px; }
+  .narrative-detail-hero h1 { font-size: 38px; letter-spacing: -0.04em; line-height: 1.05; }
+}

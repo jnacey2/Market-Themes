@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { publicFetch } from "./public-fetch";import { createHash } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import type { PersistableDocument, SourceClass } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
@@ -7,13 +7,18 @@ export type RssFeedConfig = {
   id: string;
   name: string;
   url: string;
-  sourceClass: Extract<SourceClass, "press_release" | "government" | "central_bank" | "newspaper">;
+  sourceClass: Extract<
+    SourceClass,
+    "press_release" | "government" | "central_bank" | "newspaper"
+  >;
   publisherOwner?: string;
   tickers?: string[];
   retentionPolicy?: "full_text" | "snippet";
   lookbackHours?: number;
   termsNotes?: string;
   fetchImpl?: typeof fetch;
+  maxPostsPerPoll?: number;
+  rateLimitMs?: number;
 };
 
 type FeedItem = {
@@ -41,9 +46,12 @@ export function createRssConnector(config: RssFeedConfig): SourceConnector {
     sourceClass: config.sourceClass,
     description: `${config.name} RSS feed.`,
     async poll() {
-      const response = await (config.fetchImpl ?? fetch)(config.url, {
+      if (config.rateLimitMs)
+        await new Promise((resolve) => setTimeout(resolve, config.rateLimitMs));
+      const response = await (config.fetchImpl ?? publicFetch)(config.url, {
         headers: {
-          Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
+          Accept:
+            "application/rss+xml, application/atom+xml, application/xml, text/xml",
           "User-Agent": process.env.SCRAPER_USER_AGENT ?? "MarketThemesBot/0.1"
         }
       });
@@ -52,16 +60,26 @@ export function createRssConnector(config: RssFeedConfig): SourceConnector {
         throw new Error(`${config.id} feed returned ${response.status}`);
       }
 
-      const parsed = parser.parse(await response.text()) as Record<string, unknown>;
+      const parsed = parser.parse(await response.text()) as Record<
+        string,
+        unknown
+      >;
       const items = extractItems(parsed);
       const cutoff =
         Date.now() -
-        Number(config.lookbackHours ?? process.env.RSS_LOOKBACK_HOURS ?? 48) * 3_600_000;
+        Number(config.lookbackHours ?? process.env.RSS_LOOKBACK_HOURS ?? 48) *
+          3_600_000;
 
       return items
         .map((item) => toDocument(config, item))
-        .filter((document): document is PersistableDocument => document !== null)
-        .filter((document) => new Date(document.publishedAt).getTime() >= cutoff);
+        .filter(
+          (document): document is PersistableDocument => document !== null
+        )
+        .filter(
+          (document) => new Date(document.publishedAt).getTime() >= cutoff
+        )
+        .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+        .slice(0, config.maxPostsPerPoll ?? 250);
     }
   };
 }
@@ -92,22 +110,33 @@ function extractItems(parsed: Record<string, unknown>): FeedItem[] {
   return (Array.isArray(value) ? value : [value]).filter(isFeedItem);
 }
 
-function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument | null {
+function toDocument(
+  config: RssFeedConfig,
+  item: FeedItem
+): PersistableDocument | null {
   const title = cleanHtml(text(item.title));
   const url = text(item.link) || text(item.guid);
-  const publishedAt = normalizeDate(item.pubDate ?? item.published ?? item.updated);
+  const publishedAt = normalizeDate(
+    item.pubDate ?? item.published ?? item.updated
+  );
   const fullBody = cleanHtml(
-    text(item["content:encoded"]) || text(item.content) || text(item.description) || text(item.summary)
+    text(item["content:encoded"]) ||
+      text(item.content) ||
+      text(item.description) ||
+      text(item.summary)
   );
   const body =
     config.retentionPolicy === "snippet"
-      ? cleanHtml(text(item.description) || text(item.summary) || fullBody).slice(0, 2_000)
+      ? cleanHtml(
+          text(item.description) || text(item.summary) || fullBody
+        ).slice(0, 2_000)
       : fullBody;
 
   if (!title || !url || !publishedAt || !body) {
     return null;
   }
 
+  if (!/^https?:\/\//i.test(url)) return null;
   const canonicalUrl = canonicalizeUrl(url);
   const publisherId = slug(config.name);
   return {
@@ -117,7 +146,7 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
     title,
     publisher: config.name,
     publisherId,
-    publisherOwner: slug(config.publisherOwner ?? config.name),
+    publisherOwner: slug(config.publisherOwner?.trim() || config.name),
     url,
     canonicalUrl,
     publishedAt,
@@ -127,7 +156,9 @@ function toDocument(config: RssFeedConfig, item: FeedItem): PersistableDocument 
     retrievalMethod: "rss",
     retentionPolicy: config.retentionPolicy ?? "full_text",
     contentHash: createHash("sha256").update(body).digest("hex"),
-    nearDuplicateKey: createHash("sha256").update(normalizeTitle(title)).digest("hex"),
+    nearDuplicateKey: createHash("sha256")
+      .update(normalizeTitle(title))
+      .digest("hex"),
     metadata: {
       feedUrl: config.url,
       publisherOwner: config.publisherOwner ?? config.name,

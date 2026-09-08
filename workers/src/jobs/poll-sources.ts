@@ -15,7 +15,9 @@ export async function pollSources() {
   let inserted = 0;
   let failed = 0;
   const publicationFeeds = await listPublicationFeeds({ enabledOnly: true });
-  const publicationFeedById = new Map(publicationFeeds.map((feed) => [feed.id, feed]));
+  const publicationFeedById = new Map(
+    publicationFeeds.map((feed) => [feed.id, feed])
+  );
   const staticIds = new Set(defaultConnectors.map((connector) => connector.id));
   const connectors = [
     ...defaultConnectors,
@@ -31,9 +33,15 @@ export async function pollSources() {
 
       if (documents.length === 0) {
         console.log(`[poll-sources] ${connector.id} returned 0 documents`);
-        await recordConnectorCheckpoint({ connectorId: connector.id, success: true });
+        await recordConnectorCheckpoint({
+          connectorId: connector.id,
+          success: true
+        });
         if (publicationFeedById.has(connector.id)) {
-          await recordPublicationFeedPoll(connector.id, { success: true });
+          await recordPublicationFeedPoll(connector.id, {
+            success: true,
+            ...connector.checkpoint?.()
+          });
         }
         continue;
       }
@@ -50,6 +58,7 @@ export async function pollSources() {
       if (publicationFeedById.has(connector.id)) {
         await recordPublicationFeedPoll(connector.id, {
           success: true,
+          ...connector.checkpoint?.(),
           lastPublishedAt: newestDocumentDate(documents)
         });
       }
@@ -74,7 +83,7 @@ export async function pollSources() {
     }
   }
 
-  return { fetched, inserted, failed };
+  return { fetched, inserted, failed, succeeded: connectors.length - failed };
 }
 
 function newestDocumentDate(documents: Array<{ publishedAt: string }>) {
@@ -85,6 +94,10 @@ function newestDocumentDate(documents: Array<{ publishedAt: string }>) {
   );
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await pollSources();
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  const result = await pollSources();
+  if (result.failed) process.exitCode = result.succeeded ? 2 : 1;
 }

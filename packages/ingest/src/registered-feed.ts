@@ -7,7 +7,9 @@ import {
 import { createRssConnector } from "./rss";
 import { createSubstackConnector } from "./substack";
 
-export function createPublicationFeedConnector(feed: PublicationFeed): SourceConnector {
+export function createPublicationFeedConnector(
+  feed: PublicationFeed
+): SourceConnector {
   if (feed.platform === "substack") {
     return createSubstackConnector(feed);
   }
@@ -20,6 +22,8 @@ export function createPublicationFeedConnector(feed: PublicationFeed): SourceCon
     publisherOwner: feed.publisherOwner,
     retentionPolicy: feed.retentionPolicy,
     lookbackHours: publicationLookbackHours(feed),
+    maxPostsPerPoll: feed.maxPostsPerPoll,
+    rateLimitMs: feed.rateLimitMs,
     termsNotes: feed.termsNotes
   });
 

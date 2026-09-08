@@ -4,25 +4,41 @@ import {
 } from "@market-themes/analysis";
 import {
   getActiveNarrativeDefinitions,
+  claimNarrativeClassification,
+  failNarrativeClassification,
   persistNarrativeObservations,
   selectDocumentsForNarrativeClassification
 } from "@market-themes/db";
 import { pathToFileURL } from "node:url";
 
-export async function classifyNarrativeBatches(options: {
-  batchSize?: number;
-  maxBatches?: number;
-} = {}) {
+export async function classifyNarrativeBatches(
+  options: {
+    batchSize?: number;
+    maxBatches?: number;
+  } = {}
+) {
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY is required for narrative classification.");
+    throw new Error(
+      "ANTHROPIC_API_KEY is required for narrative classification."
+    );
   }
 
   const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
   const promptVersion =
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
     narrativeClassificationPromptVersion;
-  const batchSize = options.batchSize ?? Number(process.env.NARRATIVE_CLASSIFICATION_BATCH_SIZE ?? 10);
-  const maxBatches = options.maxBatches ?? Number(process.env.NARRATIVE_CLASSIFICATION_MAX_BATCHES ?? 4);
+  const batchSize =
+    options.batchSize ??
+    Number(process.env.NARRATIVE_CLASSIFICATION_BATCH_SIZE ?? 10);
+  const maxBatches =
+    options.maxBatches ??
+    Number(process.env.NARRATIVE_CLASSIFICATION_MAX_BATCHES ?? 4);
+  if (
+    ![batchSize, maxBatches].every(
+      (value) => Number.isInteger(value) && value > 0
+    )
+  )
+    throw new Error("Classification batch settings must be positive integers.");
   const definitions = await getActiveNarrativeDefinitions();
   let documentsProcessed = 0;
   let observationsStored = 0;
@@ -32,21 +48,38 @@ export async function classifyNarrativeBatches(options: {
     const documents = await selectDocumentsForNarrativeClassification({
       model,
       promptVersion,
-      limit: batchSize
+      limit: batchSize,
+      oldestFirst: batch % 2 === 1
     });
     if (documents.length === 0) break;
 
     for (const document of documents) {
+      const leaseId = await claimNarrativeClassification(
+        document,
+        model,
+        promptVersion
+      );
+      if (!leaseId) continue;
       try {
-        const observations = await classifyDocumentNarratives(document, definitions, {
-          model,
-          promptVersion
-        });
-        const result = await persistNarrativeObservations(observations);
+        const observations = await classifyDocumentNarratives(
+          document,
+          definitions,
+          {
+            model,
+            promptVersion,
+            signal: AbortSignal.timeout(600_000)
+          }
+        );
+        const result = await persistNarrativeObservations(
+          observations,
+          undefined,
+          leaseId
+        );
         observationsStored += result.inserted;
         documentsProcessed += 1;
       } catch (error) {
         failedDocuments += 1;
+        await failNarrativeClassification(leaseId, error);
         console.error(
           `[classify-narratives] document=${document.id} failed: ${
             error instanceof Error ? error.message : String(error)
@@ -59,7 +92,12 @@ export async function classifyNarrativeBatches(options: {
   return { documentsProcessed, observationsStored, failedDocuments };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   const result = await classifyNarrativeBatches();
   console.log(`[classify-narratives] ${JSON.stringify(result)}`);
+  if (result.failedDocuments > 0)
+    process.exitCode = result.documentsProcessed > 0 ? 2 : 1;
 }

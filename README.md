@@ -1,6 +1,6 @@
 # Market Themes
 
-Storyboard-first narrative intelligence for market research.
+Reviewed narrative intelligence for market research.
 
 Market Themes is a Render-deployable web app for tracking the market narratives
 that are getting stronger, weaker, broader, or more urgent across company
@@ -9,6 +9,18 @@ and manual uploads.
 
 The goal is not to generate trade recommendations. The goal is to help a
 research user decide what themes, risks, and opportunities deserve deeper work.
+
+## Reliability update
+
+The September 2026 audit fixes are described in [the implementation notes](audit/implementation-notes.md).
+Apply migrations **007, 008, and 009** before running the updated web app, worker, or scheduled jobs.
+The classifier now uses `narrative_classification_v6` and trend calculations use
+`reviewed_density_v2`; older measurements are deliberately excluded from the main board.
+Reclassify and review a bounded representative batch, then recompute trends.
+
+Research pages require `OPS_USERNAME` and `OPS_PASSWORD` in production. Set
+`RESEARCH_PUBLIC_READS=true` only for an intentionally public research dashboard.
+Operational actions remain protected. `/api/health` remains available to hosting checks.
 
 ## Product Goal
 
@@ -33,21 +45,21 @@ mix, and follow-up research questions for a market theme.
 - **Company coverage target:** S&P 500 plus Nasdaq-100.
 - **Signal horizons:** days, weeks, and months.
 - **Core output:** ranked narrative storyboards with evidence cards.
-- **Supporting outputs:** daily brief and research copilot.
+- **Supporting output:** a saved, cited daily brief. A research copilot remains future work.
 - **Out of scope:** automated buy/sell recommendations, portfolio execution,
   real-time trading alerts, and unsupported claims without citations.
 
 ## What Exists Now
 
 - Render-friendly npm workspace monorepo.
-- Next.js dashboard with storyboard cards and detail pages.
+- Next.js dashboard centered on reviewed narratives, with explicit coverage and comparison states.
 - Mock data shaped like production objects.
 - Postgres schema for sources, documents, chunks, entities, themes, signals,
   trends, storyboards, briefs, and alerts.
 - Analysis helpers for baseline-aware z-score scoring.
 - Ten versioned, curated narrative definitions with strict inclusion/exclusion guidance.
 - Corpus-normalized narrative observations and 7-day/30-day historical trend series.
-- Interactive Narrative Currents board, timeline drilldowns, and live storyboards.
+- Narrative Currents homepage, dated evidence pagination, searchable review queue, and a daily-brief archive.
 - Claude signal extraction for bounded SEC/FMP smoke runs.
 - Analysis inspection page for recent signals, evidence snippets, interpretations,
   and failed document runs.
@@ -157,9 +169,11 @@ only after enough evidence, clustering stability, and baseline history.
 
 Curated narratives use a separate, stable measurement contract. Each active
 definition is evaluated against every eligible document and records both matches
-and non-matches. Daily density is the percentage of eligible unique documents
-matching the proposition, calculated per source class and then averaged so a
-high-volume feed cannot dominate the result. The UI reports publisher breadth
+and non-matches. Rolling density is the percentage of eligible unique documents
+matching the proposition over the complete 7-day or 30-day window, calculated
+per source class and then averaged equally across classes. Only approved matches
+contribute to the numerator. Pending positives and unclassified eligible documents
+suppress comparisons; an uncovered day is never treated as a measured zero. The UI reports publisher breadth
 and publisher-owner breadth separately to avoid treating syndicated copies as
 independent confirmation. Narrative movement compares adjacent windows; it
 measures attention, not agreement, sentiment, or predictive performance.
@@ -322,13 +336,13 @@ flags low-history rows until at least 14 baseline days exist.
 
 Requirements:
 
-- Node.js 20 or newer.
+- Node.js 22.x (the version used by CI and deployment).
 - npm.
 
 Install dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 Run the web app:
@@ -641,7 +655,7 @@ clustering behavior.
   document backfill and classification run.
 - GDELT is discovery metadata only and is excluded from full-text classification.
 - Premium financial-news feeds require a separate license and credentials.
-- The copilot is a UI preview, not a live retrieval system yet.
+- The copilot remains unimplemented and has been removed from the primary dashboard.
 
 ## Repository
 
