@@ -9,7 +9,7 @@ import {
   recordConnectorCheckpoint,
   type PersistableDocument
 } from "@market-themes/db";
-import { createRssConnector } from "@market-themes/ingest";
+import { createRssConnector, resolvePublisherOwner } from "@market-themes/ingest";
 import {
   decodeStorageState,
   isAllowedPublisherUrl,
@@ -203,7 +203,11 @@ async function scrapeArticle(
     title,
     publisher: profile.name,
     publisherId: profile.id,
-    publisherOwner: profile.publisherOwner,
+    publisherOwner: resolvePublisherOwner({
+      url: canonicalUrl,
+      name: profile.name,
+      fallback: profile.publisherOwner
+    }),
     url: canonicalUrl,
     canonicalUrl,
     publishedAt: article.publishedAt,

@@ -3,6 +3,7 @@ import { createSecFilingsConnector } from "./sec";
 import { createFmpNewsConnector } from "./fmp-news";
 import { createCompanyIrConnectors, createOfficialSourceConnectors } from "./official-sources";
 import { createGdeltConnector } from "./gdelt";
+import { createNytSearchConnector } from "./nyt-search";
 
 export type RawDocument = PersistableDocument;
 
@@ -11,11 +12,13 @@ export type SourceConnector = {
   sourceClass: SourceClass;
   description: string;
   poll: () => Promise<RawDocument[]>;
-  checkpoint?: () => {
-    historyCursor: number;
-    historyComplete: boolean;
-    historyStartedAt: string;
-  };
+  checkpoint?: () =>
+    | {
+        historyCursor: number;
+        historyComplete: boolean;
+        historyStartedAt: string;
+      }
+    | undefined;
 };
 
 export function createManualConnector(documents: RawDocument[]): SourceConnector {
@@ -54,5 +57,6 @@ export const defaultConnectors: SourceConnector[] = [
     "Earnings call transcript connector for licensed or public sources."
   ),
   createFmpNewsConnector(),
+  createNytSearchConnector(),
   createGdeltConnector()
 ];

@@ -7,7 +7,7 @@ import {
   selectThemeGroupsForNormalization
 } from "@market-themes/db";
 
-const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+const model = process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
 const promptVersion =
   process.env.THEME_NORMALIZATION_PROMPT_VERSION ?? themeNormalizationPromptVersion;
 const batchSize = Number(process.env.THEME_NORMALIZATION_BATCH_SIZE ?? 25);

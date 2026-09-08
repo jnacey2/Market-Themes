@@ -1,14 +1,48 @@
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
+  Message,
+  MessageCreateParamsNonStreaming
+} from "@anthropic-ai/sdk/resources/messages";
+import type {
   AnalysisDocument,
   NarrativeDefinition,
   NarrativeObservationInput,
   ToneDirection
 } from "@market-themes/db";
+import {
+  narrativeClassificationOutputFormat,
+  parseStructuredOutput
+} from "./structured-output";
+import { logAnthropicUsage } from "./anthropic-usage";
 
-export const narrativeClassificationPromptVersion =
-  "narrative_classification_v6";
+export const narrativeClassificationPromptVersion = "narrative_classification_v7";
+
+export const narrativeClassificationSystemPrompt =
+  `Classify a source document against stable market-narrative propositions.
+Evaluate every definition, but return observations only for definitions that match.
+Omit non-matches; the caller records omitted definitions as matched=false.
+Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.
+Set matched=true only when the exact quoted evidence directly entails the proposition.
+Topic, sector, company, or keyword adjacency is not a match.
+Do not infer pricing power from inflation, AI demand from semiconductor adjacency,
+credit deterioration from hypothetical policy risk, or broad deal recovery from one transaction.
+Do not infer AI-driven demand from data-center adjacency without explicit AI language,
+industry maturity, circular financing, or the word "compute" alone. Require a concrete
+demand, capacity, backlog, order, load, infrastructure-investment, or revenue-growth fact.
+Do not infer structural energy-demand growth from short-term weather-driven consumption.
+For directional propositions, contradictory evidence is not supporting evidence; omit the definition.
+The evidenceSnippet must independently support the match without facts added from elsewhere.
+Interpretation may explain the quote but must not introduce facts absent from it.
+Before returning a match, explicitly audit the complete inclusion and exclusion
+contract. contractSatisfied is true only when the quotation independently supports
+every required causal leg. List the satisfied inclusion criteria and any triggered
+exclusions. Never return a match when an exclusion is triggered.
+Every returned observation must use matched=true, contractSatisfied=true,
+matchScore 70-100, and an evidenceSnippet copied exactly from the source. Return an
+empty observations array when no definitions match. When uncertain, omit the definition.
+Do not make trade recommendations.
+Stance is risk, bullish, mixed, or neutral.`;
 
 type RawObservation = {
   narrativeDefinitionId?: string;
@@ -17,6 +51,9 @@ type RawObservation = {
   stance?: string;
   riskTone?: number;
   bullishTone?: number;
+  contractSatisfied?: boolean;
+  inclusionCriteriaSatisfied?: string[];
+  exclusionCriteriaTriggered?: string[];
   evidenceSnippet?: string;
   interpretation?: string;
   affectedEntities?: string[];
@@ -29,229 +66,215 @@ export async function classifyDocumentNarratives(
     apiKey?: string;
     model?: string;
     promptVersion?: string;
+    maxTokens?: number;
     maxDocumentChars?: number;
+    promptCaching?: boolean;
+    cacheTtl?: "5m" | "1h";
     signal?: AbortSignal;
-    fetchImpl?: typeof fetch;
   } = {}
 ): Promise<NarrativeObservationInput[]> {
   const model =
     options.model ??
     process.env.ANTHROPIC_MODEL ??
-    "claude-sonnet-4-5-20250929";
+    "claude-haiku-4-5-20251001";
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
     narrativeClassificationPromptVersion;
-  if (!definitions.length) return [];
-  if (!document.text.trim())
-    throw new Error("Cannot classify an empty document.");
-  const client = new Anthropic({
-    apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY,
-    fetch: options.fetchImpl
-  });
-  const sectionSize = options.maxDocumentChars ?? 120_000;
-  if (!Number.isInteger(sectionSize) || sectionSize < 100)
-    throw new Error("Section size must be at least 100 characters.");
-  const sections: string[] = [];
-  const overlap = Math.min(1_000, Math.floor(sectionSize / 10));
-  for (
-    let offset = 0;
-    offset < document.text.length;
-    offset += sectionSize - overlap
-  ) {
-    sections.push(document.text.slice(offset, offset + sectionSize));
-    if (offset + sectionSize >= document.text.length) break;
-  }
-  if (sections.length > 50)
-    throw new Error(
-      "Document exceeds the 50-section analysis budget; split it before classification."
-    );
-  const merged = new Map<string, NarrativeObservationInput>();
-  let inputTokens = 0;
-  let outputTokens = 0;
-  for (const sourceText of sections) {
-    options.signal?.throwIfAborted();
-    const message = await client.messages.create(
-      {
-        model,
-        max_tokens: 8_000,
-        temperature: 0,
-        system: `Classify a source document against stable market-narrative propositions.
-Return only JSON with an "observations" array containing exactly one item per definition.
-Match meaning, not keywords. Apply inclusion and exclusion guidance strictly.
-Set matched=true only when the exact quoted evidence directly entails the proposition.
-Topic, sector, company, or keyword adjacency is not a match.
-Do not infer pricing power from inflation, AI demand from semiconductor adjacency,
-credit deterioration from hypothetical policy risk, or broad deal recovery from one transaction.
-Do not infer AI-driven demand from data-center adjacency without explicit AI language,
-industry maturity, circular financing, or the word "compute" alone. Require a concrete
-demand, capacity, backlog, order, load, infrastructure-investment, or revenue-growth fact.
-Do not infer structural energy-demand growth from short-term weather-driven consumption.
-For directional propositions, contradictory evidence is matched=false, not supporting evidence.
-The evidenceSnippet must independently support the match without facts added from elsewhere.
-Interpretation may explain the quote but must not introduce facts absent from it.
-For matched=false use matchScore 0-69 and empty evidenceSnippet.
-For matched=true use matchScore 70-100 and copy evidenceSnippet exactly from the source.
-When uncertain, return matched=false. Do not make trade recommendations.
-Stance is risk, bullish, mixed, or neutral.`,
-        messages: [
-          {
-            role: "user",
-            content: JSON.stringify({
-              document: {
-                id: document.id,
-                title: document.title,
-                publisher: document.publisher,
-                publishedAt: document.publishedAt,
-                text: sourceText
-              },
-              definitions: definitions.map((definition) => ({
-                id: definition.id,
-                name: definition.name,
-                proposition: definition.proposition,
-                inclusionGuidance: definition.inclusionGuidance,
-                exclusionGuidance: definition.exclusionGuidance,
-                positiveExamples: definition.positiveExamples,
-                negativeExamples: definition.negativeExamples
-              })),
-              outputShape: {
-                observations: [
-                  {
-                    narrativeDefinitionId: "string",
-                    matched: true,
-                    matchScore: 0,
-                    stance: "risk | bullish | mixed | neutral",
-                    riskTone: 0,
-                    bullishTone: 0,
-                    evidenceSnippet: "exact source quote or empty",
-                    interpretation: "short sourced interpretation",
-                    affectedEntities: ["string"]
-                  }
-                ]
-              }
-            })
-          }
-        ]
-      },
-      { signal: options.signal }
-    );
-    inputTokens += message.usage.input_tokens;
-    outputTokens += message.usage.output_tokens;
-    if (message.stop_reason !== "end_turn")
-      throw new Error(
-        `Incomplete classification response: ${message.stop_reason}`
-      );
-    const response = message.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n")
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```$/i, "")
-      .trim();
-    const parsed = validateNarrativeResponse(JSON.parse(response), definitions);
-    for (const raw of parsed) {
-      if (raw.matched && !sourceText.includes(raw.evidenceSnippet!)) {
-        throw new Error(
-          "Classification quote was not present in the examined section."
-        );
-      }
-      const definition = definitions.find(
-        (item) => item.id === raw.narrativeDefinitionId
-      )!;
-      const observation = normalizeObservation(
-        raw,
-        definition,
-        document,
-        model,
-        promptVersion
-      );
-      const previous = merged.get(definition.id);
-      if (
-        !previous ||
-        (observation.matched &&
-          (!previous.matched || observation.matchScore > previous.matchScore))
-      ) {
-        merged.set(definition.id, observation);
-      }
+  const client = new Anthropic({ apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY });
+  const promptCaching =
+    options.promptCaching ??
+    process.env.ANTHROPIC_PROMPT_CACHING !== "false";
+  const request = buildNarrativeClassificationRequest(
+    document,
+    definitions,
+    {
+      model,
+      maxTokens: options.maxTokens,
+      maxDocumentChars: options.maxDocumentChars,
+      promptCaching,
+      cacheTtl: options.cacheTtl
     }
-  }
-  return definitions.map((definition) => {
-    const observation = merged.get(definition.id)!;
-    return {
-      ...observation,
-      metadata: {
-        ...observation.metadata,
-        textHash: document.textHash,
-        examinedCharacters: document.text.length,
-        sections: sections.length,
-        complete: true,
-        inputTokens,
-        outputTokens
-      }
-    };
-  });
+  );
+  const message = await client.messages.create(
+    request,
+    options.signal ? { signal: options.signal } : undefined
+  );
+  logAnthropicUsage("narrative-classification", model, message.usage);
+  return normalizeNarrativeClassificationMessage(
+    message,
+    document,
+    definitions,
+    model,
+    promptVersion
+  );
 }
 
-export function validateNarrativeResponse(
-  value: unknown,
-  definitions: NarrativeDefinition[]
-): RawObservation[] {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !("observations" in value) ||
-    !Array.isArray(value.observations)
-  ) {
-    throw new Error(
-      "Classification response must contain an observations array."
-    );
+export function buildNarrativeClassificationRequest(
+  document: AnalysisDocument,
+  definitions: NarrativeDefinition[],
+  options: {
+    model: string;
+    maxTokens?: number;
+    maxDocumentChars?: number;
+    promptCaching?: boolean;
+    cacheTtl?: "5m" | "1h";
   }
-  const expected = new Set(definitions.map((definition) => definition.id));
+): MessageCreateParamsNonStreaming {
+  const sourceText = document.text.slice(
+    0,
+    options.maxDocumentChars ?? 120_000
+  );
+  return {
+    model: options.model,
+    max_tokens: options.maxTokens ?? 4_000,
+    system: narrativeClassificationSystemPrompt,
+    output_config: { format: narrativeClassificationOutputFormat },
+    messages: [
+      {
+        role: "user",
+        content: buildNarrativeClassificationContent(
+          document,
+          definitions,
+          sourceText,
+          options.promptCaching ?? true,
+          options.cacheTtl
+        )
+      }
+    ]
+  };
+}
+
+export function normalizeNarrativeClassificationMessage(
+  message: Message,
+  document: AnalysisDocument,
+  definitions: NarrativeDefinition[],
+  model: string,
+  promptVersion: string
+) {
+  const parsed = parseStructuredOutput<{ observations: RawObservation[] }>(
+    message,
+    "Narrative classification"
+  );
+  if (!parsed || !Array.isArray(parsed.observations))
+    throw new Error("Narrative classification requires an observations array.");
+  const known = new Set(definitions.map((definition) => definition.id));
   const seen = new Set<string>();
-  if (value.observations.length !== expected.size)
-    throw new Error(
-      "Classification response has missing or extra observations."
-    );
-  for (const item of value.observations) {
+  for (const raw of parsed.observations) {
     if (
-      !item ||
-      typeof item !== "object" ||
-      typeof item.narrativeDefinitionId !== "string" ||
-      !expected.has(item.narrativeDefinitionId) ||
-      seen.has(item.narrativeDefinitionId)
+      !raw ||
+      typeof raw !== "object" ||
+      typeof raw.narrativeDefinitionId !== "string" ||
+      !known.has(raw.narrativeDefinitionId) ||
+      seen.has(raw.narrativeDefinitionId)
     ) {
       throw new Error(
-        "Classification response has unknown or duplicate definition IDs."
+        "Narrative classification contains an unknown or duplicate definition."
       );
     }
-    seen.add(item.narrativeDefinitionId);
+    seen.add(raw.narrativeDefinitionId);
     if (
-      typeof item.matched !== "boolean" ||
-      !isStance(item.stance) ||
-      typeof item.evidenceSnippet !== "string" ||
-      typeof item.interpretation !== "string" ||
-      !Array.isArray(item.affectedEntities) ||
-      !item.affectedEntities.every(
-        (entity: unknown) => typeof entity === "string"
+      typeof raw.matched !== "boolean" ||
+      typeof raw.contractSatisfied !== "boolean" ||
+      !isStance(raw.stance) ||
+      [raw.matchScore, raw.riskTone, raw.bullishTone].some(
+        (value) =>
+          typeof value !== "number" ||
+          !Number.isFinite(value) ||
+          value < 0 ||
+          value > 100
       ) ||
-      ![item.matchScore, item.riskTone, item.bullishTone].every(
-        (score) =>
-          typeof score === "number" &&
-          Number.isFinite(score) &&
-          score >= 0 &&
-          score <= 100
+      [raw.evidenceSnippet, raw.interpretation].some(
+        (value) => typeof value !== "string"
       ) ||
-      (item.matched
-        ? item.matchScore < 70 ||
-          !item.evidenceSnippet.trim() ||
-          item.evidenceSnippet.length > 800
-        : item.matchScore >= 70 || item.evidenceSnippet !== "")
+      [
+        raw.inclusionCriteriaSatisfied,
+        raw.exclusionCriteriaTriggered,
+        raw.affectedEntities
+      ].some(
+        (value) =>
+          !Array.isArray(value) ||
+          value.some((item) => typeof item !== "string")
+      )
     ) {
-      throw new Error("Classification observation has invalid fields.");
+      throw new Error("Narrative classification contains malformed fields.");
+    }
+    if (
+      raw.matched &&
+      (!raw.evidenceSnippet?.trim() ||
+        !document.text.includes(raw.evidenceSnippet.trim()))
+    ) {
+      throw new Error(
+        "Narrative classification quotation is absent from the source."
+      );
     }
   }
-  return value.observations as RawObservation[];
+  const byDefinition = new Map(
+    (parsed.observations as RawObservation[]).map((observation) => [
+      observation.narrativeDefinitionId,
+      observation
+    ])
+  );
+
+  return definitions.map((definition) =>
+    normalizeObservation(
+      byDefinition.get(definition.id),
+      definition,
+      document,
+      model,
+      promptVersion
+    )
+  );
+}
+
+export function buildNarrativeClassificationContent(
+  document: AnalysisDocument,
+  definitions: NarrativeDefinition[],
+  sourceText = document.text,
+  promptCaching = true,
+  cacheTtl?: "5m" | "1h"
+) {
+  const referenceText = JSON.stringify({
+    definitions: definitions.map((definition) => ({
+      id: definition.id,
+      name: definition.name,
+      proposition: definition.proposition,
+      inclusionGuidance: definition.inclusionGuidance,
+      exclusionGuidance: definition.exclusionGuidance,
+      positiveExamples: definition.positiveExamples,
+      negativeExamples: definition.negativeExamples,
+      evidenceContract: modelFacingEvidenceContract(definition)
+    }))
+  });
+  const referenceBlock = promptCaching
+    ? {
+        type: "text" as const,
+        text: referenceText,
+        cache_control: {
+          type: "ephemeral" as const,
+          ...(cacheTtl ? { ttl: cacheTtl } : {})
+        }
+      }
+    : {
+        type: "text" as const,
+        text: referenceText
+      };
+
+  return [
+    referenceBlock,
+    {
+      type: "text" as const,
+      text: JSON.stringify({
+        document: {
+          id: document.id,
+          title: document.title,
+          publisher: document.publisher,
+          publishedAt: document.publishedAt,
+          text: sourceText
+        }
+      })
+    }
+  ];
 }
 
 export function normalizeObservation(
@@ -262,13 +285,24 @@ export function normalizeObservation(
   promptVersion: string
 ): NarrativeObservationInput {
   const matchScore = clamp(raw?.matchScore, 0, 100);
-  const requestedMatch = raw?.matched === true && matchScore >= 70;
-  const evidence = requestedMatch ? String(raw?.evidenceSnippet ?? "").trim().slice(0, 800) : "";
+  const exclusionCriteriaTriggered = validateStringArray(
+    raw?.exclusionCriteriaTriggered
+  );
+  const requestedMatch =
+    raw?.matched === true &&
+    raw.contractSatisfied === true &&
+    exclusionCriteriaTriggered.length === 0 &&
+    matchScore >= 70;
+  const evidence = requestedMatch
+    ? String(raw?.evidenceSnippet ?? "")
+        .trim()
+        .slice(0, 800)
+    : "";
   const matched =
     requestedMatch &&
     evidence.length > 0 &&
     document.text.includes(evidence) &&
-    passesDefinitionGuard(definition.slug, evidence);
+    passesNarrativeEvidenceContract(definition, evidence);
   const stance = isStance(raw?.stance) ? raw.stance : "neutral";
 
   return {
@@ -284,90 +318,200 @@ export function normalizeObservation(
     riskTone: clamp(raw?.riskTone, 0, 100),
     bullishTone: clamp(raw?.bullishTone, 0, 100),
     evidenceSnippet: matched ? evidence : "",
-    interpretation: matched ? String(raw?.interpretation ?? "").trim().slice(0, 1_000) : "",
+    interpretation: matched
+      ? String(raw?.interpretation ?? "")
+          .trim()
+          .slice(0, 1_000)
+      : "",
     affectedEntities: Array.isArray(raw?.affectedEntities)
-      ? raw.affectedEntities.map(String).map((value) => value.trim()).filter(Boolean).slice(0, 20)
+      ? raw.affectedEntities
+          .map(String)
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .slice(0, 20)
       : [],
     model,
     promptVersion,
-    metadata: { definitionVersion: definition.version }
+    metadata: {
+      definitionVersion: definition.version,
+      textHash: document.textHash,
+      contractValidation: {
+        satisfied: raw?.contractSatisfied === true,
+        inclusionCriteriaSatisfied: validateStringArray(
+          raw?.inclusionCriteriaSatisfied
+        ),
+        exclusionCriteriaTriggered
+      }
+    }
   };
 }
 
-export function passesDefinitionGuard(slug: string, evidence: string) {
-  const text = evidence.toLowerCase();
+export type EvidenceGuard = {
+  /** Case-insensitive regular expressions; every pattern must match the evidence. */
+  requiredPatterns: string[];
+  /** Case-insensitive regular expressions; no pattern may match the evidence. */
+  forbiddenPatterns: string[];
+};
 
-  switch (slug) {
-    case "pricing-power":
-      return (
-        /(price|pricing|average ticket|mix)/.test(text) &&
-        /(demand|volume|transactions?|units?|traffic|elasticity)/.test(text) &&
-        !/(declin|decreas|fell|falling|lower|weak).{0,45}(volume|transactions?|units?|traffic)/.test(
-          text
-        )
-      );
-    case "deal-activity-recovery":
-      return (
-        /(pipeline|volumes?|activity|market|advisory|underwriting|issuance|ipos?|m&a)/.test(
-          text
-        ) && /(recover|rebound|reopen|improv|increas|accelerat|growth|stronger|higher)/.test(text)
-      );
-    case "ai-infrastructure-demand":
-      return (
-        /(artificial intelligence|\bai\b)/.test(text) &&
-        (
-          /\b(demand|capacity|backlog|orders|load)\b/.test(text) ||
-          /infrastructure.{0,35}(invest|spend|build|deploy|expand)/.test(text) ||
-          /(revenue|sales).{0,25}(grow|increas|up\b)/.test(text) ||
-          /(grow|increas|up\b).{0,25}(revenue|sales)/.test(text)
-        )
-      );
-    case "ai-capex-discipline":
-      return (
-        /(artificial intelligence|\bai\b|data cent(er|re))/.test(text) &&
-        /(return|roi|utilization|discipline|restrain|moderat|efficien|budget)/.test(text)
-      );
-    case "credit-quality-deterioration":
-      return (
-        /(delinquen|default|charge.?off|loss provision|nonperform|credit quality)/.test(text) &&
-        /(deteriorat|worsen|increas|higher|rise|rising|stress)/.test(text)
-      );
-    case "refinancing-risk":
-      return (
-        /(borrower|debt|maturit|refinanc)/.test(text) &&
-        /(higher|cost|difficult|restrict|wall|pressure|risk)/.test(text) &&
-        !/(reinvestment risk|callable note)/.test(text)
-      );
-    case "margin-pressure":
-      return (
-        /(gross margin|operating margin|profit margin)/.test(text) &&
-        /(compress|pressure|declin|decreas|lower|contract)/.test(text)
-      );
-    case "consumer-trade-down":
-      return (
-        /(consumer|customer|shopper|spending|purchase)/.test(text) &&
-        /(trade.?down|value|afford|lower.?price|smaller|cautious|budget|selective)/.test(text)
-      );
-    case "supply-chain-normalization":
-      return (
-        /(supply|inventory|lead time|freight|logistics|availability)/.test(text) &&
-        /(normaliz|easing|shorter|improv|recover|rebalanc|declin)/.test(text) &&
-        !/(disruption|shortage|constraint|ransomware)/.test(text)
-      );
-    case "energy-demand-growth":
-      return (
-        /(demand|load|consumption)/.test(text) &&
-        /(accelerat|expand|growth|increas|higher|record|rising)/.test(text) &&
-        /(economic|industrial|electrif|electric vehicle|data cent(er|re)|artificial intelligence|\bai\b)/.test(
-          text
-        ) &&
-        !/(weather|temperature|summer|winter|heat wave|cold snap|cooling degree|heating degree)/.test(
-          text
-        )
-      );
-    default:
-      return true;
+/**
+ * Deterministic guards for the seeded propositions. These are the source of truth used
+ * to seed `metadata.evidenceContract.requiredPatterns` / `forbiddenPatterns` (migration
+ * 021); at runtime the guard is read from each definition's metadata so it can be
+ * versioned with the definition instead of hard-coded per slug.
+ */
+export const SEEDED_EVIDENCE_GUARDS: Record<string, EvidenceGuard> = {
+  "pricing-power": {
+    requiredPatterns: [
+      "(price|pricing|average ticket|mix)",
+      "(demand|volume|transactions?|units?|traffic|elasticity)"
+    ],
+    forbiddenPatterns: [
+      "(declin|decreas|fell|falling|lower|weak).{0,45}(volume|transactions?|units?|traffic)"
+    ]
+  },
+  "deal-activity-recovery": {
+    requiredPatterns: [
+      "(pipeline|volumes?|activity|market|advisory|underwriting|issuance|ipos?|m&a)",
+      "(recover|rebound|reopen|improv|increas|accelerat|growth|stronger|higher)"
+    ],
+    forbiddenPatterns: []
+  },
+  "ai-infrastructure-demand": {
+    requiredPatterns: [
+      "(artificial intelligence|\\bai\\b)",
+      "\\b(demand|capacity|backlog|orders|load)\\b|infrastructure.{0,35}(invest|spend|build|deploy|expand)|(revenue|sales).{0,25}(grow|increas|up\\b)|(grow|increas|up\\b).{0,25}(revenue|sales)"
+    ],
+    forbiddenPatterns: []
+  },
+  "ai-capex-discipline": {
+    requiredPatterns: [
+      "(artificial intelligence|\\bai\\b|data cent(er|re))",
+      "(return|roi|utilization|discipline|restrain|moderat|efficien|budget)"
+    ],
+    forbiddenPatterns: []
+  },
+  "credit-quality-deterioration": {
+    requiredPatterns: [
+      "(delinquen|default|charge.?off|loss provision|nonperform|credit quality)",
+      "(deteriorat|worsen|increas|higher|rise|rising|stress)"
+    ],
+    forbiddenPatterns: []
+  },
+  "refinancing-risk": {
+    requiredPatterns: [
+      "(borrower|debt|maturit|refinanc)",
+      "(higher|cost|difficult|restrict|wall|pressure|risk)"
+    ],
+    forbiddenPatterns: ["(reinvestment risk|callable note)"]
+  },
+  "margin-pressure": {
+    requiredPatterns: [
+      "(gross margin|operating margin|profit margin)",
+      "(compress|pressure|declin|decreas|lower|contract)"
+    ],
+    forbiddenPatterns: []
+  },
+  "consumer-trade-down": {
+    requiredPatterns: [
+      "(consumer|customer|shopper|spending|purchase)",
+      "(trade.?down|value|afford|lower.?price|smaller|cautious|budget|selective)"
+    ],
+    forbiddenPatterns: []
+  },
+  "supply-chain-normalization": {
+    requiredPatterns: [
+      "(supply|inventory|lead time|freight|logistics|availability)",
+      "(normaliz|easing|shorter|improv|recover|rebalanc|declin)"
+    ],
+    forbiddenPatterns: ["(disruption|shortage|constraint|ransomware)"]
+  },
+  "energy-demand-growth": {
+    requiredPatterns: [
+      "(demand|load|consumption)",
+      "(accelerat|expand|growth|increas|higher|record|rising)",
+      "(economic|industrial|electrif|electric vehicle|data cent(er|re)|artificial intelligence|\\bai\\b)"
+    ],
+    forbiddenPatterns: [
+      "(weather|temperature|summer|winter|heat wave|cold snap|cooling degree|heating degree)"
+    ]
   }
+};
+
+export function passesNarrativeEvidenceContract(
+  definition: NarrativeDefinition,
+  evidence: string
+) {
+  const contract = definition.metadata?.evidenceContract;
+  if (!passesDefinitionGuard(readEvidenceGuard(contract), evidence)) return false;
+  if (!isObject(contract)) return true;
+  const groups = contract.requiredTermGroups;
+  if (!Array.isArray(groups)) return true;
+  const normalizedEvidence = normalizeForComparison(evidence);
+  return groups.every(
+    (group) =>
+      Array.isArray(group) &&
+      group.some(
+        (term) =>
+          typeof term === "string" &&
+          normalizedEvidence.includes(normalizeForComparison(term))
+      )
+  );
+}
+
+export function readEvidenceGuard(contract: unknown): EvidenceGuard | null {
+  if (!isObject(contract)) return null;
+  const requiredPatterns = validateStringArray(contract.requiredPatterns);
+  const forbiddenPatterns = validateStringArray(contract.forbiddenPatterns);
+  if (requiredPatterns.length === 0 && forbiddenPatterns.length === 0) return null;
+  return { requiredPatterns, forbiddenPatterns };
+}
+
+const patternCache = new Map<string, RegExp | null>();
+
+function compileGuardPattern(source: string) {
+  const cached = patternCache.get(source);
+  if (cached !== undefined) return cached;
+  let compiled: RegExp | null;
+  try {
+    compiled = new RegExp(source, "i");
+  } catch {
+    compiled = null;
+  }
+  patternCache.set(source, compiled);
+  return compiled;
+}
+
+/**
+ * Applies a definition's deterministic evidence guard. Invalid patterns are ignored rather
+ * than failing classification, so a typo in metadata degrades to "no guard" for that pattern.
+ */
+export function passesDefinitionGuard(
+  guard: EvidenceGuard | null | undefined,
+  evidence: string
+) {
+  if (!guard) return true;
+  const required = guard.requiredPatterns
+    .map(compileGuardPattern)
+    .filter((pattern): pattern is RegExp => pattern !== null);
+  const forbidden = guard.forbiddenPatterns
+    .map(compileGuardPattern)
+    .filter((pattern): pattern is RegExp => pattern !== null);
+  return (
+    required.every((pattern) => pattern.test(evidence)) &&
+    !forbidden.some((pattern) => pattern.test(evidence))
+  );
+}
+
+/** The model sees term groups only; regex guards are enforced after the response. */
+function modelFacingEvidenceContract(definition: NarrativeDefinition) {
+  const contract = definition.metadata?.evidenceContract;
+  if (!isObject(contract)) return null;
+  const rest = Object.fromEntries(
+    Object.entries(contract).filter(
+      ([key]) => key !== "requiredPatterns" && key !== "forbiddenPatterns"
+    )
+  );
+  return Object.keys(rest).length === 0 ? null : rest;
 }
 
 function clamp(value: unknown, minimum: number, maximum: number) {
@@ -377,4 +521,21 @@ function clamp(value: unknown, minimum: number, maximum: number) {
 
 function isStance(value: unknown): value is ToneDirection {
   return ["risk", "bullish", "mixed", "neutral"].includes(String(value));
+}
+
+function validateStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function normalizeForComparison(value: string) {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -5,16 +5,19 @@ import {
   publicationLookbackHours
 } from "./publication-feed";
 import { createRssConnector } from "./rss";
-import { createSubstackConnector } from "./substack";
+import { createSubstackConnector, type SubstackConnectorOptions } from "./substack";
 
 export function createPublicationFeedConnector(
-  feed: PublicationFeed
+  feed: PublicationFeed,
+  options: SubstackConnectorOptions = {}
 ): SourceConnector {
   if (feed.platform === "substack") {
-    return createSubstackConnector(feed);
+    return createSubstackConnector(feed, options);
   }
 
   const rss = createRssConnector({
+    maxPostsPerPoll: feed.maxPostsPerPoll,
+    rateLimitMs: feed.rateLimitMs,
     id: feed.id,
     name: feed.name,
     url: feed.feedUrl,
@@ -22,8 +25,6 @@ export function createPublicationFeedConnector(
     publisherOwner: feed.publisherOwner,
     retentionPolicy: feed.retentionPolicy,
     lookbackHours: publicationLookbackHours(feed),
-    maxPostsPerPoll: feed.maxPostsPerPoll,
-    rateLimitMs: feed.rateLimitMs,
     termsNotes: feed.termsNotes
   });
 

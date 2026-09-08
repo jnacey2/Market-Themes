@@ -1,7 +1,8 @@
 export const SEC_SMOKE_TEST_TICKERS = ["AAPL", "MSFT", "JPM", "WMT", "XOM"];
 
-// Checked-in starter universe. Expand this list to the full S&P 500 + Nasdaq-100
-// membership as the next data-maintenance task.
+// Checked-in seed universe. Production resolves the issuer universe from index
+// constituents (TARGET_UNIVERSE=sp500,nasdaq100 via FMP); this list is the fallback
+// when no data-vendor key is configured or the constituent fetch fails.
 export const SEC_TARGET_TICKERS = [
   "AAPL",
   "ABBV",

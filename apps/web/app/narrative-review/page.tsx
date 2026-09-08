@@ -26,33 +26,21 @@ export default async function NarrativeReviewPage({
 
   return (
     <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <div className="nav-links">
-          <Link href="/trends">Narrative Currents</Link>
-          <Link href="/analysis">Analysis</Link>
-          <Link href="/ingestion">Operations</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Quality Control</p>
           <h1>Narrative evidence review.</h1>
           <p className="lede">
             Approve only when the exact quotation directly supports the tracked
-            proposition. Pending evidence suppresses comparisons until review is
-            complete.
+            proposition. Pending and rejected matches do not contribute to
+            reviewed density.
           </p>
         </div>
         <div className="panel">
           <p className="eyebrow">Classifier version</p>
           <h2>{queue.promptVersion}</h2>
           <p>
-            Reviews automatically queue a measurement refresh. The worker checks
-            every 45 seconds.
+            The scheduled recomputation refreshes measurements after review.
           </p>
         </div>
       </section>

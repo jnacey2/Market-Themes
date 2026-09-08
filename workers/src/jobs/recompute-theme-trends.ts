@@ -17,7 +17,7 @@ const result = await recomputeThemeTrends({
 });
 
 console.log(
-  `[recompute-theme-trends] themes=${result.themesProcessed} rows=${result.trendRowsWritten} lowHistory=${result.lowHistoryRows}`
+  `[recompute-theme-trends] themes=${result.themesProcessed} rows=${result.trendRowsWritten} skippedEmpty=${result.skippedEmptyRows} lowHistory=${result.lowHistoryRows}`
 );
 
 for (const trend of result.topTrends) {

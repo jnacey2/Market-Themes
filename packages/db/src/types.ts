@@ -1,4 +1,4 @@
-import type { NarrativeQuality } from "./narrative-metrics";export type ToneDirection = "risk" | "bullish" | "mixed" | "neutral";
+export type ToneDirection = "risk" | "bullish" | "mixed" | "neutral";
 
 export type SourceClass =
   | "filing"
@@ -66,9 +66,55 @@ export type ExtractedSignalInput = {
   scoreContribution: number;
 };
 
-export type AnalysisRunClaim = { id: string; attemptToken: string };
-
 export type AnalysisRunStatus = "pending" | "running" | "completed" | "failed";
+
+export type AnthropicMessageBatchStatus =
+  | "submitting"
+  | "submission_unknown"
+  | "in_progress"
+  | "canceling"
+  | "processing_results"
+  | "completed"
+  | "failed";
+
+export type AnthropicMessageBatchItem = {
+  id: string;
+  batchId: string;
+  customId: string;
+  documentId: string;
+  analysisRunId: string | null;
+  status: string;
+  errorType: string | null;
+  errorMessage: string | null;
+  usage: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  completedAt: string | null;
+};
+
+export type AnthropicMessageBatchRecord = {
+  id: string;
+  providerBatchId: string | null;
+  workload: string;
+  model: string;
+  promptVersion: string;
+  status: AnthropicMessageBatchStatus;
+  requestCount: number;
+  processingCount: number;
+  succeededCount: number;
+  erroredCount: number;
+  canceledCount: number;
+  expiredCount: number;
+  errorMessage: string | null;
+  metadata: Record<string, unknown>;
+  submittedAt: string | null;
+  providerExpiresAt: string | null;
+  providerEndedAt: string | null;
+  resultsUrl: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: AnthropicMessageBatchItem[];
+};
 
 export type AnalysisRunSummary = {
   id: string;
@@ -113,6 +159,10 @@ export type AnalysisSignalSummary = {
 
 export type AnalysisStatus = {
   databaseConfigured: boolean;
+  degraded: boolean;
+  unavailableSections: Array<
+    "summary" | "coverage" | "backfill" | "recentSignals" | "recentRuns"
+  >;
   signalCount: number;
   themeCount: number;
   completedRuns: number;
@@ -229,6 +279,7 @@ export type TrendStatus = {
 
 export type LiveDashboardStatus = {
   databaseConfigured: boolean;
+  degraded: boolean;
   totalTrendRows: number;
   latestTrendDate: string | null;
   confirmedSevenDayThemes: TrendSummary[];
@@ -265,6 +316,8 @@ export type ThemeDetailStatus = {
 export type RecomputeThemeTrendsResult = {
   themesProcessed: number;
   trendRowsWritten: number;
+  /** Windows with no evidence, zero intensity, and zero z-score that were not stored. */
+  skippedEmptyRows: number;
   lowHistoryRows: number;
   topTrends: Array<{
     themeId: string;
@@ -411,6 +464,33 @@ export type PipelineRunSummary = {
   errorMessage: string | null;
 };
 
+export type SourcePipelineTelemetry = {
+  sourceId: string;
+  sourceClass: SourceClass | null;
+  label: string;
+  enabled: boolean | null;
+  documentCount: number;
+  latestDocumentAt: string | null;
+  analyzedDocuments: number;
+  extractionBacklog: number;
+  narrativeClassificationBacklog: number;
+  narrativeDiscoveryBacklog: number;
+  matchedPending: number;
+  matchedApproved: number;
+  matchedRejected: number;
+  lastIngestAttemptAt: string | null;
+  lastIngestSuccessAt: string | null;
+  lastIngestError: string | null;
+};
+
+export type NarrativeBacklogSummary = {
+  total: number;
+  bySourceClass: Array<{
+    sourceClass: SourceClass;
+    count: number;
+  }>;
+};
+
 export type OperationsStatus = {
   databaseConfigured: boolean;
   latestDocumentAt: string | null;
@@ -418,9 +498,15 @@ export type OperationsStatus = {
   analyzedDocuments: number;
   extractionBacklog: number;
   normalizationBacklog: number;
+  narrativeClassificationBacklog: number;
+  narrativeDiscoveryBacklog: number;
+  narrativeReviewPendingCount: number;
+  narrativeCandidatePendingCount: number;
+  narrativeCandidateQualifiedCount: number;
   latestTrendDate: string | null;
   latestNarrativeTrendDate: string | null;
   connectors: ConnectorCheckpointSummary[];
+  sourceTelemetry: SourcePipelineTelemetry[];
   recentRuns: PipelineRunSummary[];
 };
 
@@ -436,6 +522,190 @@ export type NarrativeDefinition = {
   positiveExamples: string[];
   negativeExamples: string[];
   status: string;
+  kind?: NarrativeCandidateKind;
+  eventLabel?: string | null;
+  metadata?: Record<string, unknown>;
+  parentDefinitionId?: string | null;
+  parentName?: string | null;
+  mergedIntoDefinitionId?: string | null;
+  dimension?: string | null;
+  eventExpiresAt?: string | null;
+  activatedAt?: string | null;
+};
+
+export type NarrativeCandidateStatus =
+  "pending" | "approved" | "rejected" | "merged";
+
+export type NarrativeCandidateKind = "event" | "structural";
+
+export type CandidatePromotionPolicy = {
+  minimumMatchScore: number;
+  minimumDocuments: number;
+  minimumPublisherOwners: number;
+  evidenceWindowDays: number;
+  excludedPublisherOwners: string[];
+};
+
+export type CandidatePromotionValidationEvidence = {
+  evidenceId: string;
+  documentId: string;
+  verdict: "support" | "reject";
+  reason: string;
+  eventKey: string | null;
+  primaryEntityKey: string | null;
+  storyFingerprint: string;
+  sourceTextHash: string;
+};
+
+export type CandidatePromotionValidation = {
+  candidateId: string;
+  status: "eligible" | "ineligible" | "manual_review";
+  candidateKind: NarrativeCandidateKind;
+  eventLabel: string | null;
+  summaryReason: string;
+  reasons: string[];
+  supportedEvidenceIds: string[];
+  breadth: {
+    storyBreadth: number;
+    eventBreadth: number;
+    primaryEntityBreadth: number;
+    publisherOwnerBreadth: number;
+    sourceClassBreadth: number;
+  };
+  evidence: CandidatePromotionValidationEvidence[];
+  promptVersion: string;
+  model: string;
+  evaluatedAt: string;
+};
+
+export type CandidatePromotionValidationInput = {
+  candidate: {
+    id: string;
+    name: string;
+    proposition: string;
+    category: string;
+    inclusionGuidance: string;
+    exclusionGuidance: string;
+  };
+  policy: CandidatePromotionPolicy;
+  evidence: Array<{
+    evidenceId: string;
+    documentId: string;
+    title: string;
+    publisher: string;
+    publisherOwner: string;
+    sourceClass: SourceClass;
+    publishedAt: string;
+    url: string;
+    tickers: string[];
+    nearDuplicateKey: string | null;
+    affectedEntities: string[];
+    matchScore: number;
+    evidenceSnippet: string;
+    interpretation: string;
+    currentText: string;
+    sourceTextHash: string;
+  }>;
+};
+
+export type NarrativeCandidateEvidenceInput = {
+  id: string;
+  documentId: string;
+  evidenceSnippet: string;
+  interpretation: string;
+  stance: ToneDirection;
+  riskTone: number;
+  bullishTone: number;
+  affectedEntities: string[];
+  matchScore: number;
+  model: string;
+  promptVersion: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type NarrativeCandidateInput = {
+  id: string;
+  clusterKey: string;
+  name: string;
+  proposition: string;
+  category: string;
+  inclusionGuidance: string;
+  exclusionGuidance: string;
+  kind?: NarrativeCandidateKind;
+  eventLabel?: string | null;
+  model: string;
+  promptVersion: string;
+  evidence: NarrativeCandidateEvidenceInput[];
+  metadata?: Record<string, unknown>;
+};
+
+export type NarrativeCandidateContext = {
+  clusterKey: string;
+  name: string;
+  proposition: string;
+};
+
+export type NarrativeCandidateEvidence = {
+  id: string;
+  documentId: string;
+  title: string;
+  publisher: string;
+  publisherId: string;
+  publisherOwner: string;
+  sourceClass: SourceClass;
+  publishedAt: string;
+  url: string;
+  evidenceSnippet: string;
+  interpretation: string;
+  stance: ToneDirection;
+  riskTone: number;
+  bullishTone: number;
+  affectedEntities: string[];
+  matchScore: number;
+  storyFingerprint: string;
+};
+
+export type NarrativeCandidateSummary = {
+  id: string;
+  clusterKey: string;
+  name: string;
+  proposition: string;
+  category: string;
+  inclusionGuidance: string;
+  exclusionGuidance: string;
+  status: NarrativeCandidateStatus;
+  kind: NarrativeCandidateKind;
+  eventLabel: string | null;
+  mergedIntoCandidateId: string | null;
+  promotedDefinitionId: string | null;
+  promotedDefinitionStatus: string | null;
+  model: string;
+  promptVersion: string;
+  reviewNote: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  documentBreadth: number;
+  publisherBreadth: number;
+  publisherOwnerBreadth: number;
+  storyBreadth: number;
+  sourceClassBreadth: number;
+  entityBreadth: number;
+  qualified: boolean;
+  promotionValidation: CandidatePromotionValidation | null;
+  evidence: NarrativeCandidateEvidence[];
+};
+
+export type NarrativeCandidateQueue = {
+  databaseConfigured: boolean;
+  promptVersion: string;
+  pendingCount: number;
+  qualifiedCount: number;
+  autoEligibleCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  mergedCount: number;
+  candidates: NarrativeCandidateSummary[];
 };
 
 export type NarrativeObservationInput = {
@@ -455,8 +725,22 @@ export type NarrativeObservationInput = {
   metadata?: Record<string, unknown>;
 };
 
-export type NarrativeTrendPoint = Partial<NarrativeQuality> & {
-  lowHistory?: boolean;
+export type NarrativeLifecycleState =
+  | "unmeasured"
+  | "dormant"
+  | "emerging"
+  | "rising"
+  | "peaking"
+  | "steady"
+  | "fading";
+
+export type NarrativeTrendPoint = {
+  coverageState:
+    "no_corpus" | "backfill_pending" | "measured_zero" | "measured";
+  lowHistory: boolean;
+  classifiedDocuments: number;
+  corpusEligibleDocuments: number;
+  classificationCoveragePercent: number;
   date: string;
   density: number;
   baselineMean: number;
@@ -466,6 +750,20 @@ export type NarrativeTrendPoint = Partial<NarrativeQuality> & {
   acceleration: number;
   riskTone: number;
   bullishTone: number;
+  attentionDensity: number;
+  lifecycleState: NarrativeLifecycleState;
+};
+
+export type NarrativeLifecycleMetrics = {
+  lifecycleState: NarrativeLifecycleState;
+  baselineWindows: number;
+  attentionDensity: number;
+  attentionMatchedDocuments: number;
+  attentionZScore: number;
+  peakDensity: number;
+  peakDate: string | null;
+  daysSincePeak: number | null;
+  percentOfPeak: number;
 };
 
 export type NarrativeEvidence = {
@@ -481,6 +779,7 @@ export type NarrativeEvidence = {
   affectedEntities: string[];
   matchScore: number;
   reviewStatus: NarrativeReviewStatus;
+  storyFingerprint?: string;
 };
 
 export type NarrativeReviewStatus = "pending" | "approved" | "rejected";
@@ -507,9 +806,7 @@ export type NarrativeReviewQueue = {
 };
 
 export type NarrativeTrendSummary = NarrativeDefinition &
-  Partial<NarrativeQuality> & {
-    measurementPending?: boolean;
-    measuredAt?: string | null;
+  NarrativeLifecycleMetrics & {
     trendWindow: TrendWindow;
     latestDate: string | null;
     density: number;
@@ -524,9 +821,14 @@ export type NarrativeTrendSummary = NarrativeDefinition &
     matchedDocuments: number;
     publisherBreadth: number;
     publisherOwnerBreadth: number;
+    storyBreadth: number;
     sourceClassBreadth: number;
     entityBreadth: number;
     lowHistory: boolean;
+    corpusDocuments: number;
+    classificationCoveragePercent: number;
+    coverageStatus:
+      "no_corpus" | "backfill_pending" | "measured_zero" | "measured";
     history: NarrativeTrendPoint[];
     evidence: NarrativeEvidence[];
   };
@@ -535,6 +837,106 @@ export type NarrativeBoardStatus = {
   databaseConfigured: boolean;
   latestDate: string | null;
   narratives: NarrativeTrendSummary[];
+};
+
+export type NarrativeHomepageItem = Omit<
+  NarrativeTrendSummary,
+  "history" | "evidence"
+> & {
+  evidencePreview: NarrativeEvidence[];
+};
+
+export type NarrativeHomepageLane = "rising" | "peaking" | "fading" | "emerging";
+
+export type NarrativeHomepageStatus = {
+  databaseConfigured: boolean;
+  degraded: boolean;
+  latestDate: string | null;
+  trackedNarrativeCount: number;
+  /**
+   * Measured narratives ranked structural-first, then by surprise (attention
+   * z-score). Structural themes are the board's primary view; event narratives
+   * follow so a week of headlines cannot crowd them out of the lead card.
+   */
+  narratives: NarrativeHomepageItem[];
+  /** Every structural theme (any coverage state) ranked by surprise: the ebb-and-flow strip. */
+  structuralThemes: NarrativeHomepageItem[];
+  lanes: Record<NarrativeHomepageLane, NarrativeHomepageItem[]>;
+  brief: StoredBrief | null;
+};
+
+export type StoredBrief = {
+  id: string;
+  date: string;
+  headline: string;
+  summary: string;
+  sections: BriefSection[];
+  generatedAt: string;
+};
+
+export type BriefSection = {
+  title: string;
+  items: string[];
+};
+
+export type AttentionBurstRecord = {
+  id: string;
+  date: string;
+  term: string;
+  kind: "title_ngram" | "entity" | "theme_label";
+  currentStories: number;
+  currentOwners: number;
+  baselineMean: number;
+  baselineScale: number;
+  baselineWindows: number;
+  zScore: number;
+  novel: boolean;
+  score: number;
+  sampleDocumentIds: string[];
+  sampleTitles: string[];
+  /** Tracked narratives whose name, entities, or guidance already mention this term. */
+  coveringNarrativeDefinitionIds: string[];
+  coveringNarrativeNames: string[];
+};
+
+export type AttentionBurstWatchlist = {
+  databaseConfigured: boolean;
+  date: string | null;
+  bursts: AttentionBurstRecord[];
+  uncoveredCount: number;
+};
+
+export type NarrativeChangeKind =
+  | "entered_board"
+  | "left_board"
+  | "state_change"
+  | "mover"
+  | "new_definition"
+  | "expired_definition";
+
+export type NarrativeChange = {
+  kind: NarrativeChangeKind;
+  narrativeDefinitionId: string;
+  slug: string;
+  name: string;
+  proposition: string;
+  category: string;
+  kindLabel: NarrativeCandidateKind;
+  previousState: NarrativeLifecycleState | null;
+  currentState: NarrativeLifecycleState | null;
+  previousDensity: number | null;
+  currentDensity: number | null;
+  attentionZScore: number | null;
+  change: number;
+  detail: string;
+};
+
+export type NarrativeChangeReport = {
+  databaseConfigured: boolean;
+  currentDate: string | null;
+  previousDate: string | null;
+  changes: NarrativeChange[];
+  stateCounts: Record<NarrativeLifecycleState, number>;
 };
 
 export type EvidenceCard = {
@@ -581,3 +983,5 @@ export type DailyBrief = {
   summary: string;
   storyboardIds: string[];
 };
+
+export type AnalysisRunClaim = { id: string; attemptToken: string };

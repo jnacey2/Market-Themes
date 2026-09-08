@@ -1,7 +1,9 @@
-import { publicFetch } from "./public-fetch";import { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import type { PersistableDocument, SourceClass } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
+import { publicFetch } from "./public-fetch";
+import { resolvePublisherOwner, slugPublisher } from "./publisher-owners";
 
 export type RssFeedConfig = {
   id: string;
@@ -41,13 +43,16 @@ const parser = new XMLParser({
 });
 
 export function createRssConnector(config: RssFeedConfig): SourceConnector {
+  let lastPollAt = 0;
   return {
     id: config.id,
     sourceClass: config.sourceClass,
     description: `${config.name} RSS feed.`,
     async poll() {
-      if (config.rateLimitMs)
-        await new Promise((resolve) => setTimeout(resolve, config.rateLimitMs));
+      const waitMs = lastPollAt + (config.rateLimitMs ?? 0) - Date.now();
+      if (waitMs > 0)
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      lastPollAt = Date.now();
       const response = await (config.fetchImpl ?? publicFetch)(config.url, {
         headers: {
           Accept:
@@ -78,7 +83,6 @@ export function createRssConnector(config: RssFeedConfig): SourceConnector {
         .filter(
           (document) => new Date(document.publishedAt).getTime() >= cutoff
         )
-        .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
         .slice(0, config.maxPostsPerPoll ?? 250);
     }
   };
@@ -136,9 +140,9 @@ function toDocument(
     return null;
   }
 
-  if (!/^https?:\/\//i.test(url)) return null;
   const canonicalUrl = canonicalizeUrl(url);
-  const publisherId = slug(config.name);
+  const publisherId = slugPublisher(config.name);
+  const wireOrigin = detectWireOrigin(`${body} ${fullBody}`);
   return {
     id: `${config.id}:${createHash("sha256").update(canonicalUrl).digest("hex").slice(0, 24)}`,
     sourceId: config.id,
@@ -146,7 +150,13 @@ function toDocument(
     title,
     publisher: config.name,
     publisherId,
-    publisherOwner: slug(config.publisherOwner?.trim() || config.name),
+    publisherOwner:
+      wireOrigin ??
+      resolvePublisherOwner({
+        url,
+        name: config.name,
+        fallback: config.publisherOwner ?? config.name
+      }),
     url,
     canonicalUrl,
     publishedAt,
@@ -162,10 +172,37 @@ function toDocument(
     metadata: {
       feedUrl: config.url,
       publisherOwner: config.publisherOwner ?? config.name,
+      wireOrigin,
       sourceName: config.name,
       termsNotes: config.termsNotes
     }
   };
+}
+
+export function detectWireOrigin(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const leading = normalized.slice(0, 320);
+  if (
+    /(?:^|[-—:(]\s*)reuters(?:\s*[-—):]|$)/i.test(leading) ||
+    /\breuters reported\b/i.test(normalized)
+  ) {
+    return "reuters";
+  }
+  if (
+    /(?:^|[-—:(]\s*)(?:associated press|ap)(?:\s*[-—):]|$)/i.test(
+      leading
+    ) ||
+    /\b(?:associated press|the ap) reported\b/i.test(normalized)
+  ) {
+    return "associated-press";
+  }
+  if (
+    /(?:^|[-—:(]\s*)afp(?:\s*[-—):]|$)/i.test(leading) ||
+    /\bafp reported\b/i.test(normalized)
+  ) {
+    return "afp";
+  }
+  return null;
 }
 
 function object(value: unknown) {
@@ -205,10 +242,6 @@ function normalizeDate(value: string | undefined) {
 
 function normalizeTitle(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 180);
-}
-
-function slug(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function canonicalizeUrl(value: string) {

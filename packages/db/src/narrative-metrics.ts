@@ -1,35 +1,40 @@
-export const narrativeMetricVersion = "reviewed_density_v2";
+import type { NarrativeLifecycleState } from "./types";
 
 export type NarrativeMetricObservation = {
   narrativeDefinitionId: string;
   date: string;
   documentId: string;
+  /** Publishable match: classifier matched, human/auto review approved, evidence still current. */
   matched: boolean;
-  reviewPending?: boolean;
+  /**
+   * Raw classifier match regardless of review state (rejected matches excluded by the caller).
+   * Defaults to `matched` when omitted so older callers keep the reviewed-only behaviour.
+   */
+  rawMatched?: boolean;
   matchScore: number;
   riskTone: number;
   bullishTone: number;
   publisherId: string;
   publisherOwner: string;
+  storyFingerprint: string;
   sourceClass: string;
   affectedEntities: string[];
 };
 
-export type NarrativeCorpusDay = { date: string; expectedDocuments: number };
-export type NarrativeQuality = {
-  coveredDays: number;
-  expectedDocuments: number;
-  pendingReview: number;
-  coverageComplete: boolean;
-  comparisonReady: boolean;
-  accelerationReady: boolean;
-  zScoreAvailable: boolean;
+export type NarrativeCorpusDocument = {
+  date: string;
+  documentId: string;
+  sourceClass: string;
 };
-export type NarrativeMetricPoint = NarrativeQuality & {
+
+export type { NarrativeLifecycleState };
+
+export type NarrativeMetricPoint = {
   date: string;
   density: number;
   baselineMean: number;
   baselineStddev: number;
+  baselineWindows: number;
   zScore: number;
   percentileRank: number;
   change: number;
@@ -40,171 +45,565 @@ export type NarrativeMetricPoint = NarrativeQuality & {
   matchedDocuments: number;
   publisherBreadth: number;
   publisherOwnerBreadth: number;
+  storyBreadth: number;
   sourceClassBreadth: number;
   entityBreadth: number;
+  corpusEligibleDocuments: number;
+  classifiedDocuments: number;
+  classificationCoveragePercent: number;
+  coverageState: "no_corpus" | "backfill_pending" | "measured_zero" | "measured";
   lowHistory: boolean;
+  attentionDensity: number;
+  attentionMatchedDocuments: number;
+  attentionZScore: number;
+  peakDensity: number;
+  peakDate: string | null;
+  daysSincePeak: number | null;
+  percentOfPeak: number;
+  lifecycleState: NarrativeLifecycleState;
 };
 
-/** Equal source-class weight, document weight within a source over the full window.
- * Missing days and pending reviews are never treated as measured absence.
- * A conservative comparison requires every calendar day covered, all ingested
- * eligible documents classified, no pending positives, and the same source classes.
+/** Minimum robust scale, in density percentage points, so near-constant baselines cannot explode z-scores. */
+export const MINIMUM_BASELINE_SCALE = 0.5;
+/** Trailing span used to locate a narrative's recent peak. */
+export const PEAK_LOOKBACK_DAYS = 90;
+/** Fewer than this many baseline windows always counts as low history. */
+export const MINIMUM_BASELINE_WINDOWS = 3;
+/**
+ * Windows whose eligible corpus is smaller than this are excluded from
+ * baselines and peaks. One story in a 30-document week reads as 3% density and
+ * would otherwise set the bar for weeks with thousands of documents.
  */
+export const DEFAULT_BASELINE_MIN_CORPUS_DOCUMENTS = 100;
+
+export function resolveBaselineCorpusFloor(env: NodeJS.ProcessEnv = process.env) {
+  const parsed = Number.parseInt(env.NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS ?? "", 10);
+  return Number.isInteger(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_BASELINE_MIN_CORPUS_DOCUMENTS;
+}
+
 export function calculateNarrativeTrendSeries(
   observations: NarrativeMetricObservation[],
   dates: string[],
   windowDays: number,
   lowHistoryDays: number,
-  corpus?: NarrativeCorpusDay[]
+  corpusDocuments: NarrativeCorpusDocument[] = observations.map((row) => ({
+    date: row.date,
+    documentId: row.documentId,
+    sourceClass: row.sourceClass
+  })),
+  options: { baselineCorpusFloor?: number } = {}
 ): NarrativeMetricPoint[] {
-  if (!Number.isInteger(windowDays) || windowDays < 1 || lowHistoryDays < 1)
-    throw new Error("Invalid narrative window configuration.");
-  const byDate = new Map<string, NarrativeMetricObservation[]>();
-  for (const row of observations) {
-    const rows = byDate.get(row.date) ?? [];
-    rows.push(row);
-    byDate.set(row.date, rows);
-  }
-  const expected = new Map(
-    corpus?.map((day) => [day.date, day.expectedDocuments])
+  const observationsByDate = groupBy(observations, (row) => row.date);
+  const corpusByDate = groupBy(corpusDocuments, (row) => row.date);
+  const daily = dates.map((date) =>
+    dailySummary(observationsByDate.get(date) ?? [], corpusByDate.get(date) ?? [], date)
   );
-  const windows = dates.map((_, index) => {
-    const windowDates = dates.slice(
-      Math.max(0, index - windowDays + 1),
-      index + 1
-    );
-    const rows = windowDates.flatMap((date) => byDate.get(date) ?? []);
-    // One observation per document/definition is the measurement unit.
-    const unique = [
-      ...new Map(rows.map((row) => [row.documentId, row])).values()
-    ];
-    const matched = unique.filter((row) => row.matched);
-    const sourceClasses = [
-      ...new Set(unique.map((row) => row.sourceClass))
-    ].sort();
-    const pendingReview = unique.filter((row) => row.reviewPending).length;
-    const expectedDocuments = windowDates.reduce(
-      (total, date) =>
-        total +
-        (expected.get(date) ??
-          new Set((byDate.get(date) ?? []).map((row) => row.documentId)).size),
-      0
-    );
-    const coveredDays = windowDates.filter(
-      (date) => (byDate.get(date)?.length ?? 0) > 0
-    ).length;
-    const density = average(
-      sourceClasses.map((source) => {
-        const eligible = unique.filter((row) => row.sourceClass === source);
-        return (
-          (100 * eligible.filter((row) => row.matched).length) / eligible.length
-        );
-      })
-    );
-    return {
-      density,
-      sourceSignature: sourceClasses.join(","),
-      coveredDays,
-      expectedDocuments,
-      pendingReview,
-      coverageComplete:
-        coveredDays === windowDays &&
-        unique.length >= expectedDocuments &&
-        pendingReview === 0,
-      eligibleDocuments: unique.length,
-      matchedDocuments: matched.length,
-      riskTone: average(matched.map((row) => row.riskTone)),
-      bullishTone: average(matched.map((row) => row.bullishTone)),
-      publisherBreadth: breadth(matched.map((row) => row.publisherId)),
-      publisherOwnerBreadth: breadth(matched.map((row) => row.publisherOwner)),
-      sourceClassBreadth: breadth(matched.map((row) => row.sourceClass)),
-      entityBreadth: breadth(matched.flatMap((row) => row.affectedEntities))
-    };
-  });
-  return windows.map((current, index) => {
-    const previous = windows[index - windowDays];
-    const prior = windows[index - windowDays * 2];
-    const comparable = (other: typeof current | undefined) =>
-      Boolean(
-        current.coverageComplete &&
-        other?.coverageComplete &&
-        current.sourceSignature === other.sourceSignature
-      );
-    const baselineValues = windows
-      .slice(0, Math.max(0, index - windowDays + 1))
-      .filter(
-        (row) =>
-          row.coverageComplete &&
-          row.sourceSignature === current.sourceSignature
-      )
-      .map((row) => row.density);
-    const baselineMean = average(baselineValues);
-    const baselineStddev = standardDeviation(baselineValues, baselineMean);
-    const lowHistory = baselineValues.length < lowHistoryDays;
-    const comparisonReady = !lowHistory && comparable(previous);
-    const accelerationReady = comparisonReady && comparable(prior);
-    // A flat or effectively flat baseline cannot support a standardized score.
-    // Change and percentile still describe a genuine disappearance or appearance.
-    const zScoreAvailable =
-      current.coverageComplete && !lowHistory && baselineStddev >= 1;
-    const change = comparisonReady ? current.density - previous.density : 0;
-    const acceleration = accelerationReady
-      ? change - (previous.density - prior.density)
-      : 0;
-    const below = baselineValues.filter(
-      (value) => value < current.density
-    ).length;
-    const ties = baselineValues.filter(
-      (value) => value === current.density
-    ).length;
+  const stride = baselineStride(windowDays);
+  const minimumWindows = Math.max(
+    MINIMUM_BASELINE_WINDOWS,
+    Math.ceil(lowHistoryDays / stride)
+  );
+  const windows = daily.map((_, index) => summarizeWindow(daily, index, windowDays));
+  const breadthPolicy = resolveLifecycleBreadthPolicy();
+  const corpusFloor = options.baselineCorpusFloor ?? resolveBaselineCorpusFloor();
+
+  return daily.map((_, index) => {
+    const current = windows[index];
+    const previous = summarizeWindow(daily, index - windowDays, windowDays);
+    const prior = summarizeWindow(daily, index - windowDays * 2, windowDays);
+    const baseline = collectBaseline(windows, index, windowDays, stride, corpusFloor);
+    const hasCoverage = isMeasured(current.coverageState);
+    const enoughBaseline = baseline.density.length >= 2;
+    const lowHistory = !hasCoverage || baseline.density.length < minimumWindows;
+    const baselineMean = average(baseline.density);
+    const baselineScale = robustScale(baseline.density, baselineMean);
+    const attentionMean = average(baseline.attention);
+    const attentionScale = robustScale(baseline.attention, attentionMean);
+    const change =
+      hasCoverage && isMeasured(previous.coverageState)
+        ? current.density - previous.density
+        : 0;
+    const previousChange =
+      isMeasured(previous.coverageState) && isMeasured(prior.coverageState)
+        ? previous.density - prior.density
+        : 0;
+    const peak = locatePeak(windows, dates, index, hasCoverage, corpusFloor);
+    const percentOfPeak =
+      hasCoverage && peak.density > 0
+        ? round((current.density / peak.density) * 100)
+        : 0;
+    const lifecycleState = deriveLifecycleState({
+      hasCoverage,
+      lowHistory,
+      density: current.density,
+      previousDensity: isMeasured(previous.coverageState) ? previous.density : null,
+      change,
+      previousChange,
+      peakDensity: peak.density,
+      daysSincePeak: peak.daysSincePeak,
+      windowDays,
+      storyBreadth: current.storyBreadth,
+      publisherOwnerBreadth: current.publisherOwnerBreadth
+    }, breadthPolicy);
+
     return {
       date: dates[index],
       density: round(current.density),
       baselineMean: round(baselineMean),
-      baselineStddev: round(baselineStddev),
-      zScore: zScoreAvailable
-        ? round((current.density - baselineMean) / baselineStddev)
-        : 0,
+      baselineStddev: round(baselineScale),
+      baselineWindows: baseline.density.length,
+      zScore:
+        hasCoverage && enoughBaseline
+          ? round((current.density - baselineMean) / baselineScale)
+          : 0,
       percentileRank:
-        current.coverageComplete && !lowHistory
-          ? Math.round((100 * (below + ties / 2)) / baselineValues.length)
+        hasCoverage && enoughBaseline
+          ? percentile(current.density, baseline.density)
           : 0,
       change: round(change),
-      acceleration: round(acceleration),
+      acceleration: hasCoverage ? round(change - previousChange) : 0,
       riskTone: round(current.riskTone),
       bullishTone: round(current.bullishTone),
       eligibleDocuments: current.eligibleDocuments,
       matchedDocuments: current.matchedDocuments,
       publisherBreadth: current.publisherBreadth,
       publisherOwnerBreadth: current.publisherOwnerBreadth,
+      storyBreadth: current.storyBreadth,
       sourceClassBreadth: current.sourceClassBreadth,
       entityBreadth: current.entityBreadth,
-      coveredDays: current.coveredDays,
-      expectedDocuments: current.expectedDocuments,
-      pendingReview: current.pendingReview,
-      coverageComplete: current.coverageComplete,
-      comparisonReady,
-      accelerationReady,
-      zScoreAvailable,
-      lowHistory: lowHistory || !current.coverageComplete
+      corpusEligibleDocuments: current.corpusEligibleDocuments,
+      classifiedDocuments: current.classifiedDocuments,
+      classificationCoveragePercent: current.classificationCoveragePercent,
+      coverageState: current.coverageState,
+      lowHistory,
+      attentionDensity: round(current.attentionDensity),
+      attentionMatchedDocuments: current.attentionMatchedDocuments,
+      attentionZScore:
+        hasCoverage && enoughBaseline
+          ? round((current.attentionDensity - attentionMean) / attentionScale)
+          : 0,
+      peakDensity: round(peak.density),
+      peakDate: peak.date,
+      daysSincePeak: peak.daysSincePeak,
+      percentOfPeak,
+      lifecycleState
     };
   });
 }
-function breadth(values: string[]) {
-  return new Set(values.filter(Boolean)).size;
+
+export const DEFAULT_LIFECYCLE_MINIMUM_STORIES = 3;
+export const DEFAULT_LIFECYCLE_MINIMUM_PUBLISHER_OWNERS = 2;
+
+export type LifecycleBreadthPolicy = {
+  minimumStories: number;
+  minimumPublisherOwners: number;
+};
+
+/**
+ * Evidence breadth a window needs before "rising" or "peaking" is a claim worth
+ * making. A single story from one publisher is at its own 90-day peak by
+ * construction; without this gate every new definition opens as "peaking".
+ */
+export function resolveLifecycleBreadthPolicy(
+  env: NodeJS.ProcessEnv = process.env
+): LifecycleBreadthPolicy {
+  return {
+    minimumStories: positiveInteger(
+      env.NARRATIVE_LIFECYCLE_MIN_STORIES,
+      DEFAULT_LIFECYCLE_MINIMUM_STORIES
+    ),
+    minimumPublisherOwners: positiveInteger(
+      env.NARRATIVE_LIFECYCLE_MIN_PUBLISHER_OWNERS,
+      DEFAULT_LIFECYCLE_MINIMUM_PUBLISHER_OWNERS
+    )
+  };
 }
+
+/** True when the window has too little independent evidence to support a movement claim. */
+export function isThinEvidence(
+  input: { storyBreadth: number; publisherOwnerBreadth: number },
+  policy: LifecycleBreadthPolicy = resolveLifecycleBreadthPolicy()
+) {
+  return (
+    input.storyBreadth < policy.minimumStories ||
+    input.publisherOwnerBreadth < policy.minimumPublisherOwners
+  );
+}
+
+export function deriveLifecycleState(
+  input: {
+    hasCoverage: boolean;
+    lowHistory: boolean;
+    density: number;
+    previousDensity: number | null;
+    change: number;
+    previousChange: number;
+    peakDensity: number;
+    daysSincePeak: number | null;
+    windowDays: number;
+    /** Omit to skip the breadth gate (legacy callers and pure movement tests). */
+    storyBreadth?: number;
+    publisherOwnerBreadth?: number;
+  },
+  policy: LifecycleBreadthPolicy = resolveLifecycleBreadthPolicy()
+): NarrativeLifecycleState {
+  if (!input.hasCoverage) return "unmeasured";
+  const zeroNow = input.density <= 0;
+  const zeroBefore = input.previousDensity !== null && input.previousDensity <= 0;
+  if (zeroNow && (zeroBefore || input.previousDensity === null)) return "dormant";
+  const noise = Math.max(MINIMUM_BASELINE_SCALE, input.peakDensity * 0.1);
+  const percentOfPeak =
+    input.peakDensity > 0 ? (input.density / input.peakDensity) * 100 : 0;
+  const pastPeak =
+    input.daysSincePeak !== null && input.daysSincePeak >= input.windowDays;
+  // Well past the peak and below half of it reads as fading, unless the window
+  // is currently moving up by more than noise: a theme re-emerging from a trough
+  // is rising, not still fading from a peak it left weeks ago.
+  const recovering = input.change > noise;
+  if (
+    zeroNow ||
+    (input.change <= -noise && input.previousChange <= 0) ||
+    (pastPeak && percentOfPeak < 50 && !recovering)
+  ) {
+    return "fading";
+  }
+  if (input.lowHistory) return "emerging";
+  const thin =
+    input.storyBreadth !== undefined &&
+    input.publisherOwnerBreadth !== undefined &&
+    isThinEvidence(
+      {
+        storyBreadth: input.storyBreadth,
+        publisherOwnerBreadth: input.publisherOwnerBreadth
+      },
+      policy
+    );
+  if (thin) return "steady";
+  if (input.change > noise) return "rising";
+  if (percentOfPeak >= 85 && !pastPeak) return "peaking";
+  return "steady";
+}
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = value === undefined ? Number.NaN : Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : fallback;
+}
+
+export function baselineStride(windowDays: number) {
+  return Math.max(1, Math.floor(windowDays / 2));
+}
+
+type DailySummary = ReturnType<typeof dailySummary>;
+
+type SourceClassStats = {
+  eligible: Set<string>;
+  matched: Set<string>;
+  /** Sum of confidence-weighted raw matches, deduplicated by document. */
+  attentionWeight: number;
+};
+
+/**
+ * Share of eligible documents matching, per source class, combined with
+ * log-volume weights so a high-volume feed cannot dominate and a one-document
+ * class cannot swing the result. Multiple days pool their documents per class.
+ */
+function pooledDensity(days: Array<Map<string, SourceClassStats>>) {
+  const byClass = new Map<string, SourceClassStats>();
+  for (const day of days) {
+    for (const [sourceClass, stats] of day) {
+      const merged = byClass.get(sourceClass) ?? {
+        eligible: new Set<string>(),
+        matched: new Set<string>(),
+        attentionWeight: 0
+      };
+      for (const id of stats.eligible) merged.eligible.add(id);
+      for (const id of stats.matched) merged.matched.add(id);
+      merged.attentionWeight += stats.attentionWeight;
+      byClass.set(sourceClass, merged);
+    }
+  }
+  const classDensities = [...byClass.values()].map((stats) => {
+    const eligible = stats.eligible.size;
+    return {
+      weight: Math.log1p(eligible),
+      density: eligible === 0 ? 0 : (stats.matched.size / eligible) * 100,
+      attention: eligible === 0 ? 0 : (stats.attentionWeight / eligible) * 100
+    };
+  });
+  return {
+    density: weightedAverage(classDensities.map((row) => [row.density, row.weight])),
+    attentionDensity: weightedAverage(classDensities.map((row) => [row.attention, row.weight]))
+  };
+}
+
+function dailySummary(
+  rows: NarrativeMetricObservation[],
+  corpusRows: NarrativeCorpusDocument[],
+  date: string
+) {
+  const eligible = new Set(rows.map((row) => row.documentId));
+  const corpusEligible = new Set(corpusRows.map((row) => row.documentId));
+  const matchedRows = rows.filter((row) => row.matched);
+  const matched = new Set(matchedRows.map((row) => row.documentId));
+  const rawMatchedRows = rows.filter((row) => row.rawMatched ?? row.matched);
+  const rawMatched = new Set(rawMatchedRows.map((row) => row.documentId));
+  const bySourceClass = groupBy(rows, (row) => row.sourceClass);
+  const classStats = new Map<string, SourceClassStats>();
+  for (const [sourceClass, sourceRows] of bySourceClass) {
+    classStats.set(sourceClass, {
+      eligible: new Set(sourceRows.map((row) => row.documentId)),
+      matched: new Set(sourceRows.filter((row) => row.matched).map((row) => row.documentId)),
+      attentionWeight: sum(
+        dedupeByDocument(sourceRows.filter((row) => row.rawMatched ?? row.matched)).map(
+          (row) => Math.min(Math.max(row.matchScore, 0), 100) / 100
+        )
+      )
+    });
+  }
+  const pooled = pooledDensity([classStats]);
+
+  return {
+    date,
+    density: pooled.density,
+    attentionDensity: pooled.attentionDensity,
+    classStats,
+    riskTone: average(matchedRows.map((row) => row.riskTone)),
+    bullishTone: average(matchedRows.map((row) => row.bullishTone)),
+    eligibleDocuments: eligible.size,
+    matchedDocuments: matched.size,
+    publisherIds: new Set(matchedRows.map((row) => row.publisherId).filter(Boolean)),
+    publisherOwners: new Set(matchedRows.map((row) => row.publisherOwner).filter(Boolean)),
+    storyFingerprints: new Set(
+      matchedRows.map((row) => row.storyFingerprint || row.documentId)
+    ),
+    sourceClasses: new Set(matchedRows.map((row) => row.sourceClass)),
+    entities: new Set(matchedRows.flatMap((row) => row.affectedEntities)),
+    corpusDocumentIds: corpusEligible,
+    classifiedDocumentIds: eligible,
+    matchedDocumentIds: matched,
+    rawMatchedDocumentIds: rawMatched
+  };
+}
+
+function summarizeWindow(daily: DailySummary[], endIndex: number, windowDays: number) {
+  const start = Math.max(0, endIndex - windowDays + 1);
+  const rows = endIndex < 0 ? [] : daily.slice(start, endIndex + 1);
+  const corpusDocumentIds = union(rows.map((row) => row.corpusDocumentIds));
+  const classifiedDocumentIds = union(rows.map((row) => row.classifiedDocumentIds));
+  const matchedDocumentIds = union(rows.map((row) => row.matchedDocumentIds));
+  const coverage = deriveNarrativeCoverageState({
+    corpusEligibleDocuments: corpusDocumentIds.size,
+    classifiedDocuments: classifiedDocumentIds.size,
+    matchedDocuments: matchedDocumentIds.size
+  });
+  // Density is pooled over the window's documents rather than averaged across
+  // days, so a 3-document day cannot count as much as a 500-document day. A thin
+  // week still reads high, which is what the baseline corpus floor is for.
+  const pooled = pooledDensity(rows.map((row) => row.classStats));
+  return {
+    density: pooled.density,
+    attentionDensity: pooled.attentionDensity,
+    riskTone: average(rows.map((row) => row.riskTone).filter((value) => value > 0)),
+    bullishTone: average(rows.map((row) => row.bullishTone).filter((value) => value > 0)),
+    eligibleDocuments: classifiedDocumentIds.size,
+    matchedDocuments: matchedDocumentIds.size,
+    attentionMatchedDocuments: unionSize(rows.map((row) => row.rawMatchedDocumentIds)),
+    publisherBreadth: unionSize(rows.map((row) => row.publisherIds)),
+    publisherOwnerBreadth: unionSize(rows.map((row) => row.publisherOwners)),
+    storyBreadth: unionSize(rows.map((row) => row.storyFingerprints)),
+    sourceClassBreadth: unionSize(rows.map((row) => row.sourceClasses)),
+    entityBreadth: unionSize(rows.map((row) => row.entities)),
+    corpusEligibleDocuments: corpusDocumentIds.size,
+    classifiedDocuments: classifiedDocumentIds.size,
+    classificationCoveragePercent: coverage.classificationCoveragePercent,
+    coverageState: coverage.coverageState
+  };
+}
+
+type WindowSummary = ReturnType<typeof summarizeWindow>;
+
+/**
+ * Baseline windows end at least one full window before the current one and are spaced
+ * by `stride` days so consecutive samples are not near-duplicates of each other.
+ */
+function collectBaseline(
+  windows: WindowSummary[],
+  index: number,
+  windowDays: number,
+  stride: number,
+  corpusFloor = 0
+) {
+  const density: number[] = [];
+  const attention: number[] = [];
+  for (let end = index - windowDays; end >= windowDays - 1; end -= stride) {
+    const window = windows[end];
+    if (isMeasured(window.coverageState) && hasBaselineCorpus(window, corpusFloor)) {
+      density.push(window.density);
+      attention.push(window.attentionDensity);
+    }
+  }
+  return { density, attention };
+}
+
+/** The current window always counts; the floor only filters history. */
+function hasBaselineCorpus(window: WindowSummary, corpusFloor: number) {
+  return window.corpusEligibleDocuments >= corpusFloor;
+}
+
+function locatePeak(
+  windows: WindowSummary[],
+  dates: string[],
+  index: number,
+  hasCoverage: boolean,
+  corpusFloor = 0
+) {
+  if (!hasCoverage) return { density: 0, date: null, daysSincePeak: null };
+  let peakDensity = -1;
+  let peakIndex = index;
+  for (let cursor = index; cursor >= Math.max(0, index - PEAK_LOOKBACK_DAYS + 1); cursor -= 1) {
+    const window = windows[cursor];
+    if (!isMeasured(window.coverageState)) continue;
+    if (cursor !== index && !hasBaselineCorpus(window, corpusFloor)) continue;
+    if (window.density > peakDensity) {
+      peakDensity = window.density;
+      peakIndex = cursor;
+    }
+  }
+  if (peakDensity < 0) return { density: 0, date: null, daysSincePeak: null };
+  return {
+    density: peakDensity,
+    date: dates[peakIndex] ?? null,
+    daysSincePeak: index - peakIndex
+  };
+}
+
+function isMeasured(state: NarrativeMetricPoint["coverageState"]) {
+  return state === "measured" || state === "measured_zero";
+}
+
+function dedupeByDocument(rows: NarrativeMetricObservation[]) {
+  const seen = new Map<string, NarrativeMetricObservation>();
+  for (const row of rows) {
+    const existing = seen.get(row.documentId);
+    if (!existing || row.matchScore > existing.matchScore) seen.set(row.documentId, row);
+  }
+  return [...seen.values()];
+}
+
+function groupBy<T>(rows: T[], key: (row: T) => string) {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const group = groups.get(key(row));
+    if (group) group.push(row);
+    else groups.set(key(row), [row]);
+  }
+  return groups;
+}
+
+function unionSize(sets: Set<string>[]) {
+  return union(sets).size;
+}
+
+function union(sets: Set<string>[]) {
+  return new Set(sets.flatMap((set) => [...set]));
+}
+
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
+}
+
 function average(values: number[]) {
-  return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+  return values.length === 0 ? 0 : sum(values) / values.length;
 }
+
+function weightedAverage(pairs: Array<[value: number, weight: number]>) {
+  const totalWeight = sum(pairs.map(([, weight]) => weight));
+  if (totalWeight === 0) return 0;
+  return sum(pairs.map(([value, weight]) => value * weight)) / totalWeight;
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+/**
+ * Scaled median absolute deviation, falling back to the sample standard deviation when
+ * the MAD collapses (more than half the baseline is identical), floored so that a flat
+ * baseline cannot turn a small move into an enormous z-score.
+ */
+export function robustScale(values: number[], mean = average(values)) {
+  if (values.length < 2) return MINIMUM_BASELINE_SCALE;
+  const center = median(values);
+  const mad = median(values.map((value) => Math.abs(value - center))) * 1.4826;
+  const scale = mad > 0 ? mad : standardDeviation(values, mean);
+  return Math.max(scale, MINIMUM_BASELINE_SCALE);
+}
+
 function standardDeviation(values: number[], mean: number) {
-  return values.length < 2
-    ? 0
-    : Math.sqrt(
-        values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
-          (values.length - 1)
-      );
+  if (values.length < 2) return 0;
+  return Math.sqrt(
+    values.reduce((total, value) => total + (value - mean) ** 2, 0) / (values.length - 1)
+  );
+}
+
+function percentile(value: number, values: number[]) {
+  if (values.length === 0) return 0;
+  return Math.round((values.filter((candidate) => candidate <= value).length / values.length) * 100);
 }
 
 function round(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+export const DEFAULT_COVERAGE_MEASURED_PERCENT = 100;
+
+/**
+ * Share of the window's corpus that must be classified before a narrative is measured.
+ * 100 means one unclassified document keeps the whole narrative at "backfill pending";
+ * a lower value trades a small amount of denominator noise for a board that stays
+ * measured while ingestion runs ahead of classification.
+ */
+export function resolveCoverageMeasuredPercent(
+  value: number | string | undefined = process.env.NARRATIVE_COVERAGE_MEASURED_PERCENT
+) {
+  const parsed = typeof value === "string" ? Number.parseFloat(value) : value;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 && parsed <= 100
+    ? parsed
+    : DEFAULT_COVERAGE_MEASURED_PERCENT;
+}
+
+export function deriveNarrativeCoverageState(
+  input: {
+    corpusEligibleDocuments: number;
+    classifiedDocuments: number;
+    matchedDocuments: number;
+  },
+  minimumCoveragePercent = resolveCoverageMeasuredPercent()
+) {
+  const corpusEligibleDocuments = Math.max(0, input.corpusEligibleDocuments);
+  const classifiedDocuments = Math.min(
+    corpusEligibleDocuments,
+    Math.max(0, input.classifiedDocuments)
+  );
+  const rawCoveragePercent =
+    corpusEligibleDocuments === 0
+      ? 0
+      : (classifiedDocuments / corpusEligibleDocuments) * 100;
+  const classificationCoveragePercent = round(rawCoveragePercent);
+  const coverageState =
+    corpusEligibleDocuments === 0
+      ? ("no_corpus" as const)
+      : rawCoveragePercent < minimumCoveragePercent
+        ? ("backfill_pending" as const)
+        : input.matchedDocuments === 0
+          ? ("measured_zero" as const)
+          : ("measured" as const);
+  return { classificationCoveragePercent, coverageState };
 }

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import pg from "pg";
 import type {
   AnalysisDocument,
@@ -39,6 +40,20 @@ const DEFAULT_CHUNK_SIZE = 8_000;
 const DEFAULT_CHUNK_OVERLAP = 500;
 const DEFAULT_QUERY_TIMEOUT_MS = 20_000;
 const DEFAULT_TREND_QUERY_TIMEOUT_MS = 120_000;
+export const DASHBOARD_QUERY_TIMEOUT_MS = 4_000;
+const DEFAULT_OPS_QUERY_TIMEOUT_MS = 90_000;
+
+/**
+ * Operator dashboards (ingestion funnel, operations status) aggregate over the whole
+ * corpus and are cached by the page, so they get a longer budget than request-path
+ * reads instead of failing over to empty panels at the default timeout.
+ */
+export function resolveOpsQueryTimeoutMs(
+  value: string | undefined = process.env.OPS_QUERY_TIMEOUT_MS
+) {
+  const parsed = value === undefined ? Number.NaN : Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_OPS_QUERY_TIMEOUT_MS;
+}
 
 type DatabaseClientOptions = {
   queryTimeoutMs?: number;
@@ -52,6 +67,7 @@ type SelectAnalysisDocumentsOptions = {
   limit?: number;
   lookbackDays?: number;
   excludedSecFilingCategories?: string[];
+  excludedDocumentIds?: string[];
   maxAttempts?: number;
 };
 
@@ -101,10 +117,10 @@ type ClaimableBackfillJobRow = BackfillJobRow & {
 };
 
 type AnalysisRunOptions = {
+  maxAttempts?: number;
   analysisType: string;
   model: string;
   promptVersion: string;
-  maxAttempts?: number;
   metadata?: Record<string, unknown>;
 };
 
@@ -134,7 +150,7 @@ type SignalTrendInput = {
   scoreContribution: number;
 };
 
-type DailyTrendBucket = {
+export type DailyTrendBucket = {
   date: string;
   baseIntensity: number;
   intensity: number;
@@ -189,14 +205,11 @@ export function createDatabaseClient(
 
   const client = new Client({
     connectionString: databaseUrl,
-    options: "-c timezone=UTC",
     connectionTimeoutMillis: 10_000,
     keepAlive: true,
     query_timeout: queryTimeoutMs,
     statement_timeout: statementTimeoutMs,
-    ssl: new URL(databaseUrl).hostname.endsWith(".render.com")
-      ? { rejectUnauthorized: true }
-      : undefined
+    ssl: resolveDatabaseSsl(databaseUrl)
   });
 
   client.on("error", (error) => {
@@ -210,7 +223,6 @@ export function createDatabaseClient(
     async connect() {
       try {
         await connect();
-        // Set explicitly as well as in startup options for proxies that ignore options.
         await client.query("set time zone 'UTC'");
       } catch (error) {
         await client.end().catch(() => undefined);
@@ -218,6 +230,69 @@ export function createDatabaseClient(
       }
     }
   });
+}
+
+/**
+ * TLS policy for the Postgres connection.
+ *
+ * DB_SSL_MODE:
+ * - "disable": plain TCP (local development).
+ * - "no-verify": TLS without certificate verification. Default for Render
+ *   hostnames because Render's internal endpoint presents a certificate that
+ *   is not in the Node trust store.
+ * - "verify-full": TLS with certificate verification. Set DB_SSL_CA to a PEM
+ *   bundle (inline or a file path) when the server uses a private CA.
+ * When unset, Render hosts use "no-verify" and everything else uses "disable",
+ * matching the previous behaviour.
+ */
+export function resolveDatabaseSsl(
+  databaseUrl: string,
+  env: NodeJS.ProcessEnv = process.env
+): false | { rejectUnauthorized: boolean; ca?: string } | undefined {
+  const mode = (env.DB_SSL_MODE ?? "").trim().toLowerCase();
+  const ca = readSslCa(env.DB_SSL_CA);
+
+  if (mode === "disable") return undefined;
+  if (mode === "no-verify") return { rejectUnauthorized: false };
+  if (mode === "verify-full")
+    return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  if (mode) {
+    console.warn(
+      `[db] unknown DB_SSL_MODE "${env.DB_SSL_MODE}"; falling back to host default.`
+    );
+  }
+
+  if (/sslmode=require|sslmode=verify/i.test(databaseUrl) && ca) {
+    return { rejectUnauthorized: true, ca };
+  }
+
+  return new URL(databaseUrl).hostname.endsWith(".render.com")
+    ? { rejectUnauthorized: false }
+    : undefined;
+}
+
+function readSslCa(value: string | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.includes("-----BEGIN")) return trimmed;
+  try {
+    return readFileSync(trimmed, "utf8");
+  } catch (error) {
+    console.warn(
+      `[db] DB_SSL_CA could not be read: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return undefined;
+  }
+}
+
+export async function closeDatabaseClient(client: {
+  end: () => Promise<void>;
+}) {
+  try {
+    await client.end();
+  } catch {
+    // Timed-out or canceled connections can throw on close; never fail the request for that.
+  }
 }
 
 export async function persistDocuments(
@@ -254,6 +329,21 @@ export async function persistDocuments(
                 `${document.sourceId}:${document.canonicalUrl ?? document.url}:${document.publishedAt}`
               )
             : hashContent(normalizedBody);
+        // Keep main's authenticated preview upgrades inside the same ingest transaction.
+        const upgradedChunks = await upgradeSubstackPreview(
+          client,
+          document,
+          contentHash
+        );
+        if (upgradedChunks !== null) {
+          if (upgradedChunks === 0) skippedDocuments += 1;
+          else {
+            insertedDocuments += 1;
+            insertedChunks += upgradedChunks;
+          }
+          await client.query("commit");
+          continue;
+        }
         const documentId = await resolveDocumentId(
           client,
           document.id,
@@ -450,6 +540,7 @@ export async function selectDocumentsForAnalysis(
             d.source_id = 'sec-filings'
             and coalesce(d.metadata->>'filingCategory', 'uncategorized') = any($6::text[])
           )
+          and not (d.id = any($8::text[]))
           and coalesce(ar.status, '') not in ('completed', 'running')
           and coalesce(ar.attempt_count, 0) < $7
         order by
@@ -492,7 +583,8 @@ export async function selectDocumentsForAnalysis(
         lookbackDays,
         limit,
         excludedSecFilingCategories,
-        maxAttempts
+        maxAttempts,
+        options.excludedDocumentIds ?? []
       ]
     );
 
@@ -553,6 +645,21 @@ export async function recoverStaleDocumentAnalysisRuns(
         and model = $2
         and prompt_version = $3
         and status = 'running'
+       and not (
+         coalesce(metadata->>'executionMode', '') = 'anthropic_batch'
+         and exists (
+           select 1
+           from anthropic_message_batches amb
+           where amb.id = document_analysis_runs.metadata->>'anthropicBatchId'
+             and amb.status in (
+               'submitting',
+               'submission_unknown',
+               'in_progress',
+               'canceling',
+               'processing_results'
+             )
+         )
+       )
         and updated_at < now() - ($4::text || ' minutes')::interval
        returning document_id`,
       [
@@ -630,7 +737,7 @@ export async function createBackfillJob(
         options.excludedSecFilingCategories ?? ["capital_markets"],
         options.model ??
           process.env.ANTHROPIC_MODEL ??
-          "claude-sonnet-4-5-20250929",
+          "claude-haiku-4-5-20251001",
         options.promptVersion ??
           process.env.CLAUDE_PROMPT_VERSION ??
           "market_signal_extraction_v1",
@@ -655,11 +762,7 @@ export async function requestBackfillStop(
   try {
     await ensureBackfillJobsSchema(client);
 
-    await client.query("begin");
-    const params = [
-      options.jobId ?? null,
-      options.jobType ?? "claude_extraction"
-    ];
+    const params = [options.jobId ?? null, options.jobType ?? "claude_extraction"];
     const result = await client.query<BackfillJobRow>(
       `update backfill_jobs
        set
@@ -699,34 +802,28 @@ export async function requestBackfillStop(
           completed_at = now(),
           updated_at = now()
          where status = 'running'
-          and (
-            metadata->>'backfillJobId' = $1
-          )`,
+          and metadata->>'backfillJobId' = $1`,
         [options.jobId]
       );
     }
 
-    await client.query("commit");
     return stoppedJob ? rowToBackfillJob(stoppedJob) : null;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
   } finally {
     await client.end();
   }
 }
 
 export async function getBackfillControlStatus(
-  databaseUrl = process.env.DATABASE_URL
+  databaseUrl = process.env.DATABASE_URL,
+  options: { onError?: (error: unknown) => void } = {}
 ): Promise<BackfillControlStatus> {
   if (!databaseUrl) {
     return emptyBackfillControlStatus();
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     await ensureBackfillJobsSchema(client);
 
     const active = await client.query<BackfillJobRow>(
@@ -747,10 +844,16 @@ export async function getBackfillControlStatus(
       activeJob: active.rows[0] ? rowToBackfillJob(active.rows[0]) : null,
       recentJobs: recent.rows.map(rowToBackfillJob)
     };
-  } catch {
+  } catch (error) {
+    options.onError?.(error);
+    console.warn(
+      `[db] backfill control status unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
     return emptyBackfillControlStatus();
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -887,7 +990,7 @@ export async function updateBackfillJobProgress(
     const result = await client.query<BackfillJobRow>(
       `update backfill_jobs
        set ${updates.join(",\n        ")}
-       where id = ${idParam} and status in ('running', 'stop_requested')
+       where id = ${idParam} and status in ('queued', 'running', 'stop_requested')
        returning ${backfillJobSelectColumns}`,
       values
     );
@@ -954,6 +1057,12 @@ export async function startDocumentAnalysisRun(
         return null;
       }
     }
+    // Serialize both unique constraints before the upsert; concurrent inserts
+    // can otherwise race on the primary key instead of the conflict target.
+    await client.query(
+      "select pg_advisory_xact_lock(hashtext('analysis_attempt'), hashtext($1))",
+      [claim.id]
+    );
     const result = await client.query(
       `insert into document_analysis_runs (
         id, document_id, analysis_type, model, prompt_version, status,
@@ -988,19 +1097,21 @@ export async function startDocumentAnalysisRun(
 }
 
 export async function completeDocumentAnalysisRun(
-  claim: AnalysisRunClaim,
+  claim: AnalysisRunClaim | string,
   signals: ExtractedSignalInput[],
   databaseUrl = process.env.DATABASE_URL
 ) {
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
+  const owned =
+    typeof claim === "string" ? { id: claim, attemptToken: null } : claim;
 
   try {
     await client.query("begin");
 
     const runInfo = await client.query<{ job_id: string | null }>(
       "select metadata->>'backfillJobId' as job_id from document_analysis_runs where id = $1",
-      [claim.id]
+      [owned.id]
     );
     const jobId = runInfo.rows[0]?.job_id;
     if (jobId) {
@@ -1018,11 +1129,11 @@ export async function completeDocumentAnalysisRun(
     }
     const run = await client.query(
       "select status, document_id, attempt_token from document_analysis_runs where id = $1 for update",
-      [claim.id]
+      [owned.id]
     );
     if (
       run.rows[0]?.status !== "running" ||
-      run.rows[0]?.attempt_token !== claim.attemptToken
+      run.rows[0]?.attempt_token !== owned.attemptToken
     )
       throw new Error(
         "Analysis run is no longer active; late results were discarded."
@@ -1113,7 +1224,7 @@ export async function completeDocumentAnalysisRun(
         error_message = null,
         updated_at = now()
        where id = $1`,
-      [claim.id]
+      [owned.id]
     );
 
     await client.query("commit");
@@ -1131,12 +1242,14 @@ export async function completeDocumentAnalysisRun(
 }
 
 export async function failDocumentAnalysisRun(
-  claim: AnalysisRunClaim,
+  claim: AnalysisRunClaim | string,
   error: unknown,
   databaseUrl = process.env.DATABASE_URL
 ) {
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
+  const owned =
+    typeof claim === "string" ? { id: claim, attemptToken: null } : claim;
 
   try {
     await client.query(
@@ -1145,11 +1258,11 @@ export async function failDocumentAnalysisRun(
         error_message = $2,
         completed_at = now(),
         updated_at = now()
-       where id = $1 and status = 'running' and attempt_token = $3`,
+       where id = $1 and status = 'running' and attempt_token is not distinct from $3`,
       [
-        claim.id,
+        owned.id,
         error instanceof Error ? error.message : String(error),
-        claim.attemptToken
+        owned.attemptToken
       ]
     );
   } finally {
@@ -1159,7 +1272,7 @@ export async function failDocumentAnalysisRun(
 
 export async function repairMissingDocumentTextsFromChunks(
   options: { limit?: number } = {},
-  databaseUrl = process.env.DATABASE_URL,
+  databaseUrl = process.env.DATABASE_URL
 ): Promise<RepairDocumentTextsResult> {
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
@@ -1198,16 +1311,11 @@ export async function repairMissingDocumentTextsFromChunks(
       from candidates c
       join document_chunks dc on dc.document_id = c.id
       group by c.id`,
-      [limit],
+      [limit]
     );
 
     for (const row of result.rows) {
-      await upsertDocumentText(
-        client,
-        row.document_id,
-        row.content,
-        "reconstructed_chunks",
-      );
+      await upsertDocumentText(client, row.document_id, row.content, "reconstructed_chunks");
     }
 
     const remaining = await client.query<{ count: string }>(
@@ -1224,12 +1332,12 @@ export async function repairMissingDocumentTextsFromChunks(
           select 1
           from document_chunks dc
           where dc.document_id = d.id
-        )`,
+        )`
     );
 
     return {
       repairedDocuments: result.rows.length,
-      remainingMissingTextDocuments: Number(remaining.rows[0]?.count ?? 0),
+      remainingMissingTextDocuments: Number(remaining.rows[0]?.count ?? 0)
     };
   } finally {
     await client.end();
@@ -1243,18 +1351,72 @@ export async function getAnalysisStatus(
     return emptyAnalysisStatus(false);
   }
 
+  const status = emptyAnalysisStatus(true);
+  const unavailableSections: AnalysisStatus["unavailableSections"] = [];
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (error) {
+    logAnalysisStatusError("connection", error);
+    await closeDatabaseClient(client);
+    return {
+      ...status,
+      degraded: true,
+      unavailableSections: [
+        "summary",
+        "coverage",
+        "backfill",
+        "recentSignals",
+        "recentRuns"
+      ]
+    };
+  }
+
+  const loadSection = async <T>(
+    section: AnalysisStatus["unavailableSections"][number],
+    operation: () => Promise<T>
+  ): Promise<T | null> => {
+    try {
+      return await operation();
+    } catch (error) {
+      unavailableSections.push(section);
+      logAnalysisStatusError(section, error);
+      return null;
+    }
+  };
 
   try {
-    const analysisModel = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
-    const analysisPromptVersion = process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1";
-    const maxAnalysisAttempts = Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5);
-    const totals = await client.query<{
+    const analysisModel =
+      process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
+    const analysisPromptVersion =
+      process.env.CLAUDE_PROMPT_VERSION ?? "market_signal_extraction_v1";
+    const maxAnalysisAttempts = Number(
+      process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5
+    );
+    const summary = await loadSection("summary", () =>
+      client.query<{
       signal_count: string;
       theme_count: string;
       completed_runs: string;
       failed_runs: string;
+      }>(
+        `select
+           (select count(*)::text from signals) as signal_count,
+           (select count(*)::text from themes) as theme_count,
+           count(*) filter (where status = 'completed')::text as completed_runs,
+           count(*) filter (where status = 'failed')::text as failed_runs
+         from document_analysis_runs`
+      )
+    );
+    if (summary?.rows[0]) {
+      status.signalCount = Number(summary.rows[0].signal_count);
+      status.themeCount = Number(summary.rows[0].theme_count);
+      status.completedRuns = Number(summary.rows[0].completed_runs);
+      status.failedRuns = Number(summary.rows[0].failed_runs);
+    }
+
+    const coverage = await loadSection("coverage", () =>
+      client.query<{
       ingested_document_count: string;
       readable_document_count: string;
       missing_text_document_count: string;
@@ -1263,128 +1425,153 @@ export async function getAnalysisStatus(
       unread_document_count: string;
       running_document_count: string;
       failed_document_count: string;
-    }>(
-      `with in_scope_documents as (
-        select
-          d.id,
-          exists (
-            select 1
-            from document_texts dt
-            where dt.document_id = d.id
-          ) as has_full_text
-        from documents d
-        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
-          and not (
-            d.source_id = 'sec-filings'
-            and coalesce(d.metadata->>'filingCategory', 'uncategorized') = 'capital_markets'
-          )
+      }>(
+        `with in_scope_documents as (
+           select
+             d.id,
+             exists (
+               select 1
+               from document_texts dt
+               where dt.document_id = d.id
+             ) as has_full_text
+           from documents d
+           where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
+             and not (
+               d.source_id = 'sec-filings'
+               and coalesce(
+                 d.metadata->>'filingCategory',
+                 'uncategorized'
+               ) = 'capital_markets'
+             )
+         )
+         select
+           count(*)::text as ingested_document_count,
+           count(*) filter (where isd.has_full_text)::text
+             as readable_document_count,
+           count(*) filter (where not isd.has_full_text)::text
+             as missing_text_document_count,
+           count(*) filter (where isd.has_full_text)::text
+             as eligible_document_count,
+           count(*) filter (
+             where isd.has_full_text and ar.status = 'completed'
+           )::text as completed_document_count,
+           count(*) filter (
+             where isd.has_full_text
+               and coalesce(ar.status, '') not in ('completed', 'running')
+               and coalesce(ar.attempt_count, 0) < $3
+           )::text as unread_document_count,
+           count(*) filter (
+             where isd.has_full_text and ar.status = 'running'
+           )::text as running_document_count,
+           count(*) filter (
+             where isd.has_full_text and ar.status = 'failed'
+           )::text as failed_document_count
+         from in_scope_documents isd
+         left join document_analysis_runs ar
+           on ar.document_id = isd.id
+          and ar.analysis_type = 'market_signal_extraction'
+          and ar.model = $1
+          and ar.prompt_version = $2`,
+        [analysisModel, analysisPromptVersion, maxAnalysisAttempts]
       )
-      select
-        (select count(*)::text from signals) as signal_count,
-        (select count(*)::text from themes) as theme_count,
-        (select count(*)::text from document_analysis_runs where status = 'completed') as completed_runs,
-        (select count(*)::text from document_analysis_runs where status = 'failed') as failed_runs,
-        count(*)::text as ingested_document_count,
-        count(*) filter (where isd.has_full_text)::text as readable_document_count,
-        count(*) filter (where not isd.has_full_text)::text as missing_text_document_count,
-        count(*) filter (where isd.has_full_text)::text as eligible_document_count,
-        count(*) filter (where isd.has_full_text and ar.status = 'completed')::text as completed_document_count,
-        count(*) filter (
-          where isd.has_full_text
-            and coalesce(ar.status, '') not in ('completed', 'running')
-            and coalesce(ar.attempt_count, 0) < $3
-        )::text as unread_document_count,
-        count(*) filter (where isd.has_full_text and ar.status = 'running')::text as running_document_count,
-        count(*) filter (where isd.has_full_text and ar.status = 'failed')::text as failed_document_count
-       from in_scope_documents isd
-       left join document_analysis_runs ar
-        on ar.document_id = isd.id
-        and ar.analysis_type = 'market_signal_extraction'
-        and ar.model = $1
-        and ar.prompt_version = $2`,
-      [analysisModel, analysisPromptVersion, maxAnalysisAttempts]
     );
+    if (coverage?.rows[0]) {
+      status.ingestedDocumentCount = Number(
+        coverage.rows[0].ingested_document_count
+      );
+      status.readableDocumentCount = Number(
+        coverage.rows[0].readable_document_count
+      );
+      status.missingTextDocumentCount = Number(
+        coverage.rows[0].missing_text_document_count
+      );
+      status.eligibleDocumentCount = Number(
+        coverage.rows[0].eligible_document_count
+      );
+      status.completedDocumentCount = Number(
+        coverage.rows[0].completed_document_count
+      );
+      status.unreadDocumentCount = Number(
+        coverage.rows[0].unread_document_count
+      );
+      status.runningDocumentCount = Number(
+        coverage.rows[0].running_document_count
+      );
+      status.failedDocumentCount = Number(
+        coverage.rows[0].failed_document_count
+      );
+    }
 
-    const recentSignals = await client.query<AnalysisSignalSummary>(
-      `select
-        s.id,
-        s.theme_id as "themeId",
-        t.label as "themeLabel",
-        s.raw_theme_label as "rawThemeLabel",
-        s.canonical_theme_label as "canonicalThemeLabel",
-        s.stance,
-        s.risk_tone::float as "riskTone",
-        s.bullish_tone::float as "bullishTone",
-        s.confidence::float as confidence,
-        s.evidence_snippet as "evidenceSnippet",
-        s.interpretation,
-        s.affected_entities as "affectedEntities",
-        s.section_label as "sectionLabel",
-        s.speaker,
-        s.prompt_version as "promptVersion",
-        s.model,
-        s.extracted_at::text as "extractedAt",
-        d.id as "documentId",
-        d.title as "documentTitle",
-        d.publisher,
-        d.url,
-        d.published_at::text as "publishedAt",
-        d.source_class as "sourceClass"
-       from signals s
-       join documents d on d.id = s.document_id
-       join themes t on t.id = s.theme_id
-       order by s.extracted_at desc
-       limit 25`
+    const recentSignals = await loadSection("recentSignals", () =>
+      client.query<AnalysisSignalSummary>(
+        `select
+           s.id,
+           s.theme_id as "themeId",
+           t.label as "themeLabel",
+           s.raw_theme_label as "rawThemeLabel",
+           s.canonical_theme_label as "canonicalThemeLabel",
+           s.stance,
+           s.risk_tone::float as "riskTone",
+           s.bullish_tone::float as "bullishTone",
+           s.confidence::float as confidence,
+           s.evidence_snippet as "evidenceSnippet",
+           s.interpretation,
+           s.affected_entities as "affectedEntities",
+           s.section_label as "sectionLabel",
+           s.speaker,
+           s.prompt_version as "promptVersion",
+           s.model,
+           s.extracted_at::text as "extractedAt",
+           d.id as "documentId",
+           d.title as "documentTitle",
+           d.publisher,
+           d.url,
+           d.published_at::text as "publishedAt",
+           d.source_class as "sourceClass"
+         from signals s
+         join documents d on d.id = s.document_id
+         join themes t on t.id = s.theme_id
+         order by s.extracted_at desc, s.id
+         limit 25`
+      )
     );
+    status.recentSignals = recentSignals?.rows ?? [];
 
-    const recentRuns = await client.query<AnalysisRunSummary>(
-      `select
-        ar.id,
-        ar.document_id as "documentId",
-        d.title as "documentTitle",
-        d.source_class as "sourceClass",
-        ar.model,
-        ar.prompt_version as "promptVersion",
-        ar.status,
-        ar.attempt_count as "attemptCount",
-        ar.error_message as "errorMessage",
-        ar.started_at::text as "startedAt",
-        ar.completed_at::text as "completedAt",
-        ar.updated_at::text as "updatedAt"
-       from document_analysis_runs ar
-       join documents d on d.id = ar.document_id
-       order by ar.updated_at desc
-       limit 25`
+    const recentRuns = await loadSection("recentRuns", () =>
+      client.query<AnalysisRunSummary>(
+        `select
+           ar.id,
+           ar.document_id as "documentId",
+           d.title as "documentTitle",
+           d.source_class as "sourceClass",
+           ar.model,
+           ar.prompt_version as "promptVersion",
+           ar.status,
+           ar.attempt_count as "attemptCount",
+           ar.error_message as "errorMessage",
+           ar.started_at::text as "startedAt",
+           ar.completed_at::text as "completedAt",
+           ar.updated_at::text as "updatedAt"
+         from document_analysis_runs ar
+         join documents d on d.id = ar.document_id
+         order by ar.updated_at desc, ar.id
+         limit 25`
+      )
     );
-
-    const row = totals.rows[0];
-
-    return {
-      databaseConfigured: true,
-      signalCount: Number(row?.signal_count ?? 0),
-      themeCount: Number(row?.theme_count ?? 0),
-      completedRuns: Number(row?.completed_runs ?? 0),
-      failedRuns: Number(row?.failed_runs ?? 0),
-      ingestedDocumentCount: Number(row?.ingested_document_count ?? 0),
-      readableDocumentCount: Number(row?.readable_document_count ?? 0),
-      missingTextDocumentCount: Number(row?.missing_text_document_count ?? 0),
-      eligibleDocumentCount: Number(row?.eligible_document_count ?? 0),
-      completedDocumentCount: Number(row?.completed_document_count ?? 0),
-      unreadDocumentCount: Number(row?.unread_document_count ?? 0),
-      runningDocumentCount: Number(row?.running_document_count ?? 0),
-      failedDocumentCount: Number(row?.failed_document_count ?? 0),
-      backfillControl: await getBackfillControlStatus(databaseUrl),
-      recentSignals: recentSignals.rows,
-      recentRuns: recentRuns.rows.map((run) => ({
+    status.recentRuns = (recentRuns?.rows ?? []).map((run) => ({
         ...run,
         status: run.status as AnalysisRunStatus
-      }))
-    };
-  } catch {
-    return emptyAnalysisStatus(true);
+    }));
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
+
+  status.backfillControl = await getBackfillControlStatus(databaseUrl, {
+    onError: () => unavailableSections.push("backfill")
+  });
+  status.degraded = unavailableSections.length > 0;
+  status.unavailableSections = unavailableSections;
+  return status;
 }
 
 export async function selectThemeGroupsForNormalization(
@@ -1729,8 +1916,10 @@ export async function recomputeThemeTrends(
     options.onProgress?.(`grouped ${themes.size} themes`);
     let lowHistoryRows = 0;
     let trendRowsWritten = 0;
+    let skippedEmptyRows = 0;
     let themesStored = 0;
     const latestTrends: TrendSummary[] = [];
+    await pruneTrendRowsBefore(client, storageStartDate, options.onProgress);
     await client.query("begin");
     await deleteTrendRowsForDateRange(
       client,
@@ -1739,22 +1928,46 @@ export async function recomputeThemeTrends(
       options.onProgress
     );
 
+    const seriesStartDate =
+      storageStartDate < startDate ? storageStartDate : startDate;
+    const allDates = enumerateDates(seriesStartDate, asOfDate);
+    const storageDates = enumerateDates(storageStartDate, asOfDate);
+    const firstStorageIndex = allDates.indexOf(storageDates[0]);
+    const baselineStartIndex = allDates.indexOf(startDate);
     for (const theme of themes.values()) {
       const themeTrendRows: TrendRowInput[] = [];
-      for (const date of enumerateDates(storageStartDate, asOfDate)) {
+      const series = buildThemeTrendSeries(theme.buckets, allDates);
+      for (const [offset, date] of storageDates.entries()) {
         for (const trendWindow of windows) {
           const windowDays = trendWindowDays(trendWindow);
-          const score = scoreTrendWindow(
-            theme.buckets,
-            date,
+          const score = scoreTrendWindowAt(
+            series,
+            firstStorageIndex + offset,
             windowDays,
             lowHistoryDays,
             theme.trendLevel,
-            startDate
+            baselineStartIndex
           );
 
           if (score.lowHistory) {
             lowHistoryRows += 1;
+          }
+
+          // A window with no evidence, no intensity, and a flat zero baseline carries
+          // no information; readers treat a missing date as zero. Storing them made
+          // the table ~97% empty rows and the four-hourly rewrite take ~95 minutes on
+          // the production plan. The as-of-date row is always kept so latest-date
+          // lookups and per-theme "current" reads keep working.
+          if (
+            date !== asOfDate &&
+            isNoInformationTrendScore(
+              score.intensity,
+              score.zScore,
+              score.sourceMix.evidenceCount
+            )
+          ) {
+            skippedEmptyRows += 1;
+            continue;
           }
 
           themeTrendRows.push({
@@ -1811,11 +2024,14 @@ export async function recomputeThemeTrends(
     }
 
     await client.query("commit");
-    options.onProgress?.("trend rows committed");
+    options.onProgress?.(
+      `trend rows committed (${trendRowsWritten} written, ${skippedEmptyRows} empty windows skipped)`
+    );
 
     return {
       themesProcessed: themes.size,
       trendRowsWritten,
+      skippedEmptyRows,
       lowHistoryRows,
       topTrends: latestTrends
         .sort((left, right) => right.zScore - left.zScore)
@@ -1968,64 +2184,57 @@ export async function getLiveDashboardStatus(
     return emptyLiveDashboardStatus(false);
   }
 
-  const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: DASHBOARD_QUERY_TIMEOUT_MS,
+    statementTimeoutMs: DASHBOARD_QUERY_TIMEOUT_MS
+  });
   try {
+    await client.connect();
     const totals = await client.query<{
-      total_trend_rows: string;
       latest_trend_date: string | null;
     }>(
-      `select
-        count(*)::text as total_trend_rows,
-        max(date)::text as latest_trend_date
-       from theme_trends`
+      `select date::text as latest_trend_date
+       from theme_trends
+       order by date desc
+       limit 1`
     );
     const latestTrendDate = totals.rows[0]?.latest_trend_date ?? null;
-    const totalTrendRows = Number(totals.rows[0]?.total_trend_rows ?? 0);
 
     if (!latestTrendDate) {
-      return {
-        ...emptyLiveDashboardStatus(true),
-        totalTrendRows
-      };
+      return emptyLiveDashboardStatus(true);
     }
 
-    const sevenDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "7d", 80);
-    const thirtyDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "30d", 60);
+    const sevenDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "7d", 24);
+    const thirtyDayRows = await loadLatestMarketTrendRows(client, latestTrendDate, "30d", 12);
     const sevenDayMarketThemes = rankDashboardTrends(
       sevenDayRows.map(trendSummaryWithoutDetails)
     );
     const thirtyDayMarketThemes = rankDashboardTrends(
       thirtyDayRows.map(trendSummaryWithoutDetails)
     );
-    const confirmedSevenDayThemes = sevenDayMarketThemes
-      .filter(isConfirmedDashboardTrend)
-      .slice(0, 8);
-    const emergingSevenDayThemes = sevenDayMarketThemes
-      .filter((trend) => !isConfirmedDashboardTrend(trend))
-      .slice(0, 8);
-    const confirmedThirtyDayThemes = thirtyDayMarketThemes
-      .filter(isConfirmedDashboardTrend)
-      .slice(0, 6);
-
-    const themesToHydrate =
-      confirmedSevenDayThemes.length > 0 ? confirmedSevenDayThemes : confirmedThirtyDayThemes;
 
     return {
       databaseConfigured: true,
-      totalTrendRows,
+      degraded: false,
+      totalTrendRows: sevenDayRows.length + thirtyDayRows.length,
       latestTrendDate,
-      confirmedSevenDayThemes: await hydrateTrendSummaries(client, confirmedSevenDayThemes),
-      emergingSevenDayThemes: await hydrateTrendSummaries(client, emergingSevenDayThemes),
-      confirmedThirtyDayThemes: themesToHydrate === confirmedThirtyDayThemes
-        ? await hydrateTrendSummaries(client, confirmedThirtyDayThemes)
-        : confirmedThirtyDayThemes
+      confirmedSevenDayThemes: sevenDayMarketThemes
+        .filter(isConfirmedDashboardTrend)
+        .slice(0, 8),
+      emergingSevenDayThemes: sevenDayMarketThemes
+        .filter((trend) => !isConfirmedDashboardTrend(trend))
+        .slice(0, 8),
+      confirmedThirtyDayThemes: thirtyDayMarketThemes
+        .filter(isConfirmedDashboardTrend)
+        .slice(0, 6)
     };
-  } catch {
-    return emptyLiveDashboardStatus(true);
+  } catch (error) {
+    console.warn(
+      `[db] live dashboard query failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return emptyLiveDashboardStatus(true, true);
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -2038,9 +2247,8 @@ export async function getThemeDetailStatus(
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     const themeResult = await client.query<{
       id: string;
       label: string;
@@ -2142,10 +2350,13 @@ export async function getThemeDetailStatus(
         affectedEntities
       )
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[db] theme detail query failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     return emptyThemeDetailStatus(true);
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -2157,9 +2368,8 @@ export async function getIngestionStatus(
   }
 
   const client = createDatabaseClient(databaseUrl);
-  await client.connect();
-
   try {
+    await client.connect();
     const totals = await client.query<{
       total_documents: string;
       sec_documents: string;
@@ -2219,10 +2429,13 @@ export async function getIngestionStatus(
         count: Number(countRow.count)
       }))
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[db] ingestion status query failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     return emptyStatus(true);
   } finally {
-    await client.end();
+    await closeDatabaseClient(client);
   }
 }
 
@@ -2256,6 +2469,69 @@ function canonicalizeUrl(value: string) {
 
 function normalizePublisherId(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+async function upgradeSubstackPreview(
+  client: DbClient,
+  document: PersistableDocument,
+  contentHash: string
+): Promise<number | null> {
+  if (
+    document.metadata?.platform !== "substack" ||
+    document.metadata?.content !== "full"
+  ) {
+    return null;
+  }
+
+  const existing = await client.query<{
+    id: string;
+    content_hash: string;
+    metadata: Record<string, unknown>;
+  }>(
+    `select id, content_hash, metadata from documents where id = $1 for update`,
+    [document.id]
+  );
+  const row = existing.rows[0];
+  if (!row || row.metadata?.content !== "preview") return null;
+  if (row.content_hash === contentHash) return 0;
+
+  // A changed hash is a successful upgrade even when the body is metadata-only.
+
+  await client.query(
+    `update documents
+     set summary = $2,
+         retrieval_method = $3,
+         metadata = $4::jsonb,
+         content_hash = $5
+     where id = $1`,
+    [
+      document.id,
+      document.summary,
+      document.retrievalMethod,
+      JSON.stringify(document.metadata ?? {}),
+      contentHash
+    ]
+  );
+
+  if (document.retentionPolicy === "metadata_only") return 1;
+
+  await upsertDocumentText(client, document.id, document.body, "ingestion");
+  await client.query(`delete from document_chunks where document_id = $1`, [
+    document.id
+  ]);
+  const chunks = chunkText(document.body);
+  for (const [index, content] of chunks.entries()) {
+    await client.query(
+      `insert into document_chunks (
+        id,
+        document_id,
+        chunk_index,
+        content
+      ) values ($1, $2, $3, $4)`,
+      [`${document.id}:chunk:${index}`, document.id, index, content]
+    );
+  }
+  return chunks.length;
 }
 
 async function loadSignalsForTrendComputation(
@@ -2387,6 +2663,39 @@ async function deleteTrendRowsForDateRange(
   }
 }
 
+/**
+ * Rows older than the storage window were never removed, so shrinking TREND_STORAGE_DAYS
+ * left them in place indefinitely. Prune them in per-date statements outside the main
+ * transaction so each statement stays short on a small database plan.
+ */
+async function pruneTrendRowsBefore(
+  client: DbClient,
+  storageStartDate: string,
+  onProgress?: (message: string) => void
+) {
+  const oldest = await client.query<{ date: string | null }>(
+    "select min(date)::text as date from theme_trends where date < $1::date",
+    [storageStartDate]
+  );
+  const oldestDate = oldest.rows[0]?.date;
+  if (!oldestDate) return 0;
+  const dates = enumerateDates(oldestDate, addDays(storageStartDate, -1));
+  let pruned = 0;
+  for (const [index, date] of dates.entries()) {
+    const result = await client.query(
+      "delete from theme_trends where date = $1::date",
+      [date]
+    );
+    pruned += result.rowCount ?? 0;
+    if ((index + 1) % 10 === 0 || index === dates.length - 1) {
+      onProgress?.(
+        `pruned ${pruned} trend rows older than the storage window (${index + 1}/${dates.length} dates)`
+      );
+    }
+  }
+  return pruned;
+}
+
 function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, endDate: string) {
   const themes = new Map<
     string,
@@ -2444,7 +2753,7 @@ function groupSignalsByTheme(signals: SignalTrendInput[], startDate: string, end
   return themes;
 }
 
-function scoreTrendWindow(
+export function scoreTrendWindow(
   buckets: Map<string, DailyTrendBucket>,
   date: string,
   windowDays: number,
@@ -2546,6 +2855,109 @@ function summarizeBuckets(buckets: DailyTrendBucket[]) {
     sourceMix,
     sourceDiversity: sourceClasses.size,
     entityBreadth: entities.size
+  };
+}
+
+/**
+ * Per-theme series over the full lookback, built once so every (date, window) score is
+ * O(window) for the current summary and O(baseline) for the statistics, instead of
+ * re-enumerating dates and re-summarizing every rolling baseline position. Produces the
+ * same numbers as scoreTrendWindow; see the equivalence test.
+ */
+export type ThemeTrendSeries = {
+  dates: string[];
+  buckets: Array<DailyTrendBucket | undefined>;
+  /** prefix[i] = sum of bucket intensity for dates[0..i-1]; prefix[0] = 0. */
+  prefix: Float64Array;
+};
+
+export function buildThemeTrendSeries(
+  buckets: Map<string, DailyTrendBucket>,
+  dates: string[]
+): ThemeTrendSeries {
+  const series: Array<DailyTrendBucket | undefined> = new Array(dates.length);
+  const prefix = new Float64Array(dates.length + 1);
+  for (let index = 0; index < dates.length; index += 1) {
+    const bucket = buckets.get(dates[index]);
+    series[index] = bucket;
+    prefix[index + 1] = prefix[index] + (bucket?.intensity ?? 0);
+  }
+  return { dates, buckets: series, prefix };
+}
+
+export function scoreTrendWindowAt(
+  series: ThemeTrendSeries,
+  dateIndex: number,
+  windowDays: number,
+  lowHistoryDays: number,
+  trendLevel: "market" | "sector" | "unmapped",
+  /** Index in series.dates where baseline history begins (the lookback start). */
+  baselineStartIndex = 0
+): ReturnType<typeof scoreTrendWindow> {
+  const windowStart = dateIndex - windowDays + 1;
+  const currentBuckets: DailyTrendBucket[] = [];
+  for (let index = Math.max(windowStart, 0); index <= dateIndex; index += 1) {
+    const bucket = series.buckets[index];
+    if (bucket) currentBuckets.push(bucket);
+  }
+  const currentSummary = summarizeBuckets(currentBuckets);
+
+  // Baseline covers dates[0 .. windowStart-1]; its rolling window totals are prefix
+  // differences. Mirrors rollingWindowTotals: fewer than windowDays baseline days
+  // collapse to a single total of everything available.
+  const baselineDays = Math.max(windowStart - baselineStartIndex, 0);
+  const baselineValues: number[] = [];
+  if (baselineDays > 0 && baselineDays < windowDays) {
+    baselineValues.push(
+      series.prefix[baselineStartIndex + baselineDays] - series.prefix[baselineStartIndex]
+    );
+  } else if (baselineDays >= windowDays) {
+    for (let end = windowDays; end <= baselineDays; end += 1) {
+      const stop = baselineStartIndex + end;
+      baselineValues.push(series.prefix[stop] - series.prefix[stop - windowDays]);
+    }
+  }
+
+  const baselineMean = average(baselineValues);
+  const rawStddev = standardDeviation(baselineValues, baselineMean);
+  const baselineStddev = Math.max(rawStddev, 1);
+  const zScore = (currentSummary.intensity - baselineMean) / baselineStddev;
+  const lowHistory = baselineValues.length < lowHistoryDays;
+  const percentileRank =
+    baselineValues.length === 0
+      ? 0
+      : Math.round(
+          (baselineValues.filter((value) => value <= currentSummary.intensity).length /
+            baselineValues.length) *
+            100
+        );
+  const candidate =
+    !lowHistory &&
+    zScore >= 1.8 &&
+    percentileRank >= 90 &&
+    currentSummary.evidenceCount >= 2 &&
+    hasMarketBreadth(currentSummary, trendLevel) &&
+    currentSummary.sourceDiversity >= 1;
+
+  return {
+    intensity: roundMetric(currentSummary.intensity),
+    baselineMean: roundMetric(baselineMean),
+    baselineStddev: roundMetric(baselineStddev),
+    zScore: roundMetric(zScore),
+    percentileRank,
+    lowHistory,
+    sourceMix: {
+      sources: currentSummary.sourceMix,
+      trendLevel,
+      evidenceCount: currentSummary.evidenceCount,
+      documentBreadth: currentSummary.documentBreadth,
+      sourceDiversity: currentSummary.sourceDiversity,
+      entityBreadth: currentSummary.entityBreadth,
+      baseIntensity: roundMetric(currentSummary.baseIntensity),
+      lowHistory,
+      baselineDays: baselineValues.length,
+      candidate
+    }
   };
 }
 
@@ -2671,9 +3083,9 @@ async function loadLatestMarketTrendRows(
       and coalesce(tt.source_mix->>'trendLevel', 'market') = 'market'
      order by
       tt.z_score desc,
+      tt.intensity desc,
       coalesce((tt.source_mix->>'evidenceCount')::numeric, 0) desc,
-      coalesce((tt.source_mix->>'entityBreadth')::numeric, 0) desc,
-      tt.intensity desc
+      coalesce((tt.source_mix->>'entityBreadth')::numeric, 0) desc
      limit $3`,
     [latestTrendDate, trendWindow, limit]
   );
@@ -2709,26 +3121,6 @@ function trendSummaryWithoutDetails(row: ThemeTrendDbRow): TrendSummary {
     affectedEntities: [],
     recentEvidence: []
   };
-}
-
-async function hydrateTrendSummaries(client: DbClient, trends: TrendSummary[]) {
-  const hydrated: TrendSummary[] = [];
-
-  for (const trend of trends) {
-    const windowDays = trendWindowDays(trend.trendWindow);
-    hydrated.push({
-      ...trend,
-      affectedEntities: await loadTrendAffectedEntities(
-        client,
-        trend.themeId,
-        trend.date,
-        windowDays
-      ),
-      recentEvidence: await loadTrendEvidence(client, trend.themeId, trend.date, windowDays)
-    });
-  }
-
-  return hydrated;
 }
 
 async function themeTrendSummaryFromRow(
@@ -2783,7 +3175,33 @@ async function loadThemeTrendHistory(
     [themeId]
   );
 
-  return result.rows.reverse();
+  return fillThemeTrendHistoryGaps(result.rows.reverse());
+}
+
+/** Empty windows are not stored; restore them as zero points so the series is contiguous. */
+export function fillThemeTrendHistoryGaps(points: ThemeTrendPoint[]): ThemeTrendPoint[] {
+  if (points.length < 2) return points;
+  const byDate = new Map(points.map((point) => [point.date, point]));
+  const filled: ThemeTrendPoint[] = [];
+  for (const date of enumerateDates(points[0].date, points[points.length - 1].date)) {
+    filled.push(
+      byDate.get(date) ?? { date, intensity: 0, baselineMean: 0, zScore: 0 }
+    );
+  }
+  return filled;
+}
+
+/**
+ * True when a trend window says nothing: no evidence in the window, zero intensity, and
+ * a z-score of zero (a flat zero baseline). Zero intensity against a non-zero baseline
+ * yields a negative z-score and is kept, since that is a fading signal.
+ */
+export function isNoInformationTrendScore(
+  intensity: number,
+  zScore: number,
+  evidenceCount: number
+) {
+  return intensity === 0 && zScore === 0 && evidenceCount === 0;
 }
 
 async function loadRelatedSubthemes(client: DbClient, themeId: string) {
@@ -3346,9 +3764,19 @@ function normalizeText(text: string) {
   return text.replace(/\s+\n/g, "\n").replace(/[ \t]+/g, " ").trim();
 }
 
+function logAnalysisStatusError(section: string, error: unknown) {
+  console.warn(
+    `[db] analysis status ${section} unavailable: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
+
 function emptyAnalysisStatus(databaseConfigured: boolean): AnalysisStatus {
   return {
     databaseConfigured,
+    degraded: false,
+    unavailableSections: [],
     signalCount: 0,
     themeCount: 0,
     completedRuns: 0,
@@ -3377,9 +3805,13 @@ function emptyTrendStatus(databaseConfigured: boolean): TrendStatus {
   };
 }
 
-function emptyLiveDashboardStatus(databaseConfigured: boolean): LiveDashboardStatus {
+function emptyLiveDashboardStatus(
+  databaseConfigured: boolean,
+  degraded = false
+): LiveDashboardStatus {
   return {
     databaseConfigured,
+    degraded,
     totalTrendRows: 0,
     latestTrendDate: null,
     confirmedSevenDayThemes: [],

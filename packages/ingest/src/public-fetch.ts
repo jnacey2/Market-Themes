@@ -82,7 +82,7 @@ export async function resolvePublicUrl(
 }
 
 /** HTTPS GET with DNS pinned to a validated address, verified TLS, bounded body,
- * and a fresh validation on every redirect. No cookies or authentication headers.
+ * and a fresh validation on every redirect. Cookies are forwarded only within the original origin for licensed feed sessions.
  */
 export async function publicFetch(
   input: string | URL | Request,
@@ -98,6 +98,7 @@ export async function publicFetch(
       : input instanceof URL
         ? input.href
         : input.url;
+  const originalOrigin = new URL(destination).origin;
   if (init.method && init.method !== "GET")
     throw new Error("Public feed fetching only supports GET.");
   for (let redirect = 0; redirect <= 3; redirect += 1) {
@@ -118,7 +119,13 @@ export async function publicFetch(
           signal,
           headers: {
             Accept: headers.get("accept") ?? "*/*",
-            "User-Agent": headers.get("user-agent") ?? "MarketThemesBot/0.1"
+            "User-Agent": headers.get("user-agent") ?? "MarketThemesBot/0.1",
+            ...(headers.get("accept-language")
+              ? { "Accept-Language": headers.get("accept-language")! }
+              : {}),
+            ...(url.origin === originalOrigin && headers.get("cookie")
+              ? { Cookie: headers.get("cookie")! }
+              : {})
           },
           lookup: (_host, options, callback) => {
             if (typeof options === "object" && options.all)

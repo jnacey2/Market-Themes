@@ -1,12 +1,28 @@
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import type { AnalysisDocument, ExtractedSignalInput, ToneDirection } from "@market-themes/db";
+import type {
+  Message,
+  MessageCreateParamsNonStreaming
+} from "@anthropic-ai/sdk/resources/messages";
+import {
+  detectTranscriptSections,
+  readStoredTranscriptSections,
+  transcriptSectionDisplayLabel,
+  type AnalysisDocument,
+  type ExtractedSignalInput,
+  type ToneDirection
+} from "@market-themes/db";
 import {
   signalExtractionPromptVersion,
   signalExtractionSystemPrompt
 } from "./prompts";
+import {
+  parseStructuredOutput,
+  signalExtractionOutputFormat
+} from "./structured-output";
+import { logAnthropicUsage } from "./anthropic-usage";
 
-const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
+const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS = 8_000;
 const DEFAULT_MAX_DOCUMENT_CHARS = 120_000;
 const DEFAULT_SECTION_CHARS = 60_000;
@@ -15,8 +31,12 @@ const DEFAULT_MAX_EVIDENCE_CHARS = 800;
 
 export const marketSignalAnalysisType = "market_signal_extraction";
 
+export type SignalExtractionSection = {
+  label: string;
+  text: string;
+};
+
 export type ExtractSignalsOptions = {
-  signal?: AbortSignal;
   apiKey?: string;
   model?: string;
   promptVersion?: string;
@@ -25,6 +45,7 @@ export type ExtractSignalsOptions = {
   sectionChars?: number;
   sectionOverlap?: number;
   maxEvidenceChars?: number;
+  signal?: AbortSignal;
 };
 
 export async function extractSignalsFromDocument(
@@ -33,79 +54,155 @@ export async function extractSignalsFromDocument(
 ): Promise<ExtractedSignalInput[]> {
   const model = options.model ?? process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
   const promptVersion =
-    options.promptVersion ??
-    process.env.CLAUDE_PROMPT_VERSION ??
-    signalExtractionPromptVersion;
-  const maxDocumentChars =
-    options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS;
-
-  const sections =
-    document.text.length <= maxDocumentChars
-      ? [{ label: "Full document", text: document.text }]
-      : splitIntoSections(
-          document.text,
-          options.sectionChars ?? DEFAULT_SECTION_CHARS,
-          options.sectionOverlap ?? DEFAULT_SECTION_OVERLAP
-        );
-
-  const allSignals: ExtractedSignalInput[] = [];
-
-  for (const section of sections) {
-    options.signal?.throwIfAborted();
-    const signals = await extractSignalsFromText(document, section, {
-      ...options,
-      model,
-      promptVersion
-    });
-    allSignals.push(...signals);
-  }
-
-  return dedupeSignals(allSignals);
-}
-
-async function extractSignalsFromText(
-  document: AnalysisDocument,
-  section: { label: string; text: string },
-  options: Required<Pick<ExtractSignalsOptions, "model" | "promptVersion">> &
-    ExtractSignalsOptions
-) {
+    options.promptVersion ?? process.env.CLAUDE_PROMPT_VERSION ?? signalExtractionPromptVersion;
+  const sections = prepareSignalExtractionSections(document, options);
   const client = new Anthropic({
     apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
   });
-  const message = await client.messages.create(
-    {
-      model: options.model,
-      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-      temperature: 0,
-      system: signalExtractionSystemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: buildUserPrompt(document, section)
-        }
-      ]
-    },
-    { signal: options.signal }
-  );
-  const responseText = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
-  const parsed = parseClaudeJson(responseText);
-  const maxEvidenceChars =
-    options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS;
+  const allSignals: ExtractedSignalInput[] = [];
 
+  for (const section of sections) {
+    const message = await client.messages.create(
+      buildSignalExtractionRequest(document, section, {
+        model,
+        maxTokens: options.maxTokens
+      }),
+      options.signal ? { signal: options.signal } : undefined
+    );
+    logAnthropicUsage("signal-extraction", model, message.usage);
+    const signals = normalizeSignalExtractionMessage(
+      message,
+      document,
+      section,
+      {
+        model,
+        promptVersion,
+        maxEvidenceChars: options.maxEvidenceChars
+      }
+    );
+    allSignals.push(...signals);
+  }
+
+  return dedupeExtractedSignals(allSignals);
+}
+
+export function prepareSignalExtractionSections(
+  document: AnalysisDocument,
+  options: Pick<
+    ExtractSignalsOptions,
+    "maxDocumentChars" | "sectionChars" | "sectionOverlap"
+  > = {}
+) {
+  const maxDocumentChars =
+    options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS;
+  const sectionChars = options.sectionChars ?? DEFAULT_SECTION_CHARS;
+  const sectionOverlap = options.sectionOverlap ?? DEFAULT_SECTION_OVERLAP;
+
+  if (document.sourceClass === "transcript") {
+    const transcriptSections = prepareTranscriptSections(
+      document,
+      maxDocumentChars,
+      sectionChars,
+      sectionOverlap
+    );
+    if (transcriptSections) {
+      return transcriptSections;
+    }
+  }
+
+  return document.text.length <= maxDocumentChars
+    ? [{ label: "Full document", text: document.text }]
+    : splitIntoSections(document.text, sectionChars, sectionOverlap);
+}
+
+/**
+ * Earnings calls are split at the prepared-remarks / Q&A boundary so the model
+ * labels evidence by regime (scripted framing vs. analyst probing). Stored
+ * ingest offsets are preferred; otherwise the boundary is detected from text.
+ * Returns null when no boundary can be found so the generic path applies.
+ */
+function prepareTranscriptSections(
+  document: AnalysisDocument,
+  maxDocumentChars: number,
+  sectionChars: number,
+  sectionOverlap: number
+): SignalExtractionSection[] | null {
+  const sectioning =
+    readStoredTranscriptSections(document.metadata, document.text.length) ??
+    detectTranscriptSections(document.text);
+
+  if (sectioning.qaStartOffset === null) {
+    return null;
+  }
+
+  const sections: SignalExtractionSection[] = [];
+
+  for (const span of sectioning.sections) {
+    const text = document.text.slice(span.start, span.end).trim();
+    if (!text) {
+      continue;
+    }
+
+    const label = transcriptSectionDisplayLabel(span.label);
+    const limit = Math.min(maxDocumentChars, sectionChars);
+
+    if (text.length <= limit) {
+      sections.push({ label, text });
+      continue;
+    }
+
+    for (const [index, part] of splitIntoSections(text, sectionChars, sectionOverlap).entries()) {
+      sections.push({ label: `${label} (part ${index + 1})`, text: part.text });
+    }
+  }
+
+  return sections.length > 0 ? sections : null;
+}
+
+export function buildSignalExtractionRequest(
+  document: AnalysisDocument,
+  section: SignalExtractionSection,
+  options: {
+    model: string;
+    maxTokens?: number;
+  }
+): MessageCreateParamsNonStreaming {
+  return {
+    model: options.model,
+    max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+    system: signalExtractionSystemPrompt,
+    output_config: { format: signalExtractionOutputFormat },
+    messages: [
+      {
+        role: "user",
+        content: buildUserPrompt(document, section)
+      }
+    ]
+  };
+}
+
+export function normalizeSignalExtractionMessage(
+  message: Message,
+  document: AnalysisDocument,
+  section: SignalExtractionSection,
+  options: {
+    model: string;
+    promptVersion: string;
+    maxEvidenceChars?: number;
+  }
+) {
+  const parsed = parseStructuredOutput(message, "Claude extraction");
   return validateSignals(parsed, document, section, {
     model: options.model,
     promptVersion: options.promptVersion,
-    maxEvidenceChars
+    maxEvidenceChars:
+      options.maxEvidenceChars ?? DEFAULT_MAX_EVIDENCE_CHARS
   });
 }
 
 function buildUserPrompt(
   document: AnalysisDocument,
-  section: { label: string; text: string }
+  section: SignalExtractionSection
 ) {
   return JSON.stringify(
     {
@@ -130,28 +227,10 @@ function buildUserPrompt(
   );
 }
 
-function parseClaudeJson(responseText: string): unknown {
-  const trimmed = responseText
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-
-  try {
-    return JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(
-      `Claude extraction returned invalid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-}
-
 function validateSignals(
   parsed: unknown,
   document: AnalysisDocument,
-  section: { label: string; text: string },
+  section: SignalExtractionSection,
   options: {
     model: string;
     promptVersion: string;
@@ -179,7 +258,7 @@ function validateSignal(
   candidate: unknown,
   index: number,
   document: AnalysisDocument,
-  section: { label: string; text: string },
+  section: SignalExtractionSection,
   options: {
     model: string;
     promptVersion: string;
@@ -191,10 +270,7 @@ function validateSignal(
       throw new Error(`Signal ${index} must be an object.`);
     }
 
-    const rawThemeLabel = requiredString(
-      candidate.rawThemeLabel,
-      `signals[${index}].rawThemeLabel`
-    );
+    const rawThemeLabel = requiredString(candidate.rawThemeLabel, `signals[${index}].rawThemeLabel`);
     const canonicalThemeLabel = requiredString(
       candidate.canonicalThemeLabel,
       `signals[${index}].canonicalThemeLabel`
@@ -204,18 +280,9 @@ function validateSignal(
       `signals[${index}].themeDescription`
     );
     const stance = validateStance(candidate.stance, index);
-    const riskTone = validateScore(
-      candidate.riskTone,
-      `signals[${index}].riskTone`
-    );
-    const bullishTone = validateScore(
-      candidate.bullishTone,
-      `signals[${index}].bullishTone`
-    );
-    const confidence = validateScore(
-      candidate.confidence,
-      `signals[${index}].confidence`
-    );
+    const riskTone = validateScore(candidate.riskTone, `signals[${index}].riskTone`);
+    const bullishTone = validateScore(candidate.bullishTone, `signals[${index}].bullishTone`);
+    const confidence = validateScore(candidate.confidence, `signals[${index}].confidence`);
     const evidenceSnippet = requiredString(
       candidate.evidenceSnippet,
       `signals[${index}].evidenceSnippet`
@@ -226,26 +293,17 @@ function validateSignal(
     );
 
     if (evidenceSnippet.length > options.maxEvidenceChars) {
-      throw new Error(
-        `Signal ${index} evidence snippet exceeds ${options.maxEvidenceChars} chars.`
-      );
+      throw new Error(`Signal ${index} evidence snippet exceeds ${options.maxEvidenceChars} chars.`);
     }
 
     if (!containsSnippet(section.text, evidenceSnippet)) {
-      throw new Error(
-        `Signal ${index} evidence snippet was not copied from the source text.`
-      );
+      throw new Error(`Signal ${index} evidence snippet was not copied from the source text.`);
     }
 
     const themeId = `theme:${slugify(canonicalThemeLabel)}`;
 
     return {
-      id: signalId(
-        document.id,
-        options.promptVersion,
-        themeId,
-        evidenceSnippet
-      ),
+      id: signalId(document.id, options.promptVersion, themeId, evidenceSnippet),
       documentId: document.id,
       themeId,
       rawThemeLabel,
@@ -302,7 +360,7 @@ function splitIntoSections(text: string, sectionChars: number, overlap: number) 
   return sections;
 }
 
-function dedupeSignals(signals: ExtractedSignalInput[]) {
+export function dedupeExtractedSignals(signals: ExtractedSignalInput[]) {
   const seen = new Set<string>();
   const deduped: ExtractedSignalInput[] = [];
 
@@ -379,9 +437,7 @@ function validateStance(value: unknown, index: number): ToneDirection {
     return value;
   }
 
-  throw new Error(
-    `signals[${index}].stance must be risk, bullish, mixed, or neutral.`
-  );
+  throw new Error(`signals[${index}].stance must be risk, bullish, mixed, or neutral.`);
 }
 
 function validateScore(value: unknown, field: string) {

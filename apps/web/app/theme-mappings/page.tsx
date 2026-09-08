@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getThemeMappingStatus, type ThemeMappingSummary } from "@market-themes/db";
 
 export const dynamic = "force-dynamic";
@@ -9,18 +8,6 @@ export default async function ThemeMappingsPage() {
 
   return (
     <div className="shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <div className="nav-links">
-          <Link href="/">Dashboard</Link>
-          <Link href="/trends">Trends</Link>
-          <Link href="/analysis">Analysis</Link>
-          <Link href="/ingestion">Ingestion</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Theme Mappings</p>

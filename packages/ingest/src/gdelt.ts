@@ -1,6 +1,42 @@
 import { createHash } from "node:crypto";
 import type { PersistableDocument } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
+import { resolvePublisherOwner } from "./publisher-owners";
+
+export const DEFAULT_GDELT_QUERY =
+  '(markets OR economy OR inflation OR "interest rates" OR earnings) sourcelang:english';
+
+export const DEFAULT_GDELT_DOMAINS = [
+  "wsj.com",
+  "nytimes.com",
+  "bloomberg.com",
+  "washingtonpost.com",
+  "ft.com",
+  "reuters.com"
+];
+
+export function parseGdeltDomains(
+  value: string | undefined,
+  fallback = DEFAULT_GDELT_DOMAINS
+) {
+  if (value === undefined) return fallback;
+  if (!value.trim()) return [];
+  return [
+    ...new Set(
+      value
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  ];
+}
+
+export function buildGdeltQuery(options: { query?: string; domains?: string[] } = {}) {
+  const query = options.query?.trim() || DEFAULT_GDELT_QUERY;
+  const domains = options.domains ?? DEFAULT_GDELT_DOMAINS;
+  if (domains.length === 0) return query;
+  return `${query} (${domains.map((domain) => `domain:${domain}`).join(" OR ")})`;
+}
 
 type GdeltArticle = {
   url?: string;
@@ -25,8 +61,10 @@ export function createGdeltConnector(): SourceConnector {
       const url = new URL("https://api.gdeltproject.org/api/v2/doc/doc");
       url.searchParams.set(
         "query",
-        process.env.GDELT_QUERY ??
-          '(markets OR economy OR inflation OR "interest rates" OR earnings) sourcelang:english'
+        buildGdeltQuery({
+          query: process.env.GDELT_QUERY,
+          domains: parseGdeltDomains(process.env.GDELT_DOMAINS)
+        })
       );
       url.searchParams.set("mode", "ArtList");
       url.searchParams.set("format", "json");
@@ -68,7 +106,12 @@ function toDocument(article: GdeltArticle): PersistableDocument | null {
     title,
     publisher: domain,
     publisherId: domain.toLowerCase(),
-    publisherOwner: domain.toLowerCase(),
+    publisherOwner: resolvePublisherOwner({
+      url,
+      site: domain,
+      name: domain,
+      fallback: domain
+    }),
     url,
     canonicalUrl: url,
     publishedAt,

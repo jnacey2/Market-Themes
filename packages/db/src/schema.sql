@@ -248,6 +248,12 @@ create table if not exists theme_trends (
   unique (theme_id, trend_window, date)
 );
 
+create index if not exists theme_trends_date_idx
+  on theme_trends (date desc);
+
+create index if not exists theme_trends_date_window_idx
+  on theme_trends (date, trend_window);
+
 create table if not exists storyboards (
   id text primary key,
   theme_id text not null references themes(id),

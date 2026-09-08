@@ -1,8 +1,10 @@
 import { persistDocuments } from "@market-themes/db";
-import { fetchFmpTranscripts, SEC_TARGET_TICKERS } from "@market-themes/ingest";
+import { fetchFmpTranscripts, resolveTargetTickers } from "@market-themes/ingest";
 
 const documents = await fetchFmpTranscripts({
-  tickers: parseTickers(process.env.FMP_TARGET_TICKERS) ?? SEC_TARGET_TICKERS,
+  tickers: await resolveTargetTickers({
+    explicit: parseTickers(process.env.FMP_TARGET_TICKERS)
+  }),
   quarters: 1,
   latestOnly: true
 });

@@ -1,14 +1,20 @@
-import Link from "next/link";
-import { getOperationsStatus, listPublicationFeeds } from "@market-themes/db";
+import { listConnectorCheckpoints, listPublicationFeeds } from "@market-themes/db";
+import {
+  isSubstackSessionConfigured,
+  NEWSPAPER_FEED_GROUPS,
+  NEWSPAPER_FEED_PRESETS,
+  SUBSTACK_PUBLICATION_PRESETS
+} from "@market-themes/ingest";
 import { SourceManager } from "./SourceManager";
 
 export const dynamic = "force-dynamic";
 
 export default async function SourcesPage() {
-  const [feeds, operations] = await Promise.all([
+  const [feeds, connectors] = await Promise.all([
     listPublicationFeeds(),
-    getOperationsStatus()
+    listConnectorCheckpoints()
   ]);
+  const substackSessionConfigured = isSubstackSessionConfigured();
   const premiumSources = [
     ["premium-wsj", "The Wall Street Journal"],
     ["premium-nyt", "The New York Times"],
@@ -18,28 +24,22 @@ export default async function SourcesPage() {
   ].map(([id, name]) => ({
     id,
     name,
-    checkpoint: operations.connectors.find((connector) => connector.connectorId === id)
+    checkpoint: connectors.find((connector) => connector.connectorId === id)
   }));
 
   return (
     <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">Market Themes</Link>
-        <div className="nav-links">
-          <Link href="/trends">Narrative Currents</Link>
-          <Link href="/narrative-review">Evidence Review</Link>
-          <Link href="/ingestion">Operations</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Source Registry</p>
           <h1>Managed publications.</h1>
           <p className="lede">
-            Add public Substacks, blogs, and RSS publications without a code deploy.
-            Each source is deduplicated, checkpointed, and routed through evidence review
-            before it can affect published narratives.
+            Add the Substacks you subscribe to — paste a homepage URL or add the
+            Investment Process list in one click — plus blogs and official
+            newspaper RSS, without a code deploy. A captured subscriber session
+            downloads paid posts you already pay for. Headline feeds stay
+            snippet-only. Each source is deduplicated, checkpointed, and routed
+            through evidence review before it can affect published narratives.
           </p>
         </div>
         <div className="panel">
@@ -49,7 +49,13 @@ export default async function SourcesPage() {
         </div>
       </section>
 
-      <SourceManager feeds={feeds} />
+      <SourceManager
+        feeds={feeds}
+        newspaperGroups={NEWSPAPER_FEED_GROUPS}
+        newspaperPresets={NEWSPAPER_FEED_PRESETS}
+        substackPresets={SUBSTACK_PUBLICATION_PRESETS}
+        substackSessionConfigured={substackSessionConfigured}
+      />
 
       <section className="section">
         <p className="eyebrow">Authenticated Publishers</p>

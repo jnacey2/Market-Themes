@@ -1,0 +1,27 @@
+# Paid Substack publications to register and scrape by URL.
+# `name` is the publication key. `base_url` is the homepage (no trailing slash, no /archive).
+# Session cookies are never stored here. Capture them with `npm run substack:capture-session`.
+
+- name: pinebrook
+  base_url: https://www.pinebrookcap.com
+
+- name: lordfed
+  base_url: https://www.lordfed.co.uk
+
+- name: taekim
+  base_url: https://taekim.substack.com
+
+- name: jimpaulsen
+  base_url: https://paulsenperspectives.substack.com
+
+- name: fidenza
+  base_url: https://www.fidenzamacro.com
+
+- name: moontower
+  base_url: https://moontower.substack.com
+
+- name: dannydayan
+  base_url: https://dannydayan.substack.com
+
+- name: dampedspring
+  base_url: https://dampedspring101.substack.com

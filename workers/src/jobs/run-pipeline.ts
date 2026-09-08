@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import {
+  closeDatabaseClient,
+  createDatabaseClient,
   finishPipelineRun,
   startPipelineRun,
   updatePipelineRunProgress
@@ -35,7 +37,14 @@ const stages: PipelineStage[] = [
     script: "narratives:classify",
     enabled: () =>
       process.env.PIPELINE_SKIP_CLASSIFICATION !== "true" &&
-      Number(process.env.NARRATIVE_CLASSIFICATION_MAX_BATCHES ?? 1) > 0
+      process.env.NARRATIVE_CLASSIFICATION_ENABLED !== "false"
+  },
+  {
+    name: "discover",
+    script: "narratives:discover",
+    enabled: () =>
+      process.env.PIPELINE_SKIP_DISCOVERY !== "true" &&
+      process.env.NARRATIVE_DISCOVERY_ENABLED !== "false"
   },
   {
     name: "theme_trends",
@@ -50,21 +59,36 @@ const stages: PipelineStage[] = [
 ];
 
 export async function runPipeline() {
-  const runId = await startPipelineRun("full_pipeline", {
-    trigger: process.env.PIPELINE_TRIGGER ?? "scheduled",
-    executionMode: "isolated_processes"
-  });
+  const lockClient = createDatabaseClient();
+  await lockClient.connect();
+  const lock = await lockClient.query<{ acquired: boolean }>(
+    `select pg_try_advisory_lock(hashtext('market_themes_full_pipeline')) as acquired`
+  );
+  if (!lock.rows[0]?.acquired) {
+    console.log(
+      "[pipeline] another full pipeline run owns the advisory lock; skipping"
+    );
+    await closeDatabaseClient(lockClient);
+    return { completedStages: [], skipped: "already_running" as const };
+  }
+
+  let runId: string | null = null;
+  let selectedStages: PipelineStage[] = [];
   const completedStages: string[] = [];
   const partialStages: string[] = [];
-  let currentStage = "configuration";
   const heartbeat = setInterval(() => {
-    void updatePipelineRunProgress(runId, {}).catch((error) =>
-      console.error("Pipeline heartbeat failed", error)
-    );
+    if (runId)
+      void updatePipelineRunProgress(runId, {}).catch((error) =>
+        console.error("Pipeline heartbeat failed", error)
+      );
   }, 30_000);
 
   try {
-    const selectedStages = selectStages(stages);
+    runId = await startPipelineRun("full_pipeline", {
+      trigger: process.env.PIPELINE_TRIGGER ?? "scheduled",
+      executionMode: "isolated_processes"
+    });
+    selectedStages = selectStages(stages);
     for (const stage of selectedStages) {
       if (!stage.enabled()) {
         console.log(`[pipeline] stage=${stage.name} skipped`);
@@ -78,7 +102,6 @@ export async function runPipeline() {
         currentStage: stage.name,
         completedStages
       });
-      currentStage = stage.name;
       if ((await runStage(stage)) === "partial") partialStages.push(stage.name);
       completedStages.push(stage.name);
       console.log(`[pipeline] stage=${stage.name} completed`);
@@ -93,18 +116,27 @@ export async function runPipeline() {
     console.log(`[pipeline] completed stages=${completedStages.join(",")}`);
     return { completedStages, partialStages };
   } catch (error) {
-    await finishPipelineRun(runId, {
-      status: "failed",
-      failedCount: 1,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      metadata: {
-        failedStage: currentStage,
-        completedStages
-      }
-    });
+    if (runId) {
+      await finishPipelineRun(runId, {
+        status: "failed",
+        failedCount: 1,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        metadata: {
+          failedStage:
+            selectedStages[completedStages.length]?.name ?? "unknown",
+          completedStages
+        }
+      });
+    }
     throw error;
   } finally {
     clearInterval(heartbeat);
+    await lockClient
+      .query(
+        `select pg_advisory_unlock(hashtext('market_themes_full_pipeline'))`
+      )
+      .catch(() => undefined);
+    await closeDatabaseClient(lockClient);
   }
 }
 
@@ -154,5 +186,5 @@ if (
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
   const result = await runPipeline();
-  if (result.partialStages.length) process.exitCode = 2;
+  if (result.partialStages?.length) process.exitCode = 2;
 }

@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AnalysisDocument, NarrativeDefinition } from "@market-themes/db";
 import {
+  buildNarrativeClassificationContent,
+  normalizeNarrativeClassificationMessage,
   normalizeObservation,
-  passesDefinitionGuard
+  passesDefinitionGuard,
+  readEvidenceGuard,
+  SEEDED_EVIDENCE_GUARDS,
+  passesNarrativeEvidenceContract
 } from "./narrative-classification";
 
 const definition: NarrativeDefinition = {
@@ -42,6 +47,9 @@ test("requires matched evidence to be an exact source quote", () => {
       stance: "bullish",
       riskTone: 10,
       bullishTone: 80,
+      contractSatisfied: true,
+      inclusionCriteriaSatisfied: ["Direct evidence"],
+      exclusionCriteriaTriggered: [],
       evidenceSnippet: "Demand is rising quickly",
       interpretation: "Demand is accelerating.",
       affectedEntities: ["Example"]
@@ -55,6 +63,9 @@ test("requires matched evidence to be an exact source quote", () => {
     {
       matched: true,
       matchScore: 95,
+      contractSatisfied: true,
+      inclusionCriteriaSatisfied: ["Direct evidence"],
+      exclusionCriteriaTriggered: [],
       evidenceSnippet: "Invented quotation"
     },
     definition,
@@ -74,6 +85,9 @@ test("rejects low-confidence semantic adjacency despite an exact quote", () => {
     {
       matched: true,
       matchScore: 62,
+      contractSatisfied: true,
+      inclusionCriteriaSatisfied: ["Direct evidence"],
+      exclusionCriteriaTriggered: [],
       stance: "bullish",
       evidenceSnippet: "Demand is rising quickly"
     },
@@ -88,163 +102,295 @@ test("rejects low-confidence semantic adjacency despite an exact quote", () => {
   assert.equal(adjacent.evidenceSnippet, "");
 });
 
+test("records omitted sparse-output definitions as non-matches", () => {
+  const omitted = normalizeObservation(
+    undefined,
+    definition,
+    document,
+    "model",
+    "prompt"
+  );
+
+  assert.equal(omitted.matched, false);
+  assert.equal(omitted.matchScore, 0);
+  assert.equal(omitted.evidenceSnippet, "");
+});
+
+test("requires the model contract audit and every configured evidence term group", () => {
+  const contractDefinition: NarrativeDefinition = {
+    ...definition,
+    metadata: {
+      evidenceContract: {
+        requiredTermGroups: [
+          ["oil", "crude"],
+          ["inflation"],
+          ["rate hike", "tightening"]
+        ]
+      }
+    }
+  };
+  const completeEvidence =
+    "Higher crude prices lifted inflation fears and rate hike expectations.";
+
+  assert.equal(
+    passesNarrativeEvidenceContract(contractDefinition, completeEvidence),
+    true
+  );
+  assert.equal(
+    passesNarrativeEvidenceContract(
+      contractDefinition,
+      "Higher crude prices lifted inflation fears."
+    ),
+    false
+  );
+
+  const rejected = normalizeObservation(
+    {
+      matched: true,
+      matchScore: 95,
+      contractSatisfied: false,
+      inclusionCriteriaSatisfied: ["Oil", "Inflation"],
+      exclusionCriteriaTriggered: ["No explicit rates consequence"],
+      evidenceSnippet: completeEvidence
+    },
+    contractDefinition,
+    { ...document, text: completeEvidence },
+    "model",
+    "prompt"
+  );
+  assert.equal(rejected.matched, false);
+  assert.deepEqual(rejected.metadata?.contractValidation, {
+    satisfied: false,
+    inclusionCriteriaSatisfied: ["Oil", "Inflation"],
+    exclusionCriteriaTriggered: ["No explicit rates consequence"]
+  });
+});
+
+test("caches only the stable definition prefix", () => {
+  const changedDocument = {
+    ...document,
+    id: "document:changed",
+    text: "A completely different source document."
+  };
+  const first = buildNarrativeClassificationContent(
+    document,
+    [definition],
+    document.text,
+    true
+  );
+  const second = buildNarrativeClassificationContent(
+    changedDocument,
+    [definition],
+    changedDocument.text,
+    true
+  );
+  const uncached = buildNarrativeClassificationContent(
+    document,
+    [definition],
+    document.text,
+    false
+  );
+  const hourlyCache = buildNarrativeClassificationContent(
+    document,
+    [definition],
+    document.text,
+    true,
+    "1h"
+  );
+
+  assert.deepEqual(first[0], second[0]);
+  assert.notDeepEqual(first[1], second[1]);
+  assert.deepEqual(
+    "cache_control" in first[0] ? first[0].cache_control : undefined,
+    { type: "ephemeral" }
+  );
+  assert.equal("cache_control" in uncached[0], false);
+  assert.deepEqual(
+    "cache_control" in hourlyCache[0]
+      ? hourlyCache[0].cache_control
+      : undefined,
+    { type: "ephemeral", ttl: "1h" }
+  );
+});
+
 test("applies strict proposition-specific evidence guards", () => {
   assert.equal(
     passesDefinitionGuard(
-      "pricing-power",
+      SEEDED_EVIDENCE_GUARDS["pricing-power"],
       "Average ticket increased 2.3%, offset by a decrease in customer transactions."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "deal-activity-recovery",
+      SEEDED_EVIDENCE_GUARDS["deal-activity-recovery"],
       "The company completed its acquisition of Example Corp."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "AI data center demand increased and accelerator capacity remains constrained."
     ),
     true
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "Data center revenue increased 90% after a hyperscaler contract."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "Circular financing is a sign that the AI and compute industry is maturing."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "ai-infrastructure-demand",
+      SEEDED_EVIDENCE_GUARDS["ai-infrastructure-demand"],
       "AI accelerator revenue increased 90% as customer orders reached a record."
     ),
     true
   );
   assert.equal(
     passesDefinitionGuard(
-      "energy-demand-growth",
+      SEEDED_EVIDENCE_GUARDS["energy-demand-growth"],
       "Hot summer temperatures drove very high natural gas demand this week."
     ),
     false
   );
   assert.equal(
     passesDefinitionGuard(
-      "energy-demand-growth",
+      SEEDED_EVIDENCE_GUARDS["energy-demand-growth"],
       "Industrial electrification increased regional electricity load to a new record."
     ),
     true
   );
   assert.equal(
     passesDefinitionGuard(
-      "supply-chain-normalization",
+      SEEDED_EVIDENCE_GUARDS["supply-chain-normalization"],
       "Lead times shortened as component availability improved."
     ),
     true
   );
 });
 
-test("fails closed on malformed, missing, duplicate, or contradictory classifications", async () => {
-  const { validateNarrativeResponse } =
-    await import("./narrative-classification");
-  const valid = {
-    narrativeDefinitionId: definition.id,
-    matched: false,
-    matchScore: 20,
-    stance: "neutral",
-    riskTone: 0,
-    bullishTone: 0,
-    evidenceSnippet: "",
-    interpretation: "No support",
-    affectedEntities: []
+test("reads regex guards from definition metadata and enforces them in the evidence contract", () => {
+  const guarded: NarrativeDefinition = {
+    ...definition,
+    slug: "pricing-power",
+    metadata: { evidenceContract: SEEDED_EVIDENCE_GUARDS["pricing-power"] }
   };
-  for (const response of [
-    {},
-    { observations: [] },
-    { observations: [valid, valid] },
-    { observations: [{ ...valid, matched: "false" }] },
-    { observations: [{ ...valid, matched: true }] },
-    { observations: [{ ...valid, narrativeDefinitionId: "unknown" }] }
-  ]) {
-    assert.throws(() => validateNarrativeResponse(response, [definition]));
-  }
   assert.equal(
-    validateNarrativeResponse({ observations: [valid] }, [definition]).length,
-    1
+    passesNarrativeEvidenceContract(
+      guarded,
+      "Average ticket increased 2.3%, offset by a decrease in customer transactions."
+    ),
+    false
+  );
+  assert.equal(
+    passesNarrativeEvidenceContract(
+      guarded,
+      "Pricing held firm while unit demand grew across the quarter."
+    ),
+    true
+  );
+  // Without metadata the slug alone no longer implies a guard.
+  assert.equal(
+    passesNarrativeEvidenceContract(
+      { ...definition, slug: "pricing-power", metadata: {} },
+      "Average ticket increased 2.3%, offset by a decrease in customer transactions."
+    ),
+    true
+  );
+  assert.equal(readEvidenceGuard({ requiredTermGroups: [["oil"]] }), null);
+  assert.deepEqual(readEvidenceGuard({ requiredPatterns: ["a"], forbiddenPatterns: 3 }), {
+    requiredPatterns: ["a"],
+    forbiddenPatterns: []
+  });
+});
+
+test("invalid guard patterns are ignored instead of failing classification", () => {
+  assert.equal(
+    passesDefinitionGuard(
+      { requiredPatterns: ["(unclosed", "demand"], forbiddenPatterns: [] },
+      "Demand rose."
+    ),
+    true
   );
 });
-test("classifies evidence beyond the first section and rejects truncated responses", async () => {
-  const { classifyDocumentNarratives } =
-    await import("./narrative-classification");
-  const quote = "Demand is rising quickly";
-  const longDocument = { ...document, text: "Background. ".repeat(40) + quote };
-  let requests = 0;
-  const fetchImpl = (async (_url: unknown, init: RequestInit) => {
-    requests++;
-    const request = JSON.parse(String(init.body));
-    const sourceText = JSON.parse(request.messages[0].content).document
-      .text as string;
-    const matched = sourceText.includes(quote);
-    return Response.json({
-      id: "msg_test",
-      type: "message",
-      role: "assistant",
-      model: "test",
-      stop_reason: "end_turn",
-      usage: { input_tokens: 10, output_tokens: 10 },
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            observations: [
-              {
-                narrativeDefinitionId: definition.id,
-                matched,
-                matchScore: matched ? 95 : 10,
-                stance: matched ? "bullish" : "neutral",
-                riskTone: 0,
-                bullishTone: matched ? 80 : 0,
-                evidenceSnippet: matched ? quote : "",
-                interpretation: "Source classification",
-                affectedEntities: []
-              }
-            ]
-          })
+
+test("regex guards are kept out of the model-facing definition reference", () => {
+  const [reference] = buildNarrativeClassificationContent(
+    document,
+    [
+      {
+        ...definition,
+        metadata: {
+          evidenceContract: {
+            requiredTermGroups: [["oil"]],
+            requiredPatterns: ["oil"],
+            forbiddenPatterns: ["gas"]
+          }
         }
-      ]
-    });
-  }) as typeof fetch;
-  const result = await classifyDocumentNarratives(longDocument, [definition], {
-    apiKey: "fixture",
-    fetchImpl,
-    maxDocumentChars: 150
-  });
-  assert(requests > 1);
-  assert.equal(result[0].matched, true);
+      }
+    ],
+    document.text,
+    false
+  );
+  const text = "text" in reference ? reference.text : "";
+  assert.ok(text.includes("requiredTermGroups"));
+  assert.ok(!text.includes("requiredPatterns"));
+  assert.ok(!text.includes("forbiddenPatterns"));
+});
+
+test("classification rejects malformed, duplicate, unknown, and invented evidence while retaining sparse v7 output", () => {
+  const raw = {
+    narrativeDefinitionId: definition.id,
+    matched: true,
+    matchScore: 90,
+    stance: "bullish",
+    riskTone: 0,
+    bullishTone: 80,
+    contractSatisfied: true,
+    inclusionCriteriaSatisfied: ["Demand"],
+    exclusionCriteriaTriggered: [],
+    evidenceSnippet: "Demand is rising quickly",
+    interpretation: "Demand",
+    affectedEntities: []
+  };
+  function normalize(payload: unknown) {
+    const message = {
+      content: [{ type: "text", text: JSON.stringify(payload) }],
+      stop_reason: "end_turn"
+    } as Parameters<typeof normalizeNarrativeClassificationMessage>[0];
+    return normalizeNarrativeClassificationMessage(
+      message,
+      document,
+      [definition],
+      "fixture",
+      "v7"
+    );
+  }
+  assert.equal(normalize({ observations: [] })[0].matched, false);
   assert.equal(
-    result[0].metadata?.examinedCharacters,
-    longDocument.text.length
+    normalize({ observations: [raw] })[0].metadata?.textHash,
+    document.textHash
   );
-  await assert.rejects(
-    classifyDocumentNarratives(document, [definition], {
-      apiKey: "fixture",
-      fetchImpl: (async () =>
-        Response.json({
-          content: [],
-          stop_reason: "max_tokens",
-          usage: { input_tokens: 1, output_tokens: 1 }
-        })) as typeof fetch
-    }),
-    /Incomplete classification/
-  );
+  for (const payload of [
+    null,
+    {},
+    { observations: [raw, raw] },
+    { observations: [{ ...raw, narrativeDefinitionId: "unknown" }] },
+    { observations: [{ ...raw, matchScore: "90" }] },
+    { observations: [{ ...raw, riskTone: 101 }] },
+    { observations: [{ ...raw, affectedEntities: [42] }] },
+    { observations: [{ ...raw, evidenceSnippet: "Invented quotation" }] }
+  ]) {
+    assert.throws(() => normalize(payload));
+  }
 });

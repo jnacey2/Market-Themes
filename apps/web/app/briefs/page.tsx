@@ -1,21 +1,14 @@
-import Link from "next/link";
 import { getDailyBriefArchive } from "@market-themes/db";
 export const dynamic = "force-dynamic";
 export default async function BriefsPage() {
   const briefs = await getDailyBriefArchive();
   return (
     <div className="shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <Link href="/">Dashboard</Link>
-      </nav>
       <p className="eyebrow">Daily brief archive</p>
       <h1>Evidence, kept in context.</h1>
       <p className="lede">
-        The latest 30 saved briefs. Each records its measurement date and the
-        reviewed quotations used at generation time.
+        The latest 30 saved briefs. Each preserves the measured narrative
+        summary saved at generation time.
       </p>
       <div className="grid">
         {!briefs.length ? (
@@ -29,28 +22,18 @@ export default async function BriefsPage() {
         ) : (
           briefs.map((brief) => (
             <article className="panel" key={brief.date}>
-              <p className="eyebrow">
-                {brief.date} · Measurements through {brief.measurementDate}
-              </p>
+              <p className="eyebrow">{brief.date}</p>
               <h2>{brief.headline}</h2>
               <p>{brief.summary}</p>
-              {brief.evidence.map((item) => (
-                <details className="detail-block" key={item.narrativeId}>
-                  <summary>{item.name}: supporting sources</summary>
-                  {item.citations.map((citation, i) => (
-                    <div key={i}>
-                      <blockquote>{citation.quote}</blockquote>
-                      <a
-                        className="pill"
-                        href={citation.url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {citation.publisher}: {citation.title}
-                      </a>
-                    </div>
-                  ))}
-                </details>
+              {brief.sections.map((section, index) => (
+                <section key={index}>
+                  <h3>{section.title}</h3>
+                  <ul>
+                    {section.items.map((item, i) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ul>
+                </section>
               ))}
             </article>
           ))

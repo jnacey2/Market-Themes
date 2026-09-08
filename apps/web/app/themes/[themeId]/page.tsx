@@ -1,42 +1,32 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import {
   getThemeDetailStatus,
   getNarrativeDetailStatus,
-  type NarrativeTrendSummary,
   type ThemeDetailStatus,
   type ThemeTrendPoint,
   type TrendSummary
 } from "@market-themes/db";
-import {
-  densityReady,
-  measurementStatus
-} from "../../../lib/narrative-quality";
-import { NarrativeExplorer } from "../../../components/narratives/NarrativeExplorer";
+import { isNarrativeDefinitionId, narrativeDataPath } from "../../../lib/narrative-paths";
 
 export const dynamic = "force-dynamic";
 
 type ThemePageProps = {
-  searchParams: Promise<{ window?: string }>;
   params: Promise<{
     themeId: string;
   }>;
 };
 
-export default async function ThemeDetailPage({
-  params,
-  searchParams
-}: ThemePageProps) {
+export default async function ThemeDetailPage({ params }: ThemePageProps) {
   const { themeId } = await params;
-  const { window } = await searchParams;
-  const narrative = await getNarrativeDetailStatus(
-    decodeURIComponent(themeId),
-    undefined,
-    window === "30d" ? "30d" : "7d"
-  );
+  const decodedId = decodeURIComponent(themeId);
 
-  if (narrative) {
-    return <NarrativeDetailPage narrative={narrative} />;
+  // Narrative definitions used to render here under their raw id. They now have
+  // slug routes; keep the old links working.
+  if (isNarrativeDefinitionId(decodedId)) {
+    const narrative = await getNarrativeDetailStatus(decodedId);
+    if (narrative) {
+      permanentRedirect(narrativeDataPath(narrative.slug));
+    }
   }
 
   const detail = await getThemeDetailStatus(decodeURIComponent(themeId));
@@ -49,17 +39,6 @@ export default async function ThemeDetailPage({
 
   return (
     <div className="shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <div className="nav-links">
-          <Link href="/">Dashboard</Link>
-          <Link href="/trends">Trends</Link>
-          <Link href="/theme-mappings">Theme Mappings</Link>
-        </div>
-      </nav>
-
       <section className="hero">
         <div>
           <p className="eyebrow">Theme Detail</p>
@@ -69,33 +48,18 @@ export default async function ThemeDetailPage({
               "Set DATABASE_URL and recompute trends to inspect this theme."}
           </p>
           <div className="pill-row">
-            {detail.theme?.themeLevel ? (
-              <span className="pill">{detail.theme.themeLevel}</span>
-            ) : null}
-            {detail.theme?.sector ? (
-              <span className="pill">{detail.theme.sector}</span>
-            ) : null}
-            {detail.latestTrendDate ? (
-              <span className="pill">{detail.latestTrendDate}</span>
-            ) : null}
+            {detail.theme?.themeLevel ? <span className="pill">{detail.theme.themeLevel}</span> : null}
+            {detail.theme?.sector ? <span className="pill">{detail.theme.sector}</span> : null}
+            {detail.latestTrendDate ? <span className="pill">{detail.latestTrendDate}</span> : null}
           </div>
         </div>
         <div className="panel">
           <p className="eyebrow">Why It Matters</p>
           <p>{whyItMatters(detail, primaryTrend)}</p>
           <div className="metric-row">
-            <Metric
-              label="Z-score"
-              value={primaryTrend?.zScore.toFixed(1) ?? "0.0"}
-            />
-            <Metric
-              label="Evidence"
-              value={String(primaryTrend?.evidenceCount ?? 0)}
-            />
-            <Metric
-              label="Entities"
-              value={String(detail.affectedEntities.length)}
-            />
+            <Metric label="Z-score" value={primaryTrend?.zScore.toFixed(1) ?? "0.0"} />
+            <Metric label="Evidence" value={String(primaryTrend?.evidenceCount ?? 0)} />
+            <Metric label="Entities" value={String(detail.affectedEntities.length)} />
           </div>
         </div>
       </section>
@@ -137,8 +101,7 @@ export default async function ThemeDetailPage({
             detail.citations.map((citation) => (
               <article className="evidence-card" key={citation.id}>
                 <span className="label">
-                  {citation.publisher} ·{" "}
-                  {citation.sourceClass.replace("_", " ")}
+                  {citation.publisher} · {citation.sourceClass.replace("_", " ")}
                 </span>
                 <h3>{citation.title}</h3>
                 <p>{citation.snippet}</p>
@@ -183,121 +146,7 @@ export default async function ThemeDetailPage({
   );
 }
 
-function NarrativeDetailPage({
-  narrative
-}: {
-  narrative: NarrativeTrendSummary;
-}) {
-  return (
-    <div className="shell wide-shell">
-      <nav className="nav">
-        <Link className="brand" href="/">
-          Market Themes
-        </Link>
-        <div className="nav-links">
-          <Link href="/trends">Narrative Currents</Link>
-          <Link href="/ingestion">Operations</Link>
-        </div>
-      </nav>
-
-      <section className="hero narrative-detail-hero">
-        <div>
-          <p className="eyebrow">
-            {narrative.category} · Version {narrative.version}
-          </p>
-          <h1>{narrative.name}</h1>
-          <p className="lede">{narrative.proposition}</p>
-          <div className="pill-row">
-            <span className="pill">{measurementStatus(narrative)}</span>
-            {densityReady(narrative) && narrative.zScoreAvailable ? (
-              <span className="pill">z {narrative.zScore.toFixed(1)}</span>
-            ) : null}
-            <span className="pill">
-              {narrative.publisherOwnerBreadth} publisher groups
-            </span>
-          </div>
-          <div className="button-row">
-            {(["7d", "30d"] as const).map((window) => (
-              <Link
-                className="pill"
-                key={window}
-                aria-current={
-                  window === narrative.trendWindow ? "page" : undefined
-                }
-                href={`/themes/${encodeURIComponent(narrative.slug)}?window=${window}`}
-              >
-                {window} measurement
-              </Link>
-            ))}
-          </div>
-        </div>
-        <div className="panel">
-          <p className="eyebrow">Current signal</p>
-          <div className="metric-row">
-            <Metric
-              label="Density"
-              value={
-                densityReady(narrative)
-                  ? `${narrative.density.toFixed(1)}%`
-                  : "—"
-              }
-            />
-            <Metric
-              label={`${narrative.trendWindow} change`}
-              value={
-                densityReady(narrative) && narrative.comparisonReady
-                  ? signedMetric(narrative.change)
-                  : "—"
-              }
-            />
-            <Metric
-              label="Acceleration"
-              value={
-                densityReady(narrative) && narrative.accelerationReady
-                  ? signedMetric(narrative.acceleration)
-                  : "—"
-              }
-            />
-          </div>
-          <p>
-            {narrative.matchedDocuments} matched documents from{" "}
-            {narrative.publisherBreadth} publishers,{" "}
-            {narrative.publisherOwnerBreadth} publisher groups, and{" "}
-            {narrative.entityBreadth} entities.
-          </p>
-        </div>
-      </section>
-
-      <section className="panel">
-        <p className="eyebrow">Density vs historical baseline</p>
-        <NarrativeExplorer narrative={narrative} />
-      </section>
-
-      <section className="section grid two">
-        <div className="panel">
-          <p className="eyebrow">Included framing</p>
-          <p>{narrative.inclusionGuidance}</p>
-        </div>
-        <div className="panel">
-          <p className="eyebrow">Excluded framing</p>
-          <p>{narrative.exclusionGuidance}</p>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function signedMetric(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
-}
-
-function TrendPanel({
-  title,
-  trend
-}: {
-  title: string;
-  trend: TrendSummary | null;
-}) {
+function TrendPanel({ title, trend }: { title: string; trend: TrendSummary | null }) {
   return (
     <div className="panel">
       <p className="eyebrow">{title}</p>
@@ -313,10 +162,7 @@ function TrendPanel({
           <div className="metric-row">
             <Metric label="Z-score" value={trend.zScore.toFixed(1)} />
             <Metric label="Percentile" value={String(trend.percentileRank)} />
-            <Metric
-              label="Docs"
-              value={String(independentDocumentCount(trend))}
-            />
+            <Metric label="Docs" value={String(independentDocumentCount(trend))} />
           </div>
         </>
       ) : (
@@ -339,9 +185,7 @@ function TrendChart({ points }: { points: ThemeTrendPoint[] }) {
         <div
           className="bar"
           key={point.date}
-          style={{
-            height: `${Math.max((point.intensity / maxIntensity) * 100, 8)}%`
-          }}
+          style={{ height: `${Math.max((point.intensity / maxIntensity) * 100, 8)}%` }}
           title={`${point.date}: intensity ${point.intensity.toFixed(
             1
           )}, z ${point.zScore.toFixed(1)}`}

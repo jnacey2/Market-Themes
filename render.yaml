@@ -9,9 +9,14 @@ services:
     name: themes-web
     runtime: node
     plan: starter
-    buildCommand: npm ci && npm run build --workspace @market-themes/web
-    preDeployCommand: npm run db:apply
-    startCommand: npm run start --workspace @market-themes/web
+    buildCommand: npm ci --no-audit --no-fund && npm run build --workspace @market-themes/web
+    # Pre-deploy runs on a separate instance that often cannot resolve the
+    # internal Postgres hostname (dpg-… with no *.region-postgres.render.com
+    # suffix). Retries plus --allow-unresolved-host keep a DNS miss from
+    # cancelling the release; start applies the same idempotent schema on
+    # the private network. This is not a database-plan issue.
+    preDeployCommand: npm run db:apply:predeploy
+    startCommand: npm run db:apply && npm run start --workspace @market-themes/web
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
@@ -21,7 +26,9 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
+      - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
@@ -34,6 +41,8 @@ services:
         value: "2"
       - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
         value: "600000"
+      - key: CLAUDE_EXTRACTION_MAX_RUNTIME_MS
+        value: "3000000"
       - key: CLAUDE_STALE_RUN_MINUTES
         value: "90"
       - key: CLAUDE_ANALYSIS_MAX_ATTEMPTS
@@ -49,11 +58,27 @@ services:
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v6
+        value: narrative_classification_v7
+      - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
+        value: narrative_discovery_v1
+      - key: NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS
+        value: "30"
+      - key: NARRATIVE_EVENT_TTL_DAYS
+        value: "14"
+      - key: NARRATIVE_TREND_LOOKBACK_DAYS
+        value: "365"
+      - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
+        value: "14"
+      # The /ingestion operations panel counts the classification backlog with
+      # the same rules as the classify-narratives cron; keep these in step.
+      - key: NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS
+        value: "365"
       - key: APP_BASE_URL
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      - key: SUBSTACK_STORAGE_STATE_B64
+        sync: false
       - key: OPS_USERNAME
         value: operator
       - key: OPS_PASSWORD
@@ -99,7 +124,7 @@ services:
     name: themes-worker
     runtime: node
     plan: starter
-    buildCommand: npm ci
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run worker
     envVars:
       - key: DATABASE_URL
@@ -109,7 +134,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
       - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
@@ -138,6 +163,8 @@ services:
         value: "25"
       - key: SOURCE_CONFIG_JSON
         value: "{}"
+      - key: SUBSTACK_STORAGE_STATE_B64
+        sync: false
       - key: SCRAPING_ENABLED
         value: "false"
       - key: SCRAPER_USER_AGENT
@@ -168,6 +195,8 @@ services:
         value: "true"
       - key: SEC_INCLUDE_STRUCTURED_OWNERSHIP_FORMS
         value: "false"
+      - key: TARGET_UNIVERSE
+        value: sp500
       - key: FMP_API_KEY
         sync: false
       - key: FMP_BACKFILL_QUARTERS
@@ -197,43 +226,20 @@ services:
     name: poll-sources
     runtime: node
     schedule: "*/30 * * * *"
-    buildCommand: npm ci
+    buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run poll:sources --workspace @market-themes/workers
+    # Ingestion only: no model calls happen here, so no Anthropic/Claude config.
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: themes-postgres
           property: connectionString
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
-      - key: CLAUDE_PROMPT_VERSION
-        value: market_signal_extraction_v2
-      - key: CLAUDE_EXTRACTION_DOCUMENT_LIMIT
-        value: "20"
-      - key: CLAUDE_EXTRACTION_BATCH_SIZE
-        value: "25"
-      - key: CLAUDE_EXTRACTION_MAX_BATCHES
-        value: "1"
-      - key: CLAUDE_EXTRACTION_CONCURRENCY
-        value: "2"
-      - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
-        value: "600000"
-      - key: CLAUDE_STALE_RUN_MINUTES
-        value: "90"
-      - key: CLAUDE_ANALYSIS_MAX_ATTEMPTS
-        value: "5"
-      - key: CLAUDE_MAX_EVIDENCE_CHARS
-        value: "800"
-      - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
-        value: capital_markets
-      - key: THEME_NORMALIZATION_PROMPT_VERSION
-        value: theme_normalization_v3
-      - key: THEME_NORMALIZATION_BATCH_SIZE
-        value: "25"
       - key: SOURCE_CONFIG_JSON
         value: "{}"
+      - key: SUBSTACK_STORAGE_STATE_B64
+        sync: false
+      - key: SUBSTACK_REFRESH
+        value: "false"
       - key: SCRAPING_ENABLED
         value: "false"
       - key: SCRAPER_USER_AGENT
@@ -242,8 +248,26 @@ services:
         value: "48"
       - key: SEC_USER_AGENT
         sync: false
+      - key: TARGET_UNIVERSE
+        value: sp500
       - key: FMP_API_KEY
         sync: false
+      - key: FMP_NEWS_LOOKBACK_HOURS
+        value: "6"
+      - key: FMP_NEWS_MACRO_PROXIES
+        value: "SPY,QQQ,TLT,GLD"
+      - key: FMP_NEWS_LIMIT
+        value: "50"
+      - key: FMP_NEWS_RATE_LIMIT_MS
+        value: "250"
+      - key: GDELT_ENABLED
+        value: "false"
+      - key: GDELT_DOMAINS
+        value: "wsj.com,nytimes.com,bloomberg.com,washingtonpost.com,ft.com,reuters.com"
+      - key: NYT_API_KEY
+        sync: false
+      - key: NYT_SEARCH_LOOKBACK_HOURS
+        value: "24"
       - key: SEC_POLL_LOOKBACK_DAYS
         value: "7"
       - key: SEC_RATE_LIMIT_MS
@@ -264,72 +288,32 @@ services:
         value: "false"
 
   - type: cron
-    name: poll-fmp-transcripts
+    name: extract-recent-signals
     runtime: node
-    schedule: "30 6 * * 1-6"
-    buildCommand: npm ci
-    startCommand: npm run fmp:poll --workspace @market-themes/workers
+    schedule: "35 * * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run claude:extract:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: themes-postgres
           property: connectionString
-      - key: FMP_API_KEY
-        sync: false
-      - key: FMP_RATE_LIMIT_MS
-        value: "250"
-
-  - type: cron
-    name: generate-daily-brief
-    runtime: node
-    schedule: "0 11 * * 1-5"
-    buildCommand: npm ci
-    startCommand: npm run brief:daily --workspace @market-themes/workers
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: themes-postgres
-          property: connectionString
-      - key: ANTHROPIC_API_KEY
-        sync: false
-
-  - type: cron
-    name: recompute-theme-trends
-    runtime: node
-    schedule: "15 */4 * * *"
-    buildCommand: npm ci
-    startCommand: npm run pipeline --workspace @market-themes/workers
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: themes-postgres
-          property: connectionString
-      - key: TREND_LOOKBACK_DAYS
-        value: "365"
-      - key: TREND_LOW_HISTORY_DAYS
-        value: "30"
-      - key: TREND_STORAGE_DAYS
-        value: "90"
-      - key: TREND_INSERT_BATCH_SIZE
-        value: "250"
-      - key: PIPELINE_SKIP_INGEST
-        value: "true"
-      - key: NODE_OPTIONS
-        value: --max-old-space-size=384
-      - key: DB_QUERY_TIMEOUT_MS
-        value: "120000"
-      - key: THEME_NORMALIZATION_QUERY_TIMEOUT_MS
-        value: "120000"
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: claude-sonnet-4-5-20250929
+        value: claude-haiku-4-5-20251001
       - key: CLAUDE_PROMPT_VERSION
         value: market_signal_extraction_v2
+      - key: CLAUDE_EXTRACTION_LOOKBACK_DAYS
+        value: "30"
+      - key: CLAUDE_EXTRACTION_MAX_RUNTIME_MS
+        value: "3000000"
       - key: CLAUDE_EXTRACTION_BATCH_SIZE
-        value: "25"
+        value: "10"
       - key: CLAUDE_EXTRACTION_MAX_BATCHES
-        value: "4"
+        value: "10"
+      - key: CLAUDE_EXTRACTION_MAX_DOCUMENTS
+        value: "100"
       - key: CLAUDE_EXTRACTION_CONCURRENCY
         value: "2"
       - key: CLAUDE_EXTRACTION_DOCUMENT_TIMEOUT_MS
@@ -342,48 +326,373 @@ services:
         value: "800"
       - key: CLAUDE_EXCLUDED_SEC_CATEGORIES
         value: capital_markets
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+
+  - type: cron
+    name: poll-fmp-transcripts
+    runtime: node
+    schedule: "30 6 * * 1-6"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run fmp:poll --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: FMP_API_KEY
+        sync: false
+      - key: TARGET_UNIVERSE
+        value: sp500
+      - key: FMP_RATE_LIMIT_MS
+        value: "250"
+
+  - type: cron
+    name: generate-daily-brief
+    runtime: node
+    schedule: "40 11 * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run brief:daily --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v7
+
+  # Corpus-level attention bursts: no model calls; feeds the discovery watchlist and
+  # discovery prompt hints. Runs before each discovery window.
+  - type: cron
+    name: detect-attention-bursts
+    runtime: node
+    schedule: "35 */6 * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run narratives:bursts --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+
+  - type: cron
+    name: recompute-theme-trends
+    runtime: node
+    # Runs ~26 minutes and rewrites ~700k rows. Starting at :32 keeps it clear
+    # of the :25 narrative recompute; it overlaps the :55 run only in its last
+    # minutes, which the narrative job's ten-minute query budget absorbs.
+    schedule: "32 */4 * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run themes:normalize:backfill --workspace @market-themes/workers && npm run trends:recompute --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: TREND_LOOKBACK_DAYS
+        value: "365"
+      - key: TREND_LOW_HISTORY_DAYS
+        value: "30"
+      # Readers use at most 30 points of history; 45 days keeps a margin while
+      # halving the rows the four-hourly rewrite has to delete and insert.
+      - key: TREND_STORAGE_DAYS
+        value: "45"
+      - key: TREND_INSERT_BATCH_SIZE
+        value: "250"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: THEME_NORMALIZATION_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5-20251001
       - key: THEME_NORMALIZATION_PROMPT_VERSION
         value: theme_normalization_v3
       - key: THEME_NORMALIZATION_BATCH_SIZE
         value: "25"
       - key: THEME_NORMALIZATION_MAX_BATCHES
         value: "20"
-      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
-        value: narrative_classification_v6
-      - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
-        value: "10"
-      - key: NARRATIVE_CLASSIFICATION_MAX_BATCHES
-        value: "4"
 
   - type: cron
-    name: scrape-premium-publishers
-    runtime: docker
-    plan: 1c-2g
-    schedule: "45 */4 * * *"
-    dockerfilePath: ./Dockerfile.scraper
-    dockerCommand: npm run premium:scrape --workspace @market-themes/workers
+    name: classify-narratives
+    runtime: node
+    schedule: "5 * * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run narratives:classify:batch --workspace @market-themes/workers
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: themes-postgres
           property: connectionString
-      - key: PREMIUM_PUBLISHERS
-        value: ""
-      - key: SCRAPING_ENABLED
-        value: "false"
-      - key: PREMIUM_SCRAPER_MAX_ARTICLES
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5-20251001
+      - key: ANTHROPIC_PROMPT_CACHING
+        value: "true"
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      # Up to three provider batches in flight; a single slow Anthropic batch
+      # (2-3 hours observed) otherwise skips every following hourly submit.
+      - key: ANTHROPIC_BATCH_MAX_ACTIVE
+        value: "3"
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v7
+      # Matches NARRATIVE_TREND_LOOKBACK_DAYS so trend baselines can accumulate a
+      # full year of classified history; the 30d window needs 75 days before it
+      # leaves low-history state.
+      - key: NARRATIVE_CLASSIFICATION_LOOKBACK_DAYS
+        value: "365"
+      - key: NARRATIVE_CLASSIFICATION_BATCH_SIZE
+        value: "10"
+      # Upper bound per hourly batch. Each hourly run submits only when the
+      # previous batch has completed, and 600-document batches took 1-2 hours
+      # at Anthropic (5 of 10 hourly runs skipped overnight on Sep 3-4) while
+      # 300-400 complete within the hour, so a smaller cap gives higher
+      # sustained throughput and keeps the :25/:55 recomputes fed.
+      - key: NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS
+        value: "400"
+      # Recent documents are claimed newest-first across all source classes
+      # before any backfill work, so the measured window is never starved.
+      - key: NARRATIVE_CLASSIFICATION_PRIORITY_DAYS
+        value: "14"
+      - key: NARRATIVE_CLASSIFICATION_MAX_RUNTIME_MS
+        value: "2400000"
+      - key: NARRATIVE_CLASSIFICATION_CONCURRENCY
+        value: "2"
+      - key: NARRATIVE_CLASSIFICATION_DOCUMENT_TIMEOUT_MS
+        value: "600000"
+
+  - type: cron
+    name: discover-narratives
+    runtime: node
+    schedule: "10 * * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run narratives:discover:batch --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5-20251001
+      - key: ANTHROPIC_PROMPT_CACHING
+        value: "true"
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      - key: ANTHROPIC_BATCH_MAX_ACTIVE
+        value: "3"
+      - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
+        value: narrative_discovery_v1
+      - key: NARRATIVE_DISCOVERY_BATCH_SIZE
+        value: "10"
+      # Eligible inflow is ~60 documents/hour; a batch of 100 keeps pace and
+      # drains backlog. The hourly run skips submission while the previous
+      # batch is still in progress, so batch size (not schedule) is the lever.
+      - key: NARRATIVE_DISCOVERY_MAX_DOCUMENTS
+        value: "100"
+      - key: NARRATIVE_DISCOVERY_MAX_RUNTIME_MS
+        value: "1200000"
+      - key: NARRATIVE_DISCOVERY_CONCURRENCY
+        value: "2"
+      - key: NARRATIVE_DISCOVERY_DOCUMENT_TIMEOUT_MS
+        value: "600000"
+      - key: NARRATIVE_DISCOVERY_LOOKBACK_DAYS
+        value: "30"
+      - key: NARRATIVE_DISCOVERY_MAX_ATTEMPTS
         value: "5"
-      - key: PREMIUM_SCRAPER_LOOKBACK_HOURS
+      - key: NARRATIVE_DISCOVERY_STALE_MINUTES
+        value: "90"
+      - key: NARRATIVE_CANDIDATE_EVIDENCE_WINDOW_DAYS
+        value: "30"
+
+  - type: cron
+    name: poll-anthropic-batches
+    runtime: node
+    schedule: "2,12,22,32,42,52 * * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run anthropic:batches:poll --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+
+  - type: cron
+    name: auto-review-narratives
+    runtime: node
+    schedule: "15,45 * * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run narratives:auto-review --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5-20251001
+      - key: NARRATIVE_PROMOTION_VALIDATION_MODEL
+        value: claude-haiku-4-5-20251001
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v7
+      - key: NARRATIVE_DISCOVERY_PROMPT_VERSION
+        value: narrative_discovery_v1
+      - key: NARRATIVE_AUTO_REVIEW_ENABLED
+        value: "true"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_SCORE
+        value: "90"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_DOCUMENTS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_MIN_PUBLISHER_OWNERS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_LOOKBACK_DAYS
+        value: "7"
+      - key: NARRATIVE_AUTO_REVIEW_EXCLUDED_PUBLISHER_OWNERS
+        value: youtube,youtube-com,youtube.com,youtu.be
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_SCORE
+        value: "70"
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_DOCUMENTS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_MIN_PUBLISHER_OWNERS
+        value: "2"
+      - key: NARRATIVE_AUTO_REVIEW_STRUCTURAL_LOOKBACK_DAYS
+        value: "14"
+      # Evidence classified in the last day but published earlier than the
+      # now-anchored window is re-judged with the window anchored at its own
+      # publish day, so backfills review themselves as they arrive.
+      - key: NARRATIVE_AUTO_REVIEW_RECENT_OBSERVATION_HOURS
         value: "24"
-      - key: PREMIUM_SCRAPER_RATE_LIMIT_MS
-        value: "2000"
-      - key: WSJ_STORAGE_STATE_B64
-        sync: false
-      - key: NYT_STORAGE_STATE_B64
-        sync: false
-      - key: WAPO_STORAGE_STATE_B64
-        sync: false
-      - key: FT_STORAGE_STATE_B64
-        sync: false
-      - key: BLOOMBERG_STORAGE_STATE_B64
-        sync: false
+      - key: NARRATIVE_AUTO_REVIEW_MAX_HISTORICAL_WINDOWS
+        value: "120"
+      - key: NARRATIVE_AUTO_PROMOTE_CANDIDATES
+        value: "true"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_SCORE
+        value: "90"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_DOCUMENTS
+        value: "3"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_SPAN_DAYS
+        value: "7"
+      - key: NARRATIVE_AUTO_PROMOTE_ATTACH_MIN_SHARE
+        value: "0.5"
+      - key: NARRATIVE_AUTO_PROMOTE_MIN_PUBLISHER_OWNERS
+        value: "3"
+      - key: NARRATIVE_AUTO_PROMOTE_LOOKBACK_DAYS
+        value: "7"
+      - key: NARRATIVE_AUTO_PROMOTE_MAX_CANDIDATES
+        value: "5"
+      - key: NARRATIVE_EVENT_TTL_DAYS
+        value: "14"
+      - key: NARRATIVE_ACTIVATION_MIN_STORIES
+        value: "3"
+      - key: NARRATIVE_ACTIVATION_MIN_PUBLISHER_OWNERS
+        value: "3"
+      - key: NARRATIVE_ACTIVATION_LOOKBACK_DAYS
+        value: "7"
+      - key: NARRATIVE_PROMOTION_VALIDATION_PROMPT_VERSION
+        value: candidate_promotion_validation_v2
+      - key: NARRATIVE_PROMOTION_VALIDATION_MAX_EVIDENCE
+        value: "10"
+      - key: NARRATIVE_PROMOTION_VALIDATION_MAX_TOKENS
+        value: "2500"
+
+  - type: cron
+    name: recompute-narrative-trends
+    runtime: node
+    schedule: "25,55 * * * *"
+    buildCommand: npm ci --no-audit --no-fund
+    startCommand: npm run narrative-trends:recompute --workspace @market-themes/workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: themes-postgres
+          property: connectionString
+      # Batch job on a 30-minute cadence: the observation load reads a year of
+      # current-version observations and their documents, which takes three to
+      # five minutes on the production plan and longer while autovacuum or the
+      # theme recompute is running. Ten minutes still fits inside the schedule.
+      - key: DB_QUERY_TIMEOUT_MS
+        value: "600000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+        value: narrative_classification_v7
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5-20251001
+      - key: NARRATIVE_ACTIVATION_MIN_STORIES
+        value: "3"
+      - key: NARRATIVE_ACTIVATION_MIN_PUBLISHER_OWNERS
+        value: "3"
+      - key: NARRATIVE_ACTIVATION_LOOKBACK_DAYS
+        value: "7"
+      - key: NARRATIVE_TREND_LOOKBACK_DAYS
+        value: "365"
+      - key: NARRATIVE_TREND_LOW_HISTORY_DAYS
+        value: "14"
+      # Windows whose eligible corpus is thinner than this are left out of
+      # baselines and peaks: one story in a 30-document backfill week reads as 3%
+      # density and would set the bar for weeks with thousands of documents.
+      - key: NARRATIVE_BASELINE_MIN_CORPUS_DOCUMENTS
+        value: "100"
+      # poll-sources inserts at :00/:30, classification claims at :05, and this
+      # job runs at :25/:55, so the :55 recompute always sees the :30 documents
+      # unclassified. 98% of a ~5,000-document window tolerates ~1.5 hours of
+      # inflow while a genuine backlog still reads as pending.
+      - key: NARRATIVE_COVERAGE_MEASURED_PERCENT
+        value: "98"
+
+  # Premium publisher scraper. Disabled by default (SCRAPING_ENABLED=false, no
+  # PREMIUM_PUBLISHERS) and runs on a paid Docker plan, so it is not provisioned.
+  # Uncomment and set the session-state secrets to enable it.
+  #   - type: cron
+  #     name: scrape-premium-publishers
+  #     runtime: docker
+  #     plan: 1c-2g
+  #     schedule: "45 */4 * * *"
+  #     dockerfilePath: ./Dockerfile.scraper
+  #     dockerCommand: npm run premium:scrape --workspace @market-themes/workers
+  #     envVars:
+  #       - key: DATABASE_URL
+  #         fromDatabase:
+  #           name: themes-postgres
+  #           property: connectionString
+  #       - key: PREMIUM_PUBLISHERS
+  #         value: ""
+  #       - key: SCRAPING_ENABLED
+  #         value: "false"
+  #       - key: PREMIUM_SCRAPER_MAX_ARTICLES
+  #         value: "5"
+  #       - key: PREMIUM_SCRAPER_LOOKBACK_HOURS
+  #         value: "24"
+  #       - key: PREMIUM_SCRAPER_RATE_LIMIT_MS
+  #         value: "2000"
+  #       - key: WSJ_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: NYT_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: WAPO_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: FT_STORAGE_STATE_B64
+  #         sync: false
+  #       - key: BLOOMBERG_STORAGE_STATE_B64
+  #         sync: false

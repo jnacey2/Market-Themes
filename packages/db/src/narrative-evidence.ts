@@ -1,3 +1,7 @@
+import {
+  resolveCompatibleClassificationPromptVersions,
+  observationVersionSql
+} from "./narratives";
 import { createDatabaseClient } from "./persistence";
 import type { NarrativeTrendSummary, TrendWindow } from "./types";
 
@@ -22,6 +26,11 @@ export async function getNarrativeEvidence(
     !Number.isFinite(Date.parse(options.date))
   )
     throw new Error("Invalid evidence date.");
+  const promptVersion =
+    process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
+    "narrative_classification_v7";
+  const versions = resolveCompatibleClassificationPromptVersions(promptVersion);
+  const versionSql = observationVersionSql(versions, "$2", "$8");
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
@@ -29,8 +38,8 @@ export async function getNarrativeEvidence(
       `
       with latest as (
         select distinct on (document_id) * from narrative_observations
-        where narrative_definition_id = $1 and prompt_version = $2
-        order by document_id, observed_at desc, id desc
+        where narrative_definition_id = $1 and ${versionSql.predicate}
+        order by document_id, ${versionSql.order}
       )
       select no.id, d.title, d.publisher, d.published_at::text as "publishedAt", d.url,
         d.source_class as "sourceClass", no.stance, no.evidence_snippet as "evidenceSnippet",
@@ -40,9 +49,10 @@ export async function getNarrativeEvidence(
       join document_texts dt on dt.document_id = d.id
       join narrative_definitions nd on nd.id = no.narrative_definition_id
       where no.matched and no.review_status = 'approved'
-        and nd.status = 'active' and d.retention_policy <> 'metadata_only'
-        and no.metadata->>'textHash' = dt.content_hash
-        and no.metadata->>'definitionVersion' = nd.version::text
+        and nd.status in ('active', 'probationary') and d.retention_policy <> 'metadata_only'
+        and position(no.evidence_snippet in dt.content) > 0
+        and (not no.metadata ? 'textHash' or no.metadata->>'textHash' = dt.content_hash)
+        and (not no.metadata ? 'definitionVersion' or no.metadata->>'definitionVersion' = nd.version::text)
         and d.published_at >= $3::date - ($4::integer - 1) * interval '1 day'
         and d.published_at < $3::date + interval '1 day'
         and ($5::text is null or d.source_class = $5)
@@ -51,13 +61,13 @@ export async function getNarrativeEvidence(
       limit 25 offset $7`,
       [
         options.id,
-        process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
-          "narrative_classification_v6",
+        versions,
         options.date,
         options.window === "30d" ? 30 : 7,
         options.source === "all" ? null : (options.source ?? null),
         options.tone === "all" ? null : (options.tone ?? null),
-        Math.max(0, Math.min(10000, Math.floor(options.page ?? 0))) * 24
+        Math.max(0, Math.min(10000, Math.floor(options.page ?? 0))) * 24,
+        promptVersion
       ]
     );
     return { items: rows.rows.slice(0, 24), hasMore: rows.rows.length > 24 };

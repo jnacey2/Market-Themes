@@ -7,16 +7,22 @@ export function NarrativeSparkline({
   points: NarrativeTrendPoint[];
   label: string;
 }) {
-  if (!points.some((point) => point.coverageComplete))
+  if (
+    !points.some((point) =>
+      ["measured", "measured_zero"].includes(point.coverageState)
+    )
+  )
     return <div className="sparkline-empty">Awaiting complete coverage</div>;
   const maximum = Math.max(
-    ...points.filter((p) => p.coverageComplete).map((p) => p.density),
+    ...points
+      .filter((p) => ["measured", "measured_zero"].includes(p.coverageState))
+      .map((p) => p.density),
     1
   );
   let connected = false;
   const path = points
     .map((point, index) => {
-      if (!point.coverageComplete) {
+      if (!["measured", "measured_zero"].includes(point.coverageState)) {
         connected = false;
         return "";
       }

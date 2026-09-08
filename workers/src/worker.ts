@@ -1,8 +1,5 @@
 import { defaultConnectors } from "@market-themes/ingest";
-import {
-  claimNextBackfillJob,
-  recomputeQueuedNarratives
-} from "@market-themes/db";
+import { claimNextBackfillJob } from "@market-themes/db";
 import { runClaimedClaudeBackfillJob } from "./jobs/claude-extract-backfill";
 
 console.log("Market Themes worker started.");
@@ -53,20 +50,3 @@ setInterval(() => {
 setInterval(() => {
   console.log("Worker heartbeat", new Date().toISOString());
 }, 60_000);
-
-let refreshingNarratives = false;
-async function refreshNarratives() {
-  if (refreshingNarratives || !process.env.DATABASE_URL) return;
-  refreshingNarratives = true;
-  try {
-    await recomputeQueuedNarratives();
-  } catch (error) {
-    console.error("Narrative refresh failed", error);
-  } finally {
-    refreshingNarratives = false;
-  }
-}
-void refreshNarratives();
-setInterval(() => {
-  void refreshNarratives();
-}, 45_000);

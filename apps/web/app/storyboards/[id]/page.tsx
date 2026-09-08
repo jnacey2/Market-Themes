@@ -1,14 +1,19 @@
-import { redirect } from "next/navigation";
-export default async function StoryboardPage({
-  params,
-  searchParams
+import { notFound, permanentRedirect } from "next/navigation";
+import { getNarrativeDetailStatus } from "@market-themes/db";
+import { narrativePath } from "../../../lib/narrative-paths";
+
+export const dynamic = "force-dynamic";
+
+/** Legacy route: storyboards now live at /narratives/<slug>. */
+export default async function StoryboardRedirect({
+  params
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ window?: string }>;
 }) {
   const { id } = await params;
-  const { window } = await searchParams;
-  redirect(
-    `/themes/${encodeURIComponent(id)}?window=${window === "30d" ? "30d" : "7d"}`
-  );
+  const narrative = await getNarrativeDetailStatus(decodeURIComponent(id));
+  if (!narrative) {
+    notFound();
+  }
+  permanentRedirect(narrativePath(narrative.slug));
 }
