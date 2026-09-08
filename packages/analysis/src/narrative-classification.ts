@@ -156,6 +156,59 @@ export function normalizeNarrativeClassificationMessage(
     message,
     "Narrative classification"
   );
+  if (!parsed || !Array.isArray(parsed.observations))
+    throw new Error("Narrative classification requires an observations array.");
+  const known = new Set(definitions.map((definition) => definition.id));
+  const seen = new Set<string>();
+  for (const raw of parsed.observations) {
+    if (
+      !raw ||
+      typeof raw !== "object" ||
+      typeof raw.narrativeDefinitionId !== "string" ||
+      !known.has(raw.narrativeDefinitionId) ||
+      seen.has(raw.narrativeDefinitionId)
+    ) {
+      throw new Error(
+        "Narrative classification contains an unknown or duplicate definition."
+      );
+    }
+    seen.add(raw.narrativeDefinitionId);
+    if (
+      typeof raw.matched !== "boolean" ||
+      typeof raw.contractSatisfied !== "boolean" ||
+      !isStance(raw.stance) ||
+      [raw.matchScore, raw.riskTone, raw.bullishTone].some(
+        (value) =>
+          typeof value !== "number" ||
+          !Number.isFinite(value) ||
+          value < 0 ||
+          value > 100
+      ) ||
+      [raw.evidenceSnippet, raw.interpretation].some(
+        (value) => typeof value !== "string"
+      ) ||
+      [
+        raw.inclusionCriteriaSatisfied,
+        raw.exclusionCriteriaTriggered,
+        raw.affectedEntities
+      ].some(
+        (value) =>
+          !Array.isArray(value) ||
+          value.some((item) => typeof item !== "string")
+      )
+    ) {
+      throw new Error("Narrative classification contains malformed fields.");
+    }
+    if (
+      raw.matched &&
+      (!raw.evidenceSnippet?.trim() ||
+        !document.text.includes(raw.evidenceSnippet.trim()))
+    ) {
+      throw new Error(
+        "Narrative classification quotation is absent from the source."
+      );
+    }
+  }
   const byDefinition = new Map(
     (parsed.observations as RawObservation[]).map((observation) => [
       observation.narrativeDefinitionId,
@@ -240,7 +293,11 @@ export function normalizeObservation(
     raw.contractSatisfied === true &&
     exclusionCriteriaTriggered.length === 0 &&
     matchScore >= 70;
-  const evidence = requestedMatch ? String(raw?.evidenceSnippet ?? "").trim().slice(0, 800) : "";
+  const evidence = requestedMatch
+    ? String(raw?.evidenceSnippet ?? "")
+        .trim()
+        .slice(0, 800)
+    : "";
   const matched =
     requestedMatch &&
     evidence.length > 0 &&
@@ -261,14 +318,23 @@ export function normalizeObservation(
     riskTone: clamp(raw?.riskTone, 0, 100),
     bullishTone: clamp(raw?.bullishTone, 0, 100),
     evidenceSnippet: matched ? evidence : "",
-    interpretation: matched ? String(raw?.interpretation ?? "").trim().slice(0, 1_000) : "",
+    interpretation: matched
+      ? String(raw?.interpretation ?? "")
+          .trim()
+          .slice(0, 1_000)
+      : "",
     affectedEntities: Array.isArray(raw?.affectedEntities)
-      ? raw.affectedEntities.map(String).map((value) => value.trim()).filter(Boolean).slice(0, 20)
+      ? raw.affectedEntities
+          .map(String)
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .slice(0, 20)
       : [],
     model,
     promptVersion,
     metadata: {
       definitionVersion: definition.version,
+      textHash: document.textHash,
       contractValidation: {
         satisfied: raw?.contractSatisfied === true,
         inclusionCriteriaSatisfied: validateStringArray(

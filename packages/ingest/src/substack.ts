@@ -4,6 +4,7 @@ import path from "node:path";
 import type { PersistableDocument, PublicationFeed } from "@market-themes/db";
 import type { SourceConnector } from "./connectors";
 import { assertPublicNetworkUrl } from "./publication-feed";
+import { publicFetch } from "./public-fetch";
 import { cleanHtml } from "./rss";
 import { findRepoRoot } from "./substack-publications";
 
@@ -69,6 +70,12 @@ export type SubstackConnectorOptions = {
   cachedPosts?: Map<string, CachedSubstackPost>;
   requestDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  archiveOffset?: number;
+  onArchiveProgress?: (progress: {
+    nextOffset: number;
+    complete: boolean;
+  }) => void;
+  failOnPostError?: boolean;
 };
 
 export class SubstackAccessError extends Error {
@@ -84,15 +91,66 @@ export function createSubstackConnector(
   feed: PublicationFeed,
   options: SubstackConnectorOptions = {}
 ): SourceConnector {
+  let checkpoint:
+    | {
+        historyCursor: number;
+        historyComplete: boolean;
+        historyStartedAt: string;
+      }
+    | undefined;
   return {
+    checkpoint: () => checkpoint,
     id: feed.id,
     sourceClass: "newspaper",
     description: `${feed.name} Substack archive.`,
     async poll() {
-      return fetchSubstackPosts(feed, {
+      const resolved = {
         ...options,
-        session: options.session === undefined ? resolveSubstackSession() : options.session
-      });
+        session:
+          options.session === undefined
+            ? resolveSubstackSession()
+            : options.session
+      };
+      if (feed.historyComplete || options.since)
+        return fetchSubstackPosts(feed, resolved);
+      const historyStartedAt =
+        feed.historyStartedAt ??
+        new Date(options.now?.() ?? Date.now()).toISOString();
+      const historicalBudget = Math.max(
+        1,
+        Math.floor(feed.maxPostsPerPoll / 2)
+      );
+      const recentBudget = feed.maxPostsPerPoll - historicalBudget;
+      const recent =
+        recentBudget > 0
+          ? await fetchSubstackPosts(
+              { ...feed, maxPostsPerPoll: recentBudget },
+              resolved
+            )
+          : [];
+      const historical = await fetchSubstackPosts(
+        { ...feed, maxPostsPerPoll: historicalBudget },
+        {
+          ...resolved,
+          since: new Date(
+            Date.parse(historyStartedAt) - feed.backfillDays * 86_400_000
+          ).toISOString(),
+          archiveOffset: feed.historyCursor ?? 0,
+          failOnPostError: true,
+          onArchiveProgress: (progress) => {
+            checkpoint = {
+              historyCursor: progress.nextOffset,
+              historyComplete: progress.complete,
+              historyStartedAt
+            };
+          }
+        }
+      );
+      return [
+        ...new Map(
+          [...recent, ...historical].map((document) => [document.id, document])
+        ).values()
+      ];
     }
   };
 }
@@ -101,39 +159,44 @@ export async function fetchSubstackPosts(
   feed: PublicationFeed,
   options: SubstackConnectorOptions = {}
 ): Promise<PersistableDocument[]> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? publicFetch;
   const now = options.now?.() ?? Date.now();
   const sleepImpl = options.sleep ?? sleepFn;
   const delayMs = options.requestDelayMs ?? feed.rateLimitMs;
-  const session = options.session === undefined ? resolveSubstackSession() : options.session;
+  const session =
+    options.session === undefined ? resolveSubstackSession() : options.session;
   const origin = options.skipNetworkValidation
     ? stripTrailingSlash(new URL(feed.homepageUrl).origin)
-    : stripTrailingSlash((await assertPublicNetworkUrl(feed.homepageUrl)).origin);
+    : stripTrailingSlash(
+        (await assertPublicNetworkUrl(feed.homepageUrl)).origin
+      );
   const since = resolveSince(feed, options.since, now);
-  const cachedPosts = options.cachedPosts ?? new Map<string, CachedSubstackPost>();
+  const cachedPosts =
+    options.cachedPosts ?? new Map<string, CachedSubstackPost>();
   const upgradePreviews = options.upgradePreviews ?? Boolean(session);
   const documents: PersistableDocument[] = [];
   const seen = new Set<string>();
 
-  const { entries } = await fetchArchiveMetadata(origin, {
+  const archive = await fetchArchiveMetadata(origin, {
     fetchImpl,
     session,
     since,
     delayMs,
     sleep: sleepImpl,
-    maxEntries: feed.maxPostsPerPoll
+    maxEntries: feed.maxPostsPerPoll,
+    startOffset: options.archiveOffset
   });
 
-  for (const preview of entries) {
+  for (const preview of archive.entries) {
     const slug = sanitizeSlug(preview.slug);
     if (!slug) continue;
 
     const cached = cachedPosts.get(slug);
     const shouldUpgrade = Boolean(
       session &&
-        upgradePreviews &&
-        cached &&
-        (cached.preview || cached.decodeFailed || cached.post === null)
+      upgradePreviews &&
+      cached &&
+      (cached.preview || cached.decodeFailed || cached.post === null)
     );
     if (cached && !options.refresh && !shouldUpgrade) {
       continue;
@@ -141,20 +204,28 @@ export async function fetchSubstackPosts(
 
     if (delayMs > 0) await sleepImpl(delayMs);
     try {
-      const detailUrl = new URL(`/api/v1/posts/${encodeURIComponent(slug)}`, `${origin}/`);
+      const detailUrl = new URL(
+        `/api/v1/posts/${encodeURIComponent(slug)}`,
+        `${origin}/`
+      );
       const post = await fetchJson<SubstackPost>(fetchImpl, detailUrl, {
         session,
         delayMs,
         sleep: sleepImpl
       });
-      const document = toSubstackDocument(feed, { ...preview, ...post, slug }, Boolean(session));
+      const document = toSubstackDocument(
+        feed,
+        { ...preview, ...post, slug },
+        Boolean(session)
+      );
       const key = document.canonicalUrl ?? document.url;
       if (!seen.has(key)) {
         seen.add(key);
         documents.push(document);
       }
     } catch (error) {
-      if (error instanceof SubstackAccessError) throw error;
+      if (error instanceof SubstackAccessError || options.failOnPostError)
+        throw error;
       console.warn(
         `[substack] feed=${feed.id} slug=${slug} failed: ${
           error instanceof Error ? error.message : String(error)
@@ -163,7 +234,13 @@ export async function fetchSubstackPosts(
     }
   }
 
-  return documents.sort((left, right) => left.publishedAt.localeCompare(right.publishedAt));
+  options.onArchiveProgress?.({
+    nextOffset: archive.nextOffset,
+    complete: archive.complete
+  });
+  return documents.sort((left, right) =>
+    left.publishedAt.localeCompare(right.publishedAt)
+  );
 }
 
 export async function fetchArchiveMetadata(
@@ -175,15 +252,22 @@ export async function fetchArchiveMetadata(
     delayMs?: number;
     sleep?: (ms: number) => Promise<void>;
     maxEntries?: number;
+    startOffset?: number;
   } = {}
-): Promise<{ entries: SubstackPost[]; stoppedAtWatermark: boolean }> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+): Promise<{
+  entries: SubstackPost[];
+  stoppedAtWatermark: boolean;
+  nextOffset: number;
+  complete: boolean;
+}> {
+  const fetchImpl = options.fetchImpl ?? publicFetch;
   const sleepImpl = options.sleep ?? sleepFn;
   const delayMs = options.delayMs ?? REQUEST_DELAY_SECONDS * 1_000;
   const origin = stripTrailingSlash(baseUrl);
   const sinceMs = parseUtcMs(options.since);
   const entries: SubstackPost[] = [];
-  let offset = 0;
+  let offset = options.startOffset ?? 0;
+  let complete = false;
   let stoppedAtWatermark = false;
 
   while (entries.length < (options.maxEntries ?? Number.POSITIVE_INFINITY)) {
@@ -196,7 +280,12 @@ export async function fetchArchiveMetadata(
       delayMs,
       sleep: sleepImpl
     });
-    if (!Array.isArray(page) || page.length === 0) break;
+    if (!Array.isArray(page))
+      throw new Error("Invalid Substack archive response.");
+    if (page.length === 0) {
+      complete = true;
+      break;
+    }
 
     let reachedWatermark = false;
     for (const entry of page) {
@@ -206,19 +295,24 @@ export async function fetchArchiveMetadata(
         break;
       }
       entries.push(entry);
-      if (entries.length >= (options.maxEntries ?? Number.POSITIVE_INFINITY)) break;
+      offset += 1;
+      if (entries.length >= (options.maxEntries ?? Number.POSITIVE_INFINITY))
+        break;
     }
 
     if (reachedWatermark) {
       stoppedAtWatermark = true;
+      complete = true;
       break;
     }
-    if (page.length < ARCHIVE_PAGE_SIZE) break;
-    offset += page.length;
+    if (page.length < ARCHIVE_PAGE_SIZE) {
+      complete = entries.length < (options.maxEntries ?? Infinity);
+      break;
+    }
     if (delayMs > 0) await sleepImpl(delayMs);
   }
 
-  return { entries, stoppedAtWatermark };
+  return { entries, stoppedAtWatermark, nextOffset: offset, complete };
 }
 
 export function isPreview(post: SubstackPost): boolean {
@@ -369,14 +463,18 @@ function toSubstackDocument(
   const fallback = previewBody || cleanedBody || post.title || "";
   const rawBody =
     feed.retentionPolicy === "snippet"
-      ? (preview ? previewBody || cleanedBody : cleanedBody || previewBody).slice(0, 2_000)
+      ? (preview
+          ? previewBody || cleanedBody
+          : cleanedBody || previewBody
+        ).slice(0, 2_000)
       : cleanedBody || fallback;
   const body = preview
     ? `${rawBody}\n\nThis is a truncated preview; full subscriber content was not available.`.trim()
     : rawBody;
   const title = cleanHtml(post.title ?? slug);
   const canonicalUrl = canonicalizeUrl(
-    post.canonical_url ?? `${stripTrailingSlash(new URL(feed.homepageUrl).origin)}/p/${slug}`
+    post.canonical_url ??
+      `${stripTrailingSlash(new URL(feed.homepageUrl).origin)}/p/${slug}`
   );
   const publishedAt = parseUtcIso(post.post_date) ?? new Date().toISOString();
 
@@ -392,13 +490,21 @@ function toSubstackDocument(
     canonicalUrl,
     publishedAt,
     tickers: [],
-    summary: cleanHtml(post.subtitle ?? post.description ?? title).slice(0, 500),
+    summary: cleanHtml(post.subtitle ?? post.description ?? title).slice(
+      0,
+      500
+    ),
     body,
     retrievalMethod: authenticated ? "credentialed" : "api",
     retentionPolicy: feed.retentionPolicy,
     contentHash: createHash("sha256").update(body).digest("hex"),
     nearDuplicateKey: createHash("sha256")
-      .update(title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
+      .update(
+        title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim()
+      )
       .digest("hex"),
     metadata: {
       sourceName: feed.name,
@@ -409,7 +515,9 @@ function toSubstackDocument(
       substackSlug: slug,
       substackPostId: post.id,
       wordCount: post.wordcount,
-      authors: post.publishedBylines?.map((author) => author.name).filter(Boolean) ?? [],
+      authors:
+        post.publishedBylines?.map((author) => author.name).filter(Boolean) ??
+        [],
       tags: post.postTags?.map((tag) => tag.name).filter(Boolean) ?? [],
       authenticated
     }
@@ -441,16 +549,26 @@ async function fetchJson<T>(
         try {
           return JSON.parse(text) as T;
         } catch {
-          lastError = new Error(`Substack returned invalid JSON for ${url.pathname}`);
+          lastError = new Error(
+            `Substack returned invalid JSON for ${url.pathname}`
+          );
         }
       } else if (response.status === 429 || response.status >= 500) {
-        lastError = new Error(`Substack returned ${response.status} for ${url.pathname}`);
+        lastError = new Error(
+          `Substack returned ${response.status} for ${url.pathname}`
+        );
       } else {
-        throw new Error(`Substack returned ${response.status} for ${url.pathname}`);
+        throw new Error(
+          `Substack returned ${response.status} for ${url.pathname}`
+        );
       }
     } catch (error) {
       if (error instanceof SubstackAccessError) throw error;
-      if (error instanceof Error && /returned [1-5]\d\d/.test(error.message) && !/429|5\d\d/.test(error.message)) {
+      if (
+        error instanceof Error &&
+        /returned [1-5]\d\d/.test(error.message) &&
+        !/429|5\d\d/.test(error.message)
+      ) {
         throw error;
       }
       lastError = error;
@@ -482,11 +600,16 @@ function cookieHeader(session: SubstackSession | null, url: URL): string {
   const selected = new Map<string, SubstackCookie>();
   for (const cookie of matching) {
     const current = selected.get(cookie.name);
-    if (!current || cookiePreference(cookie, url) > cookiePreference(current, url)) {
+    if (
+      !current ||
+      cookiePreference(cookie, url) > cookiePreference(current, url)
+    ) {
       selected.set(cookie.name, cookie);
     }
   }
-  return [...selected.values()].map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+  return [...selected.values()]
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join("; ");
 }
 
 function cookiePreference(cookie: SubstackCookie, url: URL): number {
@@ -507,7 +630,9 @@ function partitionMatches(cookie: SubstackCookie, url: URL): boolean {
     );
   } catch {
     const needle = cookie.partitionKey.toLowerCase();
-    return url.hostname.toLowerCase().includes(needle.replace(/^https?:\/\//, "").replace(/^www\./, ""));
+    return url.hostname
+      .toLowerCase()
+      .includes(needle.replace(/^https?:\/\//, "").replace(/^www\./, ""));
   }
 }
 

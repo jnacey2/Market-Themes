@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createDatabaseClient } from "@market-themes/db";
 import {
+  runWithConcurrency,
+  withTimeout,
   runClaudeExtractionBackfill,
   shouldStopClaimedBackfillJob
 } from "./claude-extract-backfill";
@@ -55,3 +57,40 @@ test(
     }
   }
 );
+
+test("asynchronous stop checks never schedule an undefined extra item", async () => {
+  const visited: number[] = [];
+  const result = await runWithConcurrency(
+    [1, 2, 3, 4, 5],
+    3,
+    async (item) => {
+      assert.notEqual(item, undefined);
+      visited.push(item);
+      return item * 2;
+    },
+    async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      return false;
+    }
+  );
+  assert.deepEqual(visited.sort(), [1, 2, 3, 4, 5]);
+  assert.deepEqual(result, [2, 4, 6, 8, 10]);
+});
+
+test("extraction timeout aborts the actual provider operation", async () => {
+  let signal: AbortSignal | undefined;
+  await assert.rejects(
+    withTimeout(
+      async (current) => {
+        signal = current;
+        await new Promise((resolve) =>
+          current.addEventListener("abort", resolve, { once: true })
+        );
+        current.throwIfAborted();
+      },
+      5,
+      "time budget exceeded"
+    )
+  );
+  assert.equal(signal?.aborted, true);
+});

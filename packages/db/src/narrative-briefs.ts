@@ -36,7 +36,10 @@ export type NarrativeAlertInput = {
  */
 export function buildDailyBrief(
   lanes: NarrativeHomepageStatus["lanes"],
-  report: Pick<NarrativeChangeReport, "changes" | "currentDate" | "previousDate" | "stateCounts">,
+  report: Pick<
+    NarrativeChangeReport,
+    "changes" | "currentDate" | "previousDate" | "stateCounts"
+  >,
   date: string
 ): DailyBriefDraft {
   // The emerging lane deliberately shows probationary and recently activated
@@ -79,9 +82,13 @@ export function buildDailyBrief(
     );
   }
   if (fadingLead) {
-    summaryParts.push(`${fadingLead.name}: ${describePeakPosition(fadingLead, "long")}.`);
+    summaryParts.push(
+      `${fadingLead.name}: ${describePeakPosition(fadingLead, "long")}.`
+    );
   }
-  const transitions = report.changes.filter((change) => change.kind === "state_change");
+  const transitions = report.changes.filter(
+    (change) => change.kind === "state_change"
+  );
   if (transitions.length > 0) {
     summaryParts.push(
       `${transitions.length} lifecycle ${transitions.length === 1 ? "transition" : "transitions"} since ${report.previousDate ?? "the previous measurement"}.`
@@ -93,17 +100,29 @@ export function buildDailyBrief(
   );
 
   const sections: BriefSection[] = [
-    section("Rising", lanes.rising, (item) =>
-      `${item.name} — density ${item.density.toFixed(1)}% (${signed(item.change)}), attention z ${item.attentionZScore.toFixed(1)}, ${item.storyBreadth} stories.`
+    section(
+      "Rising",
+      lanes.rising,
+      (item) =>
+        `${item.name} — density ${item.density.toFixed(1)}% (${signed(item.change)}), attention z ${item.attentionZScore.toFixed(1)}, ${item.storyBreadth} stories.`
     ),
-    section("Peaking", lanes.peaking, (item) =>
-      `${item.name} — ${item.percentOfPeak.toFixed(0)}% of 90-day peak, change ${signed(item.change)}.`
+    section(
+      "Peaking",
+      lanes.peaking,
+      (item) =>
+        `${item.name} — ${item.percentOfPeak.toFixed(0)}% of 90-day peak, change ${signed(item.change)}.`
     ),
-    section("Fading", lanes.fading, (item) =>
-      `${item.name} — ${describePeakPosition(item, "short")}, change ${signed(item.change)}.`
+    section(
+      "Fading",
+      lanes.fading,
+      (item) =>
+        `${item.name} — ${describePeakPosition(item, "short")}, change ${signed(item.change)}.`
     ),
-    section("New and probationary", lanes.emerging, (item) =>
-      `${item.name} — ${item.attentionMatchedDocuments} classifier matches, ${item.matchedDocuments} reviewed, ${item.status === "probationary" ? "probationary" : "building baseline"}.`
+    section(
+      "New and probationary",
+      lanes.emerging,
+      (item) =>
+        `${item.name} — ${item.attentionMatchedDocuments} classifier matches, ${item.matchedDocuments} reviewed, ${item.status === "probationary" ? "probationary" : "building baseline"}.`
     ),
     {
       title: "What changed",
@@ -116,9 +135,12 @@ export function buildDailyBrief(
 
   const narrativeDefinitionIds = [
     ...new Set(
-      [...lanes.rising, ...lanes.peaking, ...lanes.fading, ...lanes.emerging].map(
-        (item) => item.id
-      )
+      [
+        ...lanes.rising,
+        ...lanes.peaking,
+        ...lanes.fading,
+        ...lanes.emerging
+      ].map((item) => item.id)
     )
   ];
 
@@ -182,7 +204,10 @@ export function deriveNarrativeAlerts(
         alertType: "unusual_attention",
         severity: "warning",
         reason: `${item.name}: raw attention z-score ${item.attentionZScore.toFixed(1)} is unusual versus its own history.`,
-        metadata: { attentionZScore: item.attentionZScore, density: item.density }
+        metadata: {
+          attentionZScore: item.attentionZScore,
+          density: item.density
+        }
       });
     }
   }
@@ -377,7 +402,11 @@ function describeChange(change: NarrativeChange) {
  * "0% of its 90-day peak" reads as missing data; say what actually happened.
  */
 export function describePeakPosition(
-  item: { density: number; percentOfPeak: number; daysSincePeak: number | null },
+  item: {
+    density: number;
+    percentOfPeak: number;
+    daysSincePeak: number | null;
+  },
   style: "short" | "long"
 ) {
   const since =
@@ -394,4 +423,21 @@ export function describePeakPosition(
 
 function signed(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
+}
+
+export async function getDailyBriefArchive(
+  databaseUrl = process.env.DATABASE_URL
+): Promise<StoredBrief[]> {
+  if (!databaseUrl) return [];
+  const client = createDatabaseClient(databaseUrl);
+  await client.connect();
+  try {
+    const result =
+      await client.query<StoredBrief>(`select id, brief_date::text as date,
+      headline, summary, sections, generated_at::text as "generatedAt"
+      from briefs order by brief_date desc limit 30`);
+    return result.rows;
+  } finally {
+    await client.end();
+  }
 }

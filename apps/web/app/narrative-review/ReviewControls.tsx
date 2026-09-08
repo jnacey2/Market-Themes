@@ -6,13 +6,15 @@ import type { NarrativeReviewStatus } from "@market-themes/db";
 
 export function ReviewControls({
   id,
-  currentStatus
+  currentStatus,
+  initialNote = ""
 }: {
   id: string;
+  initialNote?: string;
   currentStatus: NarrativeReviewStatus;
 }) {
   const router = useRouter();
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(initialNote);
   const [pending, setPending] = useState<NarrativeReviewStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +33,9 @@ export function ReviewControls({
       }
       router.refresh();
     } catch (reviewError) {
-      setError(reviewError instanceof Error ? reviewError.message : String(reviewError));
+      setError(
+        reviewError instanceof Error ? reviewError.message : String(reviewError)
+      );
     } finally {
       setPending(null);
     }

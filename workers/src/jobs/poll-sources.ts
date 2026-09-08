@@ -26,11 +26,15 @@ export async function pollSources() {
     error?: string;
   }> = [];
   const publicationFeeds = await listPublicationFeeds({ enabledOnly: true });
-  const publicationFeedById = new Map(publicationFeeds.map((feed) => [feed.id, feed]));
+  const publicationFeedById = new Map(
+    publicationFeeds.map((feed) => [feed.id, feed])
+  );
   const staticIds = new Set(defaultConnectors.map((connector) => connector.id));
   const substackSession = resolveSubstackSession();
   const refresh = process.env.SUBSTACK_REFRESH === "true";
-  const substackFeeds = publicationFeeds.filter((feed) => feed.platform === "substack");
+  const substackFeeds = publicationFeeds.filter(
+    (feed) => feed.platform === "substack"
+  );
   if (substackFeeds.length > 0 && !substackSession) {
     console.warn(
       "[poll-sources] No valid Substack subscriber session. Paid posts will be stored as previews. Capture one with `npm run substack:capture-session` and set SUBSTACK_STORAGE_STATE_B64."
@@ -69,11 +73,22 @@ export async function pollSources() {
 
       if (documents.length === 0) {
         console.log(`[poll-sources] ${connector.id} returned 0 documents`);
-        await recordConnectorCheckpoint({ connectorId: connector.id, success: true });
+        await recordConnectorCheckpoint({
+          connectorId: connector.id,
+          success: true
+        });
         if (publicationFeedById.has(connector.id)) {
-          await recordPublicationFeedPoll(connector.id, { success: true });
+          await recordPublicationFeedPoll(connector.id, {
+            success: true,
+            ...connector.checkpoint?.()
+          });
         }
-        connectorResults.push({ connectorId: connector.id, fetched: 0, inserted: 0, skipped: 0 });
+        connectorResults.push({
+          connectorId: connector.id,
+          fetched: 0,
+          inserted: 0,
+          skipped: 0
+        });
         continue;
       }
 
@@ -96,11 +111,16 @@ export async function pollSources() {
       if (publicationFeedById.has(connector.id)) {
         await recordPublicationFeedPoll(connector.id, {
           success: true,
+          ...connector.checkpoint?.(),
           lastPublishedAt: newestDocumentDate(documents)
         });
       }
-      const full = documents.filter((document) => document.metadata?.content === "full").length;
-      const previews = documents.filter((document) => document.metadata?.content === "preview").length;
+      const full = documents.filter(
+        (document) => document.metadata?.content === "full"
+      ).length;
+      const previews = documents.filter(
+        (document) => document.metadata?.content === "preview"
+      ).length;
       console.log(
         `[poll-sources] ${connector.id} fetched=${documents.length} inserted=${result.insertedDocuments} skipped=${result.skippedDocuments} chunks=${result.insertedChunks}${
           publicationFeedById.get(connector.id)?.platform === "substack"
@@ -144,17 +164,22 @@ function newestDocumentDate(documents: Array<{ publishedAt: string }>) {
   );
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   if (!process.env.DATABASE_URL) {
     await pollSources();
   } else {
     // Recorded so the /ingestion funnel can report fetched vs. deduplicated
     // counts per window; connector checkpoints only keep cumulative totals.
-    await runRecordedJob(
+    const result = await runRecordedJob(
       "poll_sources",
       () => pollSources(),
       (result) => result.inserted,
       (result) => result.failed
     );
+    if (result.failed)
+      process.exitCode = result.inserted || result.skipped ? 2 : 1;
   }
 }

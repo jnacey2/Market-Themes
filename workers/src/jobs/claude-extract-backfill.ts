@@ -39,9 +39,15 @@ type ClaudeBackfillOptions = {
 
 type BackfillDocumentResult =
   | { status: "completed"; insertedSignals: number; themesTouched: number }
-  | { status: "failed" };
+  | { status: "failed" }
+  | { status: "skipped" };
 
 export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
+  const heartbeat = setInterval(() => {
+    void updateBackfillJobProgress(job.id, {}).catch((error) =>
+      console.error("Backfill heartbeat failed", error)
+    );
+  }, 30_000);
   try {
     const result = await runClaudeExtractionBackfill({
       batchSize: job.batchSize,
@@ -57,7 +63,9 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
       ),
       lookbackDays: job.lookbackDays ?? undefined,
       excludedSecFilingCategories: job.excludedSecFilingCategories,
-      maxAnalysisAttempts: Number(process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5),
+      maxAnalysisAttempts: Number(
+        process.env.CLAUDE_ANALYSIS_MAX_ATTEMPTS ?? 5
+      ),
       model: job.model,
       promptVersion: job.promptVersion,
       maxEvidenceChars: Number(process.env.CLAUDE_MAX_EVIDENCE_CHARS ?? 800),
@@ -103,6 +111,8 @@ export async function runClaimedClaudeBackfillJob(job: BackfillJobRunConfig) {
       completedAtNow: true
     });
     throw error;
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -281,7 +291,9 @@ async function executeClaudeExtractionBackfill(options: ClaudeBackfillOptions) {
       () => shouldStop(options)
     );
 
-    const completed = results.filter((result) => result?.status === "completed");
+    const completed = results.filter(
+      (result) => result?.status === "completed"
+    );
     const failed = results.filter((result) => result?.status === "failed");
     const insertedSignals = completed.reduce(
       (sum, result) => sum + result.insertedSignals,
@@ -357,6 +369,7 @@ async function analyzeDocument(
   );
 
   const runId = await startDocumentAnalysisRun(document.id, {
+    maxAttempts: options.maxAnalysisAttempts,
     analysisType: marketSignalAnalysisType,
     model: options.model,
     promptVersion: options.promptVersion,
@@ -368,6 +381,8 @@ async function analyzeDocument(
       backfillJobId: options.jobId ?? null
     }
   });
+
+  if (!runId) return { status: "skipped" };
 
   try {
     const signals = await withTimeout(
@@ -406,7 +421,7 @@ async function analyzeDocument(
   }
 }
 
-async function runWithConcurrency<T, R>(
+export async function runWithConcurrency<T, R>(
   items: T[],
   limit: number,
   worker: (item: T) => Promise<R>,
@@ -421,6 +436,7 @@ async function runWithConcurrency<T, R>(
         break;
       }
 
+      if (nextIndex >= items.length) break;
       const currentIndex = nextIndex;
       nextIndex += 1;
       results[currentIndex] = await worker(items[currentIndex]);
@@ -438,7 +454,7 @@ async function shouldStop(options: ClaudeBackfillOptions) {
   return options.shouldStop ? options.shouldStop() : false;
 }
 
-function withTimeout<T>(
+export function withTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   message: string
@@ -518,11 +534,16 @@ function parseCsv(value: string) {
     .filter(Boolean);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runRecordedJob(
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  const result = await runRecordedJob(
     "signal_extraction",
     () => runClaudeExtractionBackfill(),
     (result) => result.completedDocuments,
     (result) => result.failedDocuments
   );
+  if (result.failedDocuments)
+    process.exitCode = result.completedDocuments ? 2 : 1;
 }

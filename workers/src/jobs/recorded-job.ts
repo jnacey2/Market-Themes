@@ -1,5 +1,6 @@
 import {
   finishPipelineRun,
+  updatePipelineRunProgress,
   startPipelineRun
 } from "@market-themes/db";
 
@@ -13,10 +14,20 @@ export async function runRecordedJob<T extends Record<string, unknown>>(
     trigger: process.env.PIPELINE_TRIGGER ?? "scheduled",
     executionMode: "standalone_cron"
   });
+  const heartbeat = setInterval(() => {
+    void updatePipelineRunProgress(runId, {}).catch((error) =>
+      console.error("Pipeline heartbeat failed", error)
+    );
+  }, 30_000);
   try {
     const result = await runner();
     await finishPipelineRun(runId, {
-      status: "completed",
+      status:
+        failedCount(result) > 0
+          ? processedCount(result) > 0
+            ? "partial"
+            : "failed"
+          : "completed",
       processedCount: processedCount(result),
       failedCount: failedCount(result),
       metadata: serializableRecord(result)
@@ -29,6 +40,8 @@ export async function runRecordedJob<T extends Record<string, unknown>>(
       errorMessage: error instanceof Error ? error.message : String(error)
     });
     throw error;
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 

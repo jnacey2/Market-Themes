@@ -16,6 +16,8 @@ export function createPublicationFeedConnector(
   }
 
   const rss = createRssConnector({
+    maxPostsPerPoll: feed.maxPostsPerPoll,
+    rateLimitMs: feed.rateLimitMs,
     id: feed.id,
     name: feed.name,
     url: feed.feedUrl,

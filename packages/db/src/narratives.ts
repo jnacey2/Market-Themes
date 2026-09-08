@@ -341,7 +341,10 @@ export async function countNarrativeClassificationBacklog(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
-    const result = await client.query<{ source_class: SourceClass; count: string }>(
+    const result = await client.query<{
+      source_class: SourceClass;
+      count: string;
+    }>(
       `select d.source_class, count(*)::text as count
        from documents d
        join document_texts dt on dt.document_id = d.id
@@ -430,6 +433,8 @@ export async function persistNarrativeObservations(
              and narrative_definition_id = $2
              and document_id = $3
              and evidence_snippet = $9
+             and metadata->>'textHash' is not distinct from $14::jsonb->>'textHash'
+             and metadata->>'definitionVersion' is not distinct from $14::jsonb->>'definitionVersion'
              and review_status in ('approved', 'rejected')
              and coalesce(
                metadata->'reviewProvenance'->>'actorType',
@@ -495,7 +500,9 @@ export async function persistNarrativeObservations(
            review_status = excluded.review_status,
            reviewed_at = excluded.reviewed_at,
            review_note = excluded.review_note
-         where narrative_observations.review_status = 'pending'
+         where narrative_observations.metadata->>'textHash' is distinct from excluded.metadata->>'textHash'
+            or narrative_observations.metadata->>'definitionVersion' is distinct from excluded.metadata->>'definitionVersion'
+            or narrative_observations.review_status = 'pending'
             or coalesce(
               narrative_observations.metadata->'reviewProvenance'->>'actorType',
               case
@@ -605,8 +612,7 @@ export async function reviewNarrativeObservation(
     const previousActor =
       (
         previous.rows[0].metadata.reviewProvenance as
-          | { actorType?: unknown }
-          | undefined
+          { actorType?: unknown } | undefined
       )?.actorType ??
       (previous.rows[0].metadata.autoReview !== undefined
         ? "automatic"
@@ -633,7 +639,7 @@ export async function reviewNarrativeObservation(
     }>(
       `update narrative_observations
        set review_status = $2,
-           review_note = nullif($3, ''),
+           review_note = case when $3::text is null then review_note else nullif($3, '') end,
            reviewed_at = now(),
            metadata = (metadata - 'autoReview') || $4::jsonb
        where id = $1 and matched
@@ -641,7 +647,7 @@ export async function reviewNarrativeObservation(
       [
         input.id,
         input.status,
-        input.note?.trim() ?? "",
+        input.note?.trim() ?? null,
         JSON.stringify(provenance)
       ]
     );
@@ -655,14 +661,13 @@ export async function reviewNarrativeObservation(
         input.id,
         previous.rows[0].review_status,
         input.status,
-        input.note?.trim() ?? "",
+        input.note?.trim() ?? null,
         JSON.stringify({
           overrodeAutomaticReview:
             previous.rows[0].metadata.autoReview !== undefined ||
             (
               previous.rows[0].metadata.reviewProvenance as
-                | { actorType?: unknown }
-                | undefined
+                { actorType?: unknown } | undefined
             )?.actorType === "automatic"
         })
       ]
@@ -1053,9 +1058,7 @@ export async function autoApproveNarrativeObservations(
   databaseUrl = process.env.DATABASE_URL
 ) {
   const model =
-    options.model ??
-    process.env.ANTHROPIC_MODEL ??
-    "claude-haiku-4-5-20251001";
+    options.model ?? process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
   const promptVersion =
     options.promptVersion ??
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
@@ -1086,7 +1089,9 @@ export async function autoApproveNarrativeObservations(
     `Auto-approved${tier === "default" ? "" : ` (${tier} tier)`}: score >= ${minimumMatchScore}; corroborated by >= ` +
     `${minimumDocuments} unique stories from >= ${minimumPublisherOwners} ` +
     `publisher groups within ${lookbackDays} days` +
-    (options.windowEnd ? ` ending ${windowEnd.toISOString().slice(0, 10)}` : "") +
+    (options.windowEnd
+      ? ` ending ${windowEnd.toISOString().slice(0, 10)}`
+      : "") +
     ".";
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
@@ -1258,7 +1263,8 @@ export async function autoApproveNarrativeObservations(
 
 export async function getNarrativeReviewQueue(
   databaseUrl = process.env.DATABASE_URL,
-  configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION
+  configuredPromptVersion = process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION,
+  options: { status?: string; query?: string; page?: number } = {}
 ): Promise<NarrativeReviewQueue> {
   const promptVersion =
     configuredPromptVersion ?? "narrative_classification_v7";
@@ -1277,38 +1283,44 @@ export async function getNarrativeReviewQueue(
   await client.connect();
   try {
     const counts = await client.query<{
-        review_status: NarrativeReviewStatus;
-        count: string;
-      }>(
-        `select review_status, count(*)::text as count
-         from narrative_observations
-         where matched and prompt_version = $1
-         group by review_status`,
-        [promptVersion]
-      );
+      review_status: NarrativeReviewStatus;
+      count: string;
+    }>(
+      `select no.review_status, count(*)::text as count
+         from narrative_observations no
+         join documents d on d.id = no.document_id
+         join document_texts dt on dt.document_id = d.id
+         join narrative_definitions nd on nd.id = no.narrative_definition_id
+         where no.matched and no.prompt_version = $1
+           and (not no.metadata ? 'textHash' or no.metadata->>'textHash' = dt.content_hash)
+           and (not no.metadata ? 'definitionVersion' or no.metadata->>'definitionVersion' = nd.version::text)
+           and nd.status in ('active', 'probationary') and d.retention_policy <> 'metadata_only'
+         group by no.review_status`,
+      [promptVersion]
+    );
     const items = await client.query<{
-        id: string;
-        narrative_definition_id: string;
-        narrative_name: string;
-        proposition: string;
-        inclusion_guidance: string;
-        exclusion_guidance: string;
-        title: string;
-        publisher: string;
-        published_at: string;
-        url: string;
-        source_class: NarrativeReviewQueue["items"][number]["sourceClass"];
-        stance: NarrativeReviewQueue["items"][number]["stance"];
-        evidence_snippet: string;
-        interpretation: string;
-        affected_entities: string[];
-        match_score: number;
-        prompt_version: string;
-        review_status: NarrativeReviewStatus;
-        review_note: string | null;
-        reviewed_at: string | null;
-      }>(
-        `select no.id, no.narrative_definition_id, nd.name as narrative_name,
+      id: string;
+      narrative_definition_id: string;
+      narrative_name: string;
+      proposition: string;
+      inclusion_guidance: string;
+      exclusion_guidance: string;
+      title: string;
+      publisher: string;
+      published_at: string;
+      url: string;
+      source_class: NarrativeReviewQueue["items"][number]["sourceClass"];
+      stance: NarrativeReviewQueue["items"][number]["stance"];
+      evidence_snippet: string;
+      interpretation: string;
+      affected_entities: string[];
+      match_score: number;
+      prompt_version: string;
+      review_status: NarrativeReviewStatus;
+      review_note: string | null;
+      reviewed_at: string | null;
+    }>(
+      `select no.id, no.narrative_definition_id, nd.name as narrative_name,
                 nd.proposition, nd.inclusion_guidance, nd.exclusion_guidance,
                 d.title, d.publisher, d.published_at::text, d.url, d.source_class,
                 no.stance, no.evidence_snippet, no.interpretation,
@@ -1317,16 +1329,29 @@ export async function getNarrativeReviewQueue(
          from narrative_observations no
          join narrative_definitions nd on nd.id = no.narrative_definition_id
          join documents d on d.id = no.document_id
-         where no.matched and no.prompt_version = $1
+         join document_texts dt on dt.document_id = d.id
+         where (not no.metadata ? 'textHash' or no.metadata->>'textHash' = dt.content_hash)
+           and no.matched and no.prompt_version = $1
+           and (not no.metadata ? 'definitionVersion' or no.metadata->>'definitionVersion' = nd.version::text)
+           and nd.status in ('active', 'probationary') and d.retention_policy <> 'metadata_only'
+           and ($2::text is null or no.review_status = $2)
+           and ($3::text is null or concat_ws(' ', d.title, d.publisher, nd.name) ilike '%' || $3 || '%')
          order by
            case no.review_status when 'pending' then 0 when 'approved' then 1 else 2 end,
            d.published_at desc,
-           no.match_score desc
-         limit 100`,
-        [promptVersion]
-      );
+           no.match_score desc, no.id
+         limit 51 offset $4`,
+      [
+        promptVersion,
+        !options.status || options.status === "all" ? null : options.status,
+        options.query?.trim() || null,
+        Math.max(0, Math.floor(options.page ?? 0)) * 50
+      ]
+    );
     const countFor = (status: NarrativeReviewStatus) =>
-      Number(counts.rows.find((row) => row.review_status === status)?.count ?? 0);
+      Number(
+        counts.rows.find((row) => row.review_status === status)?.count ?? 0
+      );
 
     return {
       databaseConfigured: true,
@@ -1334,7 +1359,8 @@ export async function getNarrativeReviewQueue(
       pendingCount: countFor("pending"),
       approvedCount: countFor("approved"),
       rejectedCount: countFor("rejected"),
-      items: items.rows.map((row) => ({
+      hasMore: items.rows.length > 50,
+      items: items.rows.slice(0, 50).map((row) => ({
         id: row.id,
         narrativeDefinitionId: row.narrative_definition_id,
         narrativeName: row.narrative_name,
@@ -1375,6 +1401,14 @@ export async function recomputeNarrativeTrends(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
+    await client.query("begin isolation level repeatable read");
+    const lock = await client.query<{ locked: boolean }>(
+      "select pg_try_advisory_xact_lock(hashtext('narrative_recompute')) as locked"
+    );
+    if (!lock.rows[0]?.locked) {
+      await client.query("rollback");
+      return { definitionsProcessed: 0, rowsWritten: 0 };
+    }
     const asOfDate = options.asOfDate ?? new Date().toISOString().slice(0, 10);
     const lookbackDays = options.lookbackDays ?? 365;
     const lowHistoryDays = options.lowHistoryDays ?? 30;
@@ -1384,7 +1418,11 @@ export async function recomputeNarrativeTrends(
       "narrative_classification_v7";
     const observationVersions =
       resolveCompatibleClassificationPromptVersions(promptVersion);
-    const recomputeVersionSql = observationVersionSql(observationVersions, "$3", "$4");
+    const recomputeVersionSql = observationVersionSql(
+      observationVersions,
+      "$3",
+      "$4"
+    );
     const windows = options.windows ?? ["7d", "30d"];
     const startDate = addDays(asOfDate, -(lookbackDays - 1));
     const dates = enumerateDates(startDate, asOfDate);
@@ -1475,29 +1513,29 @@ export async function recomputeNarrativeTrends(
     }
 
     let rowsWritten = 0;
-    await client.query("begin");
+
     try {
       for (const definition of definitions.rows) {
         const observations: NarrativeMetricObservation[] = (
           rowsByDefinition.get(definition.id) ?? []
         ).map((row) => ({
-            narrativeDefinitionId: row.narrative_definition_id,
-            date: row.date,
-            documentId: row.document_id,
-            matched:
-              row.matched &&
-              row.review_status === "approved" &&
-              row.evidence_current,
-            rawMatched: row.matched && row.review_status !== "rejected",
-            matchScore: row.match_score,
-            riskTone: row.risk_tone,
-            bullishTone: row.bullish_tone,
-            publisherId: row.publisher_id ?? "",
-            publisherOwner: row.publisher_owner ?? "",
-            storyFingerprint: row.story_fingerprint,
-            sourceClass: row.source_class,
-            affectedEntities: row.affected_entities
-          }));
+          narrativeDefinitionId: row.narrative_definition_id,
+          date: row.date,
+          documentId: row.document_id,
+          matched:
+            row.matched &&
+            row.review_status === "approved" &&
+            row.evidence_current,
+          rawMatched: row.matched && row.review_status !== "rejected",
+          matchScore: row.match_score,
+          riskTone: row.risk_tone,
+          bullishTone: row.bullish_tone,
+          publisherId: row.publisher_id ?? "",
+          publisherOwner: row.publisher_owner ?? "",
+          storyFingerprint: row.story_fingerprint,
+          sourceClass: row.source_class,
+          affectedEntities: row.affected_entities
+        }));
 
         for (const window of windows) {
           const points = calculateNarrativeTrendSeries(
@@ -1608,6 +1646,9 @@ export async function recomputeNarrativeTrends(
       throw error;
     }
     return { definitionsProcessed: definitions.rowCount ?? 0, rowsWritten };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
   } finally {
     await client.end();
   }
@@ -1759,6 +1800,11 @@ function mapTrendMetrics(
 
 function mapTrendPoint(row: TrendRow): NarrativeTrendPoint {
   return {
+    coverageState: row.coverage_state,
+    lowHistory: row.low_history,
+    classifiedDocuments: row.classified_documents,
+    corpusEligibleDocuments: row.corpus_eligible_documents,
+    classificationCoveragePercent: Number(row.classification_coverage_pct),
     date: row.date,
     density: Number(row.density),
     baselineMean: Number(row.baseline_mean),
@@ -1809,10 +1855,18 @@ export function compareBySurprise(
 
 /** Structural themes first, then the same surprise ordering within each kind. */
 export function compareByKindThenSurprise(
-  left: Pick<NarrativeTrendSummary, "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind">,
-  right: Pick<NarrativeTrendSummary, "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind">
+  left: Pick<
+    NarrativeTrendSummary,
+    "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind"
+  >,
+  right: Pick<
+    NarrativeTrendSummary,
+    "attentionZScore" | "zScore" | "storyBreadth" | "name" | "kind"
+  >
 ) {
-  return kindRank(left.kind) - kindRank(right.kind) || compareBySurprise(left, right);
+  return (
+    kindRank(left.kind) - kindRank(right.kind) || compareBySurprise(left, right)
+  );
 }
 
 function kindRank(kind: NarrativeTrendSummary["kind"]) {
@@ -2026,13 +2080,11 @@ export async function getNarrativeHomepageStatus(
       );
     }
 
-    const narratives = trendRows.map(
-      (row): NarrativeHomepageItem => ({
-        ...mapDefinition(row),
-        ...mapTrendMetrics(row, latestDate),
-        evidencePreview: evidenceByNarrative.get(row.id) ?? []
-      })
-    );
+    const narratives = trendRows.map((row): NarrativeHomepageItem => ({
+      ...mapDefinition(row),
+      ...mapTrendMetrics(row, latestDate),
+      evidencePreview: evidenceByNarrative.get(row.id) ?? []
+    }));
     const measured = narratives
       .filter(
         (item) =>
@@ -2156,7 +2208,9 @@ async function loadNarrativeBoard(options: {
       [promptVersion]
     );
     const latestDate = latest.rows[0]?.date ?? null;
-    const history = await client.query<TrendRow & { narrative_definition_id: string }>(
+    const history = await client.query<
+      TrendRow & { narrative_definition_id: string }
+    >(
       `select nt.narrative_definition_id, ${TREND_COLUMNS}
        from narrative_trends nt
        where nt.narrative_definition_id = any($1::text[])
@@ -2172,8 +2226,13 @@ async function loadNarrativeBoard(options: {
       rows.push(row);
       historyByDefinition.set(row.narrative_definition_id, rows);
     }
-    const evidenceVersions = resolveCompatibleClassificationPromptVersions(promptVersion);
-    const evidenceVersionSql = observationVersionSql(evidenceVersions, "$2", "$3");
+    const evidenceVersions =
+      resolveCompatibleClassificationPromptVersions(promptVersion);
+    const evidenceVersionSql = observationVersionSql(
+      evidenceVersions,
+      "$2",
+      "$3"
+    );
     // With a single prompt version the unique key (definition, document, model,
     // version) already yields one observation per document, so "latest" is the row
     // itself and the approved filter can be applied first: the partial review-queue
@@ -2259,9 +2318,11 @@ async function loadNarrativeBoard(options: {
       latestDate,
       narratives: narratives.sort((left, right) => {
         const leftMeasured =
-          left.coverageStatus === "measured" || left.coverageStatus === "measured_zero";
+          left.coverageStatus === "measured" ||
+          left.coverageStatus === "measured_zero";
         const rightMeasured =
-          right.coverageStatus === "measured" || right.coverageStatus === "measured_zero";
+          right.coverageStatus === "measured" ||
+          right.coverageStatus === "measured_zero";
         return (
           Number(rightMeasured) - Number(leftMeasured) ||
           compareBySurprise(left, right)
@@ -2439,11 +2500,15 @@ export function deriveNarrativeChanges(
       changes.push({
         ...base,
         kind: "expired_definition",
-        detail: "Event narrative reached its publication expiry and left the board."
+        detail:
+          "Event narrative reached its publication expiry and left the board."
       });
       continue;
     }
-    if (row.activated_at && row.activated_at.slice(0, 10) >= (previousDate ?? currentDate)) {
+    if (
+      row.activated_at &&
+      row.activated_at.slice(0, 10) >= (previousDate ?? currentDate)
+    ) {
       changes.push({
         ...base,
         kind: "new_definition",
@@ -2456,13 +2521,15 @@ export function deriveNarrativeChanges(
       changes.push({
         ...base,
         kind: "entered_board",
-        detail: "Coverage became complete; the narrative is measured for the first time in this window."
+        detail:
+          "Coverage became complete; the narrative is measured for the first time in this window."
       });
     } else if (!nowMeasured && wasMeasured) {
       changes.push({
         ...base,
         kind: "left_board",
-        detail: "Coverage is no longer complete for the current window; movement is suppressed."
+        detail:
+          "Coverage is no longer complete for the current window; movement is suppressed."
       });
     }
     if (
@@ -2544,7 +2611,6 @@ function emptyNarrativeHomepageStatus(
     brief: null
   };
 }
-
 
 function mapDefinition(row: {
   id: string;

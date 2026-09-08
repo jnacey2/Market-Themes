@@ -10,6 +10,14 @@ and manual uploads.
 The goal is not to generate trade recommendations. The goal is to help a
 research user decide what themes, risks, and opportunities deserve deeper work.
 
+## Reliability integration
+
+The audit fixes are reconciled with the current v7 classifier, structural-theme board,
+and provider batches. See [integration decisions and rollout notes](audit/implementation-notes.md).
+Apply migrations **027–029** before restarting updated processes. Research pages
+require operational credentials by default; set `RESEARCH_PUBLIC_READS=true` only
+when public access is intended. Operational routes remain protected.
+
 ## Product Goal
 
 The app should answer questions like:

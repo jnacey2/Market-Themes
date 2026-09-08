@@ -13,3 +13,4 @@ export * from "./transcript-sections";
 export * from "./narrative-eval-cases";
 export * from "./narrative-backtest";
 export * from "./ingestion-funnel";
+export * from "./narrative-evidence";

@@ -65,6 +65,11 @@ function parseCsv(value: string) {
     .filter(Boolean);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runClaudeExtractionSmoke();
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  const result = await runClaudeExtractionSmoke();
+  if (result.failedDocuments)
+    process.exitCode = result.completedDocuments ? 2 : 1;
 }

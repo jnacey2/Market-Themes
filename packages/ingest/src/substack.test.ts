@@ -6,6 +6,7 @@ import {
   validatePublicHttpsUrl
 } from "./publication-feed";
 import {
+  createSubstackConnector,
   ARCHIVE_PAGE_SIZE,
   classifyHttpError,
   fetchArchiveMetadata,
@@ -54,7 +55,14 @@ test("normalizes Substack homepages and rejects private feed targets", () => {
 });
 
 test("classifies free, complete paid, and truncated paid previews", () => {
-  assert.equal(isPreview({ audience: "everyone", wordcount: 200, body_html: "<p>short</p>" }), false);
+  assert.equal(
+    isPreview({
+      audience: "everyone",
+      wordcount: 200,
+      body_html: "<p>short</p>"
+    }),
+    false
+  );
   assert.equal(isPreview({ wordcount: 200, body_html: "<p>short</p>" }), false);
   assert.equal(
     isPreview({
@@ -72,9 +80,16 @@ test("classifies free, complete paid, and truncated paid previews", () => {
     }),
     true
   );
-  assert.equal(isPreview({ audience: "only_paid", wordcount: 0, body_html: "" }), true);
   assert.equal(
-    isPreview({ audience: "only_paid", wordcount: 0, body_html: "<p>full enough</p>" }),
+    isPreview({ audience: "only_paid", wordcount: 0, body_html: "" }),
+    true
+  );
+  assert.equal(
+    isPreview({
+      audience: "only_paid",
+      wordcount: 0,
+      body_html: "<p>full enough</p>"
+    }),
     false
   );
 });
@@ -144,7 +159,9 @@ test("continues pagination through a short final archive page", async () => {
         )
       );
     }
-    return Response.json([archiveEntry("page-two", "2026-08-19T12:00:00.000Z")]);
+    return Response.json([
+      archiveEntry("page-two", "2026-08-19T12:00:00.000Z")
+    ]);
   }) as typeof fetch;
 
   const result = await fetchArchiveMetadata("https://example.substack.com", {
@@ -345,14 +362,17 @@ test("writes raw JSON fields into processed document metadata and preview markdo
 test("stores a paid subscriber post as full text when the session returns the complete body", async () => {
   const body = `<p>${"Subscriber evidence about market conditions and corporate behavior. ".repeat(20)}</p>`;
   const documents = await fetchSubstackPosts(feed(), {
-    fetchImpl: archiveFetch([], [
-      post("paid-full", {
-        audience: "only_paid",
-        subtitle: "A paid subscriber argument",
-        wordcount: 20,
-        bodyHtml: body
-      })
-    ]),
+    fetchImpl: archiveFetch(
+      [],
+      [
+        post("paid-full", {
+          audience: "only_paid",
+          subtitle: "A paid subscriber argument",
+          wordcount: 20,
+          bodyHtml: body
+        })
+      ]
+    ),
     session: { cookies: [{ name: "substack.sid", value: "abc" }] },
     now: () => Date.parse("2026-08-28T12:00:00.000Z"),
     skipNetworkValidation: true,
@@ -566,3 +586,46 @@ function feed(overrides: Partial<PublicationFeed> = {}): PublicationFeed {
     ...overrides
   };
 }
+
+test("registered history resumes independently of the newest-publication watermark", async () => {
+  const offsets: number[] = [];
+  const posts = Array.from({ length: 8 }, (_, index) => ({
+    ...post(`history-${index}`),
+    id: index + 100,
+    post_date: new Date(Date.UTC(2026, 7, 27 - index)).toISOString()
+  }));
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes("archive")) {
+      const offset = Number(url.searchParams.get("offset"));
+      offsets.push(offset);
+      return Response.json(posts.slice(offset, offset + ARCHIVE_PAGE_SIZE));
+    }
+    return Response.json(
+      posts.find((item) => url.pathname.endsWith(item.slug!))
+    );
+  };
+  const config = feed({
+    maxPostsPerPoll: 4,
+    lastPublishedAt: posts[0].post_date!
+  });
+  const options = {
+    fetchImpl,
+    skipNetworkValidation: true,
+    session: null,
+    now: () => Date.UTC(2026, 7, 28),
+    sleep: async () => {}
+  };
+  const first = createSubstackConnector(config, options);
+  const initial = await first.poll();
+  assert(initial.some((item) => item.metadata?.substackPostId === 100));
+  assert.equal(first.checkpoint?.()?.historyCursor, 2);
+  const resumed = createSubstackConnector(
+    { ...config, ...first.checkpoint?.() },
+    options
+  );
+  const older = await resumed.poll();
+  assert(older.some((item) => item.metadata?.substackPostId === 102));
+  assert.equal(resumed.checkpoint?.()?.historyCursor, 4);
+  assert(offsets.includes(2));
+});

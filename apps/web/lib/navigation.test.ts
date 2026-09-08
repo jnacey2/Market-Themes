@@ -16,6 +16,7 @@ test("global navigation exposes every top-level destination exactly once", () =>
     "/",
     "/trends",
     "/changes",
+    "/briefs",
     "/narrative-candidates",
     "/narrative-review",
     "/sources",

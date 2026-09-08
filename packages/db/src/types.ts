@@ -414,6 +414,9 @@ export type ConnectorCheckpointSummary = {
 export type PublicationFeedPlatform = "substack" | "rss";
 
 export type PublicationFeed = {
+  historyCursor?: number;
+  historyComplete?: boolean;
+  historyStartedAt?: string | null;
   id: string;
   name: string;
   homepageUrl: string;
@@ -531,10 +534,7 @@ export type NarrativeDefinition = {
 };
 
 export type NarrativeCandidateStatus =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "merged";
+  "pending" | "approved" | "rejected" | "merged";
 
 export type NarrativeCandidateKind = "event" | "structural";
 
@@ -735,6 +735,12 @@ export type NarrativeLifecycleState =
   | "fading";
 
 export type NarrativeTrendPoint = {
+  coverageState:
+    "no_corpus" | "backfill_pending" | "measured_zero" | "measured";
+  lowHistory: boolean;
+  classifiedDocuments: number;
+  corpusEligibleDocuments: number;
+  classificationCoveragePercent: number;
   date: string;
   density: number;
   baselineMean: number;
@@ -790,6 +796,7 @@ export type NarrativeReviewItem = NarrativeEvidence & {
 };
 
 export type NarrativeReviewQueue = {
+  hasMore?: boolean;
   databaseConfigured: boolean;
   promptVersion: string;
   pendingCount: number;
@@ -798,35 +805,33 @@ export type NarrativeReviewQueue = {
   items: NarrativeReviewItem[];
 };
 
-export type NarrativeTrendSummary = NarrativeDefinition & NarrativeLifecycleMetrics & {
-  trendWindow: TrendWindow;
-  latestDate: string | null;
-  density: number;
-  baselineMean: number;
-  zScore: number;
-  percentileRank: number;
-  change: number;
-  acceleration: number;
-  riskTone: number;
-  bullishTone: number;
-  eligibleDocuments: number;
-  matchedDocuments: number;
-  publisherBreadth: number;
-  publisherOwnerBreadth: number;
-  storyBreadth: number;
-  sourceClassBreadth: number;
-  entityBreadth: number;
-  lowHistory: boolean;
-  corpusDocuments: number;
-  classificationCoveragePercent: number;
-  coverageStatus:
-    | "no_corpus"
-    | "backfill_pending"
-    | "measured_zero"
-    | "measured";
-  history: NarrativeTrendPoint[];
-  evidence: NarrativeEvidence[];
-};
+export type NarrativeTrendSummary = NarrativeDefinition &
+  NarrativeLifecycleMetrics & {
+    trendWindow: TrendWindow;
+    latestDate: string | null;
+    density: number;
+    baselineMean: number;
+    zScore: number;
+    percentileRank: number;
+    change: number;
+    acceleration: number;
+    riskTone: number;
+    bullishTone: number;
+    eligibleDocuments: number;
+    matchedDocuments: number;
+    publisherBreadth: number;
+    publisherOwnerBreadth: number;
+    storyBreadth: number;
+    sourceClassBreadth: number;
+    entityBreadth: number;
+    lowHistory: boolean;
+    corpusDocuments: number;
+    classificationCoveragePercent: number;
+    coverageStatus:
+      "no_corpus" | "backfill_pending" | "measured_zero" | "measured";
+    history: NarrativeTrendPoint[];
+    evidence: NarrativeEvidence[];
+  };
 
 export type NarrativeBoardStatus = {
   databaseConfigured: boolean;
@@ -978,3 +983,5 @@ export type DailyBrief = {
   summary: string;
   storyboardIds: string[];
 };
+
+export type AnalysisRunClaim = { id: string; attemptToken: string };

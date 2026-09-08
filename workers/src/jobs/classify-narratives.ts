@@ -77,10 +77,14 @@ async function runClassification(options: ClassificationOptions) {
   const promptVersion =
     process.env.NARRATIVE_CLASSIFICATION_PROMPT_VERSION ??
     narrativeClassificationPromptVersion;
-  const batchSize = options.batchSize ?? Number(process.env.NARRATIVE_CLASSIFICATION_BATCH_SIZE ?? 10);
+  const batchSize =
+    options.batchSize ??
+    Number(process.env.NARRATIVE_CLASSIFICATION_BATCH_SIZE ?? 10);
   const configuredMaxDocuments =
     options.maxDocuments ??
-    (options.maxBatches === undefined ? undefined : batchSize * options.maxBatches) ??
+    (options.maxBatches === undefined
+      ? undefined
+      : batchSize * options.maxBatches) ??
     Number(process.env.NARRATIVE_CLASSIFICATION_MAX_DOCUMENTS ?? 40);
   const maxDocuments = Math.max(0, configuredMaxDocuments);
   const maxRuntimeMs =
@@ -174,7 +178,11 @@ async function runClassification(options: ClassificationOptions) {
     model,
     promptVersion
   });
-  if (documentsSelected > 0 && documentsProcessed === 0 && failedDocuments > 0) {
+  if (
+    documentsSelected > 0 &&
+    documentsProcessed === 0 &&
+    failedDocuments > 0
+  ) {
     throw new Error(
       `Narrative classification failed for all ${failedDocuments} selected documents.`
     );
@@ -216,7 +224,9 @@ async function classifyDocument(
       status: "completed" as const,
       documentId: document.id,
       observationsStored: result.inserted,
-      matchedObservations: observations.filter((observation) => observation.matched).length
+      matchedObservations: observations.filter(
+        (observation) => observation.matched
+      ).length
     };
   } catch (error) {
     return {
@@ -267,11 +277,17 @@ function withTimeout<T>(
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   const result = await runRecordedJob(
     "narrative_classification",
     () => classifyNarrativeBatches(),
-    (value) => value.documentsProcessed
+    (value) => value.documentsProcessed,
+    (value) => value.failedDocuments
   );
   console.log(`[classify-narratives] ${JSON.stringify(result)}`);
+  if (result.failedDocuments)
+    process.exitCode = result.documentsProcessed ? 2 : 1;
 }

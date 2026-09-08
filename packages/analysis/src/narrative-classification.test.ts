@@ -3,6 +3,7 @@ import test from "node:test";
 import type { AnalysisDocument, NarrativeDefinition } from "@market-themes/db";
 import {
   buildNarrativeClassificationContent,
+  normalizeNarrativeClassificationMessage,
   normalizeObservation,
   passesDefinitionGuard,
   readEvidenceGuard,
@@ -345,4 +346,51 @@ test("regex guards are kept out of the model-facing definition reference", () =>
   assert.ok(text.includes("requiredTermGroups"));
   assert.ok(!text.includes("requiredPatterns"));
   assert.ok(!text.includes("forbiddenPatterns"));
+});
+
+test("classification rejects malformed, duplicate, unknown, and invented evidence while retaining sparse v7 output", () => {
+  const raw = {
+    narrativeDefinitionId: definition.id,
+    matched: true,
+    matchScore: 90,
+    stance: "bullish",
+    riskTone: 0,
+    bullishTone: 80,
+    contractSatisfied: true,
+    inclusionCriteriaSatisfied: ["Demand"],
+    exclusionCriteriaTriggered: [],
+    evidenceSnippet: "Demand is rising quickly",
+    interpretation: "Demand",
+    affectedEntities: []
+  };
+  function normalize(payload: unknown) {
+    const message = {
+      content: [{ type: "text", text: JSON.stringify(payload) }],
+      stop_reason: "end_turn"
+    } as Parameters<typeof normalizeNarrativeClassificationMessage>[0];
+    return normalizeNarrativeClassificationMessage(
+      message,
+      document,
+      [definition],
+      "fixture",
+      "v7"
+    );
+  }
+  assert.equal(normalize({ observations: [] })[0].matched, false);
+  assert.equal(
+    normalize({ observations: [raw] })[0].metadata?.textHash,
+    document.textHash
+  );
+  for (const payload of [
+    null,
+    {},
+    { observations: [raw, raw] },
+    { observations: [{ ...raw, narrativeDefinitionId: "unknown" }] },
+    { observations: [{ ...raw, matchScore: "90" }] },
+    { observations: [{ ...raw, riskTone: 101 }] },
+    { observations: [{ ...raw, affectedEntities: [42] }] },
+    { observations: [{ ...raw, evidenceSnippet: "Invented quotation" }] }
+  ]) {
+    assert.throws(() => normalize(payload));
+  }
 });

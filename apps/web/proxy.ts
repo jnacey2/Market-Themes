@@ -14,7 +14,10 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(url, 308);
   }
 
-  if (!PROTECTED_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {
+  const operational = PROTECTED_PATHS.some((path) =>
+    request.nextUrl.pathname.startsWith(path)
+  );
+  if (!operational && process.env.RESEARCH_PUBLIC_READS === "true") {
     return NextResponse.next();
   }
 
@@ -27,7 +30,9 @@ export function proxy(request: NextRequest) {
     }
 
     return new NextResponse(
-      wantsHtml(request) ? authNotConfiguredHtml() : "Operational authentication is not configured.",
+      wantsHtml(request)
+        ? authNotConfiguredHtml()
+        : "Operational authentication is not configured.",
       { status: 503, headers: wantsHtml(request) ? HTML_HEADERS : undefined }
     );
   }
@@ -37,7 +42,9 @@ export function proxy(request: NextRequest) {
   }
 
   return new NextResponse(
-    wantsHtml(request) ? authRequiredHtml(request.nextUrl.pathname) : "Authentication required.",
+    wantsHtml(request)
+      ? authRequiredHtml(request.nextUrl.pathname)
+      : "Authentication required.",
     {
       status: 401,
       headers: {
@@ -56,6 +63,13 @@ function wantsHtml(request: NextRequest) {
 
 export const config = {
   matcher: [
+    "/",
+    "/trends/:path*",
+    "/narratives/:path*",
+    "/changes/:path*",
+    "/briefs/:path*",
+    "/how-to-read/:path*",
+    "/api/narrative-evidence/:path*",
     "/storyboards/:path*",
     "/themes/:path*",
     "/analysis/:path*",

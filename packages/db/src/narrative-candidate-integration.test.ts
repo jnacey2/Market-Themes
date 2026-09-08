@@ -164,30 +164,24 @@ test(
     });
 
     const firstRun = await startDiscoveryRun(firstDocumentId);
-    const firstResult = await completeNarrativeDiscoveryRun(
-      firstRun,
-      [
-        candidateFixture({
-          candidateId,
-          clusterKey,
-          documentId: firstDocumentId,
-          quote: firstQuote
-        })
-      ]
-    );
+    const firstResult = await completeNarrativeDiscoveryRun(firstRun, [
+      candidateFixture({
+        candidateId,
+        clusterKey,
+        documentId: firstDocumentId,
+        quote: firstQuote
+      })
+    ]);
     assert.equal(firstResult.insertedEvidence, 1);
 
-    const idempotent = await completeNarrativeDiscoveryRun(
-      firstRun,
-      [
-        candidateFixture({
-          candidateId,
-          clusterKey,
-          documentId: firstDocumentId,
-          quote: firstQuote
-        })
-      ]
-    );
+    const idempotent = await completeNarrativeDiscoveryRun(firstRun, [
+      candidateFixture({
+        candidateId,
+        clusterKey,
+        documentId: firstDocumentId,
+        quote: firstQuote
+      })
+    ]);
     assert.equal(idempotent.insertedEvidence, 0);
 
     const initialQueue = await getNarrativeCandidateQueue(
@@ -251,18 +245,15 @@ test(
       promotionValidation: eligibleValidation(manualValidationInput)
     });
     assert.equal(promoted.observationsCreated, 2);
-    const seedReclassification = await selectDocumentsForNarrativeClassification({
-      model,
-      promptVersion: classificationPromptVersion,
-      limit: 100,
-      lookbackDays: 365
-    });
-    assert(
-      seedReclassification.some((item) => item.id === firstDocumentId)
-    );
-    assert(
-      seedReclassification.some((item) => item.id === secondDocumentId)
-    );
+    const seedReclassification =
+      await selectDocumentsForNarrativeClassification({
+        model,
+        promptVersion: classificationPromptVersion,
+        limit: 100,
+        lookbackDays: 365
+      });
+    assert(seedReclassification.some((item) => item.id === firstDocumentId));
+    assert(seedReclassification.some((item) => item.id === secondDocumentId));
     await persistNarrativeObservations(
       [
         { documentId: firstDocumentId, quote: firstQuote },
@@ -362,7 +353,8 @@ test(
         sourceClass: "newspaper" as const,
         publisher: "Auto Publisher A",
         publisherOwner: `auto-owner-a:${suffix}`,
-        quote: "Enterprises are retiring overlapping software tools to reduce costs."
+        quote:
+          "Enterprises are retiring overlapping software tools to reduce costs."
       },
       {
         id: `candidate:auto:filing:${suffix}`,
@@ -370,7 +362,8 @@ test(
         sourceClass: "filing" as const,
         publisher: "Auto Publisher B",
         publisherOwner: `auto-owner-b:${suffix}`,
-        quote: "Customers are consolidating application portfolios onto fewer platforms."
+        quote:
+          "Customers are consolidating application portfolios onto fewer platforms."
       },
       {
         id: `candidate:auto:transcript:${suffix}`,
@@ -378,7 +371,8 @@ test(
         sourceClass: "transcript" as const,
         publisher: "Auto Publisher C",
         publisherOwner: `auto-owner-c:${suffix}`,
-        quote: "Technology budgets are shifting from point products to integrated suites."
+        quote:
+          "Technology budgets are shifting from point products to integrated suites."
       },
       {
         id: `candidate:auto:low-score:${suffix}`,
@@ -386,7 +380,8 @@ test(
         sourceClass: "newspaper" as const,
         publisher: "Auto Publisher D",
         publisherOwner: `auto-owner-d:${suffix}`,
-        quote: "A fourth source discussed software consolidation with lower confidence.",
+        quote:
+          "A fourth source discussed software consolidation with lower confidence.",
         matchScore: 85
       }
     ];
@@ -401,19 +396,16 @@ test(
         quote: item.quote,
         publishedAt: new Date().toISOString()
       });
-      await completeNarrativeDiscoveryRun(
-        await startDiscoveryRun(item.id),
-        [
-          candidateFixture({
-            candidateId,
-            clusterKey,
-            documentId: item.id,
-            quote: item.quote,
-            matchScore: item.matchScore,
-            textHash: fixtureTextHash(item.quote, suffix)
-          })
-        ]
-      );
+      await completeNarrativeDiscoveryRun(await startDiscoveryRun(item.id), [
+        candidateFixture({
+          candidateId,
+          clusterKey,
+          documentId: item.id,
+          quote: item.quote,
+          matchScore: item.matchScore,
+          textHash: fixtureTextHash(item.quote, suffix)
+        })
+      ]);
     }
 
     const weakCandidateId = `narrative:candidate:auto-weak:${suffix}`;
@@ -431,18 +423,15 @@ test(
         publishedAt: new Date().toISOString(),
         metadata: index === 3 ? { content: "preview" } : {}
       });
-      await completeNarrativeDiscoveryRun(
-        await startDiscoveryRun(documentId),
-        [
-          candidateFixture({
-            candidateId: weakCandidateId,
-            clusterKey: `weak-autonomous-candidate-${suffix}`,
-            documentId,
-            quote,
-            textHash: fixtureTextHash(quote, suffix)
-          })
-        ]
-      );
+      await completeNarrativeDiscoveryRun(await startDiscoveryRun(documentId), [
+        candidateFixture({
+          candidateId: weakCandidateId,
+          clusterKey: `weak-autonomous-candidate-${suffix}`,
+          documentId,
+          quote,
+          textHash: fixtureTextHash(quote, suffix)
+        })
+      ]);
     }
 
     const sameOwnerCandidateId = `narrative:candidate:auto-same-owner:${suffix}`;
@@ -464,18 +453,15 @@ test(
         quote,
         publishedAt: new Date().toISOString()
       });
-      await completeNarrativeDiscoveryRun(
-        await startDiscoveryRun(documentId),
-        [
-          candidateFixture({
-            candidateId: sameOwnerCandidateId,
-            clusterKey: `same-owner-autonomous-candidate-${suffix}`,
-            documentId,
-            quote,
-            textHash: fixtureTextHash(quote, suffix)
-          })
-        ]
-      );
+      await completeNarrativeDiscoveryRun(await startDiscoveryRun(documentId), [
+        candidateFixture({
+          candidateId: sameOwnerCandidateId,
+          clusterKey: `same-owner-autonomous-candidate-${suffix}`,
+          documentId,
+          quote,
+          textHash: fixtureTextHash(quote, suffix)
+        })
+      ]);
     }
 
     const staleCandidateId = `narrative:candidate:auto-stale:${suffix}`;
@@ -494,20 +480,18 @@ test(
         quote,
         publishedAt: new Date().toISOString()
       });
-      await completeNarrativeDiscoveryRun(
-        await startDiscoveryRun(documentId),
-        [
-          candidateFixture({
-            candidateId: staleCandidateId,
-            clusterKey: `stale-autonomous-candidate-${suffix}`,
-            documentId,
-            quote,
-            textHash: fixtureTextHash(quote, suffix)
-          })
-        ]
-      );
+      await completeNarrativeDiscoveryRun(await startDiscoveryRun(documentId), [
+        candidateFixture({
+          candidateId: staleCandidateId,
+          clusterKey: `stale-autonomous-candidate-${suffix}`,
+          documentId,
+          quote,
+          textHash: fixtureTextHash(quote, suffix)
+        })
+      ]);
     }
-    const staleText = "The upgraded source no longer contains the prior evidence.";
+    const staleText =
+      "The upgraded source no longer contains the prior evidence.";
     const staleClient = createDatabaseClient();
     await staleClient.connect();
     try {
@@ -833,7 +817,8 @@ test(
       sourceClass: "transcript",
       publisher: "Merge Publisher B",
       publisherOwner: `merge-owner-b:${suffix}`,
-      quote: "Technology leaders are reducing the number of software vendors they manage."
+      quote:
+        "Technology leaders are reducing the number of software vendors they manage."
     });
     await persistFixtureDocument({
       id: finalDocumentId,
@@ -842,7 +827,8 @@ test(
       sourceClass: "press_release",
       publisher: "Merge Publisher C",
       publisherOwner: `merge-owner-c:${suffix}`,
-      quote: "Procurement teams are retiring redundant applications in favor of strategic platforms."
+      quote:
+        "Procurement teams are retiring redundant applications in favor of strategic platforms."
     });
     await completeNarrativeDiscoveryRun(
       await startDiscoveryRun(targetDocumentId),
@@ -851,7 +837,8 @@ test(
           candidateId: targetId,
           clusterKey: `application-portfolio-consolidation-${suffix}`,
           documentId: targetDocumentId,
-          quote: "Corporate buyers are consolidating their application portfolios."
+          quote:
+            "Corporate buyers are consolidating their application portfolios."
         })
       ]
     );
@@ -862,7 +849,8 @@ test(
           candidateId: sourceId,
           clusterKey: `software-vendor-rationalization-${suffix}`,
           documentId: sourceDocumentId,
-          quote: "Technology leaders are reducing the number of software vendors they manage."
+          quote:
+            "Technology leaders are reducing the number of software vendors they manage."
         })
       ]
     );
@@ -873,7 +861,8 @@ test(
           candidateId: finalId,
           clusterKey: `strategic-platform-consolidation-${suffix}`,
           documentId: finalDocumentId,
-          quote: "Procurement teams are retiring redundant applications in favor of strategic platforms."
+          quote:
+            "Procurement teams are retiring redundant applications in favor of strategic platforms."
         })
       ]
     );
@@ -887,7 +876,8 @@ test(
       sourceClass: "government",
       publisher: "Merge Publisher D",
       publisherOwner: `merge-owner-d:${suffix}`,
-      quote: "Organizations reported moving overlapping technology contracts to fewer providers."
+      quote:
+        "Organizations reported moving overlapping technology contracts to fewer providers."
     });
     await completeNarrativeDiscoveryRun(
       await startDiscoveryRun(followupDocumentId),
@@ -896,7 +886,8 @@ test(
           candidateId: sourceId,
           clusterKey: `software-vendor-rationalization-${suffix}`,
           documentId: followupDocumentId,
-          quote: "Organizations reported moving overlapping technology contracts to fewer providers."
+          quote:
+            "Organizations reported moving overlapping technology contracts to fewer providers."
         })
       ]
     );
@@ -904,7 +895,9 @@ test(
       process.env.DATABASE_URL,
       discoveryPromptVersion
     );
-    const target = queue.candidates.find((candidate) => candidate.id === finalId);
+    const target = queue.candidates.find(
+      (candidate) => candidate.id === finalId
+    );
     assert.equal(target?.documentBreadth, 4);
     assert.equal(target?.qualified, true);
     assert.equal(queue.mergedCount >= 2, true);
@@ -925,7 +918,8 @@ test(
         sourceClass: "newspaper",
         publisher: "Claim News",
         publisherOwner: `claim-news-owner:${suffix}`,
-        quote: "Enterprise buyers are consolidating overlapping software subscriptions."
+        quote:
+          "Enterprise buyers are consolidating overlapping software subscriptions."
       }),
       persistFixtureDocument({
         id: `candidate:claim:transcript:${suffix}`,
@@ -934,7 +928,8 @@ test(
         sourceClass: "transcript",
         publisher: "Claim Transcript",
         publisherOwner: `claim-transcript-owner:${suffix}`,
-        quote: "Management expects customers to standardize on fewer software platforms."
+        quote:
+          "Management expects customers to standardize on fewer software platforms."
       })
     ]);
     const promptVersion = `integration-claim-${suffix}`;
@@ -947,7 +942,10 @@ test(
       maxAttempts: 3
     });
     assert.equal(claimed.length, 2);
-    assert.equal(new Set(claimed.map((document) => document.sourceClass)).size, 2);
+    assert.equal(
+      new Set(claimed.map((document) => document.sourceClass)).size,
+      2
+    );
 
     const duplicateClaim = await claimDocumentsForNarrativeDiscovery({
       analysisType: narrativeCandidateAnalysisType,
@@ -998,8 +996,11 @@ test(
       lookbackDays: 30,
       maxAttempts: 3
     };
-    const initialClaims = await claimDocumentsForNarrativeDiscovery(claimOptions);
-    const initial = initialClaims.find((document) => document.id === documentId);
+    const initialClaims =
+      await claimDocumentsForNarrativeDiscovery(claimOptions);
+    const initial = initialClaims.find(
+      (document) => document.id === documentId
+    );
     assert(initial);
     const refreshedCandidateId = `narrative:candidate:refreshed:${suffix}`;
     await Promise.all(
@@ -1012,7 +1013,8 @@ test(
                   candidateId: refreshedCandidateId,
                   clusterKey: `refreshed-evidence-${suffix}`,
                   documentId,
-                  quote: "The initial preview did not include the full market argument.",
+                  quote:
+                    "The initial preview did not include the full market argument.",
                   textHash: document.textHash
                 })
               ]
@@ -1041,8 +1043,11 @@ test(
       await client.end();
     }
 
-    const refreshedClaims = await claimDocumentsForNarrativeDiscovery(claimOptions);
-    const refreshed = refreshedClaims.find((document) => document.id === documentId);
+    const refreshedClaims =
+      await claimDocumentsForNarrativeDiscovery(claimOptions);
+    const refreshed = refreshedClaims.find(
+      (document) => document.id === documentId
+    );
     assert(refreshed);
     assert.notEqual(refreshed.attemptToken, initial.attemptToken);
     assert.equal(refreshed.text, updatedText);
@@ -1086,11 +1091,13 @@ test(
 );
 
 async function startDiscoveryRun(documentId: string) {
-  return startDocumentAnalysisRun(documentId, {
+  const claim = await startDocumentAnalysisRun(documentId, {
     analysisType: narrativeCandidateAnalysisType,
     model,
     promptVersion: discoveryPromptVersion
   });
+  assert(claim);
+  return claim.id;
 }
 
 function candidateFixture({
@@ -1117,7 +1124,8 @@ function candidateFixture({
     category: "Technology",
     inclusionGuidance:
       "Include explicit reductions in vendors or applications tied to cost control.",
-    exclusionGuidance: "Exclude routine renewals and one-off product cancellations.",
+    exclusionGuidance:
+      "Exclude routine renewals and one-off product cancellations.",
     model,
     promptVersion: discoveryPromptVersion,
     evidence: [
@@ -1125,7 +1133,8 @@ function candidateFixture({
         id: `candidate:evidence:${documentId}`,
         documentId,
         evidenceSnippet: quote,
-        interpretation: "The source reports active software portfolio consolidation.",
+        interpretation:
+          "The source reports active software portfolio consolidation.",
         stance: "risk",
         riskTone: 65,
         bullishTone: 10,
@@ -1252,7 +1261,9 @@ async function cleanupCandidateFixtures(suffix: string) {
        where id like $1 and promoted_definition_id is not null`,
       [`%${suffix}`]
     );
-    const definitionIds = promoted.rows.map((row) => row.promoted_definition_id);
+    const definitionIds = promoted.rows.map(
+      (row) => row.promoted_definition_id
+    );
     await client.query(`delete from narrative_candidates where id like $1`, [
       `%${suffix}`
     ]);
@@ -1290,7 +1301,9 @@ async function cleanupCandidateFixtures(suffix: string) {
       `delete from document_analysis_runs where prompt_version like $1`,
       [`%${suffix}%`]
     );
-    await client.query(`delete from documents where id like $1`, [`%${suffix}`]);
+    await client.query(`delete from documents where id like $1`, [
+      `%${suffix}`
+    ]);
     await client.query(`delete from sources where id like $1`, [`%${suffix}`]);
     await client.query("commit");
   } catch (error) {

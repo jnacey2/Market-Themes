@@ -46,3 +46,14 @@ test("falls back to the host default on an unknown mode", () => {
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /unknown DB_SSL_MODE/);
 });
+
+test("Render names in a path or unrelated hostname do not enable host-specific TLS", () => {
+  assert.equal(
+    resolveDatabaseSsl("postgres://u:p@localhost/render.com", {}),
+    undefined
+  );
+  assert.equal(
+    resolveDatabaseSsl("postgres://u:p@render.com.example.org/db", {}),
+    undefined
+  );
+});

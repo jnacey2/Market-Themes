@@ -23,6 +23,7 @@ import {
   selectDocumentsForAnalysis,
   startDocumentAnalysisRun,
   type AnalysisDocument,
+  type AnalysisRunClaim,
   type AnthropicMessageBatchRecord,
   type ExtractedSignalInput
 } from "@market-themes/db";
@@ -132,12 +133,13 @@ async function executeClaudeExtractionBatch(
   }
   const prepared = fitExtractionDocumentsToBatch(documents, options);
   const batchId = newAnthropicBatchId(signalExtractionBatchWorkload);
-  const runIds = new Map<string, string>();
+  const runIds = new Map<string, AnalysisRunClaim>();
   let requests: AnthropicBatchRequest[];
   let batch: AnthropicMessageBatchRecord;
   try {
     for (const item of prepared) {
       const runId = await startDocumentAnalysisRun(item.document.id, {
+        maxAttempts: options.maxAnalysisAttempts,
         analysisType: marketSignalAnalysisType,
         model: options.model,
         promptVersion: options.promptVersion,
@@ -149,11 +151,12 @@ async function executeClaudeExtractionBatch(
           anthropicBatchId: batchId
         }
       });
-      runIds.set(item.document.id, runId);
+      if (runId) runIds.set(item.document.id, runId);
     }
 
+    if (!runIds.size) return extractionBatchResult("backlog_empty", reconciled);
     const preparedBatch = extractionBatchRequests(
-      prepared,
+      prepared.filter((item) => runIds.has(item.document.id)),
       runIds,
       options
     );
@@ -166,7 +169,7 @@ async function executeClaudeExtractionBatch(
       promptVersion: options.promptVersion,
       metadata: {
         requestBytes,
-        documentCount: prepared.length,
+        documentCount: runIds.size,
         extractionOptions: {
           maxDocumentChars: options.maxDocumentChars,
           sectionChars: options.sectionChars,
@@ -193,15 +196,11 @@ async function executeClaudeExtractionBatch(
   });
   return {
     ...extractionBatchResult(submitted.status, reconciled),
-    documentsSubmitted:
-      submitted.status === "submitted" ? prepared.length : 0,
-    requestsSubmitted:
-      submitted.status === "submitted" ? requests.length : 0,
+    documentsSubmitted: submitted.status === "submitted" ? runIds.size : 0,
+    requestsSubmitted: submitted.status === "submitted" ? requests.length : 0,
     batchId,
     providerBatchId:
-      "providerBatchId" in submitted
-        ? submitted.providerBatchId
-        : null
+      "providerBatchId" in submitted ? submitted.providerBatchId : null
   };
 }
 
@@ -213,9 +212,9 @@ export async function processSignalExtractionBatchResults(
   if (!isRecord(extractionOptions)) {
     throw new Error("Extraction batch omitted its request options.");
   }
-  const documents = await getAnalysisDocumentsByIds(
-    [...new Set(batch.items.map((item) => item.documentId))]
-  );
+  const documents = await getAnalysisDocumentsByIds([
+    ...new Set(batch.items.map((item) => item.documentId))
+  ]);
   const documentsById = new Map(
     documents.map((document) => [document.id, document])
   );
@@ -273,10 +272,7 @@ export async function processSignalExtractionBatchResults(
         {
           model: batch.model,
           promptVersion: batch.promptVersion,
-          maxEvidenceChars: numberValue(
-            extractionOptions.maxEvidenceChars,
-            800
-          )
+          maxEvidenceChars: numberValue(extractionOptions.maxEvidenceChars, 800)
         }
       );
       const existing = signalsByDocument.get(document.id) ?? [];
@@ -309,7 +305,9 @@ export async function processSignalExtractionBatchResults(
   let themesTouched = 0;
   const itemsByDocument = groupItemsByDocument(batch);
   for (const [documentId, items] of itemsByDocument) {
-    const runId = items[0]?.analysisRunId;
+    const runId = items[0]?.analysisRunId
+      ? extractionItemClaim(items[0])
+      : undefined;
     const error = errorsByDocument.get(documentId);
     if (!runId || error) {
       if (runId) await failDocumentAnalysisRun(runId, error ?? "Missing run.");
@@ -331,8 +329,7 @@ export async function processSignalExtractionBatchResults(
       signalsByDocument.get(documentId) ?? []
     );
     let persisted:
-      | { insertedSignals: number; themesTouched: number }
-      | undefined;
+      { insertedSignals: number; themesTouched: number } | undefined;
     try {
       persisted = await completeDocumentAnalysisRun(runId, signals);
     } catch (completionError) {
@@ -383,7 +380,7 @@ async function abandonSignalExtractionBatch(
   for (const item of batch.items) {
     if (item.analysisRunId && !failedRuns.has(item.analysisRunId)) {
       failedRuns.add(item.analysisRunId);
-      await failDocumentAnalysisRun(item.analysisRunId, error);
+      await failDocumentAnalysisRun(extractionItemClaim(item), error);
     }
     await recordAnthropicBatchItemResult({
       batchId: batch.id,
@@ -487,7 +484,7 @@ function previewExtractionRequests(
 
 function extractionBatchRequests(
   prepared: PreparedExtractionDocument[],
-  runIds: Map<string, string>,
+  runIds: Map<string, AnalysisRunClaim>,
   options: ExtractionBatchOptions
 ): {
   requests: AnthropicBatchRequest[];
@@ -506,9 +503,10 @@ function extractionBatchRequests(
       return {
         customId,
         documentId: document.id,
-        analysisRunId: runIds.get(document.id)!,
+        analysisRunId: runIds.get(document.id)!.id,
         metadata: {
           textHash: document.textHash,
+          attemptToken: runIds.get(document.id)!.attemptToken,
           sectionIndex,
           sectionLabel: section.label
         }
@@ -617,4 +615,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   ).then((result) => {
     console.log(`[claude-extract-batch] ${JSON.stringify(result)}`);
   });
+}
+
+function extractionItemClaim(
+  item: AnthropicMessageBatchRecord["items"][number]
+): AnalysisRunClaim | string {
+  return typeof item.metadata.attemptToken === "string"
+    ? { id: item.analysisRunId!, attemptToken: item.metadata.attemptToken }
+    : item.analysisRunId!;
 }

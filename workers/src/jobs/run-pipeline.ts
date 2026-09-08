@@ -65,7 +65,9 @@ export async function runPipeline() {
     `select pg_try_advisory_lock(hashtext('market_themes_full_pipeline')) as acquired`
   );
   if (!lock.rows[0]?.acquired) {
-    console.log("[pipeline] another full pipeline run owns the advisory lock; skipping");
+    console.log(
+      "[pipeline] another full pipeline run owns the advisory lock; skipping"
+    );
     await closeDatabaseClient(lockClient);
     return { completedStages: [], skipped: "already_running" as const };
   }
@@ -73,6 +75,13 @@ export async function runPipeline() {
   let runId: string | null = null;
   let selectedStages: PipelineStage[] = [];
   const completedStages: string[] = [];
+  const partialStages: string[] = [];
+  const heartbeat = setInterval(() => {
+    if (runId)
+      void updatePipelineRunProgress(runId, {}).catch((error) =>
+        console.error("Pipeline heartbeat failed", error)
+      );
+  }, 30_000);
 
   try {
     runId = await startPipelineRun("full_pipeline", {
@@ -86,23 +95,26 @@ export async function runPipeline() {
         continue;
       }
 
-      console.log(`[pipeline] stage=${stage.name} starting script=${stage.script}`);
+      console.log(
+        `[pipeline] stage=${stage.name} starting script=${stage.script}`
+      );
       await updatePipelineRunProgress(runId, {
         currentStage: stage.name,
         completedStages
       });
-      await runStage(stage);
+      if ((await runStage(stage)) === "partial") partialStages.push(stage.name);
       completedStages.push(stage.name);
       console.log(`[pipeline] stage=${stage.name} completed`);
     }
 
     await finishPipelineRun(runId, {
-      status: "completed",
+      status: partialStages.length ? "partial" : "completed",
+      failedCount: partialStages.length,
       processedCount: completedStages.length,
-      metadata: { currentStage: null, completedStages }
+      metadata: { currentStage: null, completedStages, partialStages }
     });
     console.log(`[pipeline] completed stages=${completedStages.join(",")}`);
-    return { completedStages };
+    return { completedStages, partialStages };
   } catch (error) {
     if (runId) {
       await finishPipelineRun(runId, {
@@ -110,13 +122,15 @@ export async function runPipeline() {
         failedCount: 1,
         errorMessage: error instanceof Error ? error.message : String(error),
         metadata: {
-          failedStage: selectedStages[completedStages.length]?.name ?? "unknown",
+          failedStage:
+            selectedStages[completedStages.length]?.name ?? "unknown",
           completedStages
         }
       });
     }
     throw error;
   } finally {
+    clearInterval(heartbeat);
     await lockClient
       .query(
         `select pg_advisory_unlock(hashtext('market_themes_full_pipeline'))`
@@ -143,7 +157,7 @@ export function selectStages(availableStages: PipelineStage[]) {
 }
 
 function runStage(stage: PipelineStage) {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<"completed" | "partial">((resolve, reject) => {
     const child = spawn("npm", ["run", stage.script], {
       cwd: process.cwd(),
       env: process.env,
@@ -152,8 +166,8 @@ function runStage(stage: PipelineStage) {
 
     child.once("error", reject);
     child.once("exit", (code, signal) => {
-      if (code === 0) {
-        resolve();
+      if (code === 0 || code === 2) {
+        resolve(code === 2 ? "partial" : "completed");
         return;
       }
       reject(
@@ -167,6 +181,10 @@ function runStage(stage: PipelineStage) {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runPipeline();
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  const result = await runPipeline();
+  if (result.partialStages?.length) process.exitCode = 2;
 }

@@ -20,7 +20,10 @@ import type {
   SourcePipelineTelemetry
 } from "./types";
 
-export async function startPipelineRun(stage: string, metadata: Record<string, unknown> = {}) {
+export async function startPipelineRun(
+  stage: string,
+  metadata: Record<string, unknown> = {}
+) {
   const client = createDatabaseClient();
   const id = `pipeline:${stage}:${randomUUID()}`;
   const staleAfterMinutes = Number(
@@ -36,7 +39,7 @@ export async function startPipelineRun(stage: string, metadata: Record<string, u
            error_message = 'Marked failed after the prior pipeline run became stale.'
        where stage = $1
          and status = 'running'
-         and started_at < now() - ($2::text || ' minutes')::interval`,
+         and heartbeat_at < now() - ($2::text || ' minutes')::interval`,
       [stage, staleAfterMinutes]
     );
     await client.query(
@@ -59,8 +62,8 @@ export async function updatePipelineRunProgress(
   try {
     await client.query(
       `update pipeline_runs
-       set metadata = metadata || $2::jsonb
-       where id = $1`,
+       set metadata = metadata || $2::jsonb, heartbeat_at = now()
+       where id = $1 and status = 'running'`,
       [id, JSON.stringify(metadata)]
     );
   } finally {
@@ -71,7 +74,7 @@ export async function updatePipelineRunProgress(
 export async function finishPipelineRun(
   id: string,
   result: {
-    status: "completed" | "failed";
+    status: "completed" | "partial" | "failed";
     processedCount?: number;
     failedCount?: number;
     estimatedCostUsd?: number;
