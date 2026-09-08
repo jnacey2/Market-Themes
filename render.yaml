@@ -384,7 +384,10 @@ services:
   - type: cron
     name: recompute-theme-trends
     runtime: node
-    schedule: "15 */4 * * *"
+    # Runs ~26 minutes and rewrites ~700k rows. Starting at :32 keeps it clear
+    # of the :25 narrative recompute; it overlaps the :55 run only in its last
+    # minutes, which the narrative job's ten-minute query budget absorbs.
+    schedule: "32 */4 * * *"
     buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run themes:normalize:backfill --workspace @market-themes/workers && npm run trends:recompute --workspace @market-themes/workers
     envVars:
@@ -624,12 +627,12 @@ services:
         fromDatabase:
           name: themes-postgres
           property: connectionString
-      # Batch job on a 30-minute cadence: the observation load reads every
-      # current-version observation and its document, which can exceed two
-      # minutes on the production plan while autovacuum or the theme recompute
-      # is running. Five minutes still fits comfortably inside the schedule.
+      # Batch job on a 30-minute cadence: the observation load reads a year of
+      # current-version observations and their documents, which takes three to
+      # five minutes on the production plan and longer while autovacuum or the
+      # theme recompute is running. Ten minutes still fits inside the schedule.
       - key: DB_QUERY_TIMEOUT_MS
-        value: "300000"
+        value: "600000"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: NARRATIVE_CLASSIFICATION_PROMPT_VERSION
