@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import {
   anthropicBatchCustomId,
   assertAnthropicBatchRequestLimits,
+  fitRequestsToByteBudget,
   newAnthropicBatchId,
   reconcileActiveAnthropicBatch,
   submitPersistedAnthropicBatch,
@@ -114,16 +115,16 @@ async function executeNarrativeClassificationBatch(
   if (definitions.length === 0 || maxDocuments <= 0) {
     return classificationBatchResult("backlog_empty", reconciled);
   }
-  const documents = await selectDocumentsForNarrativeClassification({
+  const selected = await selectDocumentsForNarrativeClassification({
     model,
     promptVersion,
     limit: maxDocuments
   });
-  if (documents.length === 0) {
+  if (selected.length === 0) {
     return classificationBatchResult("backlog_empty", reconciled);
   }
 
-  const requests = documents.map((document, index) => ({
+  const fitted = fitRequestsToByteBudget(selected, (document, index) => ({
     custom_id: anthropicBatchCustomId("nc", index, document.id),
     params: buildNarrativeClassificationRequest(document, definitions, {
       model,
@@ -131,6 +132,12 @@ async function executeNarrativeClassificationBatch(
       cacheTtl: "1h"
     })
   }));
+  const { items: documents, requests } = fitted;
+  if (fitted.dropped > 0) {
+    console.log(
+      `[classify-narratives-batch] payload budget kept ${documents.length} of ${selected.length} documents (${fitted.requestBytes} bytes); the rest wait for the next run`
+    );
+  }
   const requestBytes = assertAnthropicBatchRequestLimits(requests);
   const batchId = newAnthropicBatchId(
     narrativeClassificationBatchWorkload
