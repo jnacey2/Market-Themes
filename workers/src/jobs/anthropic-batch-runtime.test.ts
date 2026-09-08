@@ -10,10 +10,14 @@ import type { AnthropicMessageBatchRecord } from "@market-themes/db";
 import {
   anthropicBatchCustomId,
   assertAnthropicBatchRequestLimits,
+  DEFAULT_TARGET_BATCH_BYTES,
+  fitRequestsToByteBudget,
   mergeBatchSummaries,
   reconcileActiveAnthropicBatch,
   resolveMaxActiveBatches,
-  submitPersistedAnthropicBatch
+  resolveTargetBatchBytes,
+  submitPersistedAnthropicBatch,
+  UNSUBMITTED_BATCH_GRACE_MS
 } from "./anthropic-batch-runtime";
 
 const request: AnthropicBatchRequest = {
@@ -248,6 +252,76 @@ test("waits through the provider window before abandoning unknown submissions", 
   });
   assert.equal(stale.status, "failed");
   assert.deepEqual(staleEvents, ["abandon", "finish:failed"]);
+});
+
+test("a batch that never reached a provider call is released after a short grace", async () => {
+  const neverSubmitted = batchRecord({
+    createdAt: "2026-09-01T00:00:00.000Z",
+    status: "submitting"
+  });
+  const options = {
+    workload: "classification",
+    api: fakeApi(providerBatch("in_progress")),
+    processResults: async () => ({})
+  };
+
+  const earlyEvents: string[] = [];
+  const early = await reconcileActiveAnthropicBatch({
+    ...options,
+    abandon: async () => {
+      earlyEvents.push("abandon");
+    },
+    store: fakeStore(earlyEvents, neverSubmitted),
+    now: () => new Date("2026-09-01T01:30:00.000Z").getTime()
+  });
+  assert.equal(early.status, "submission_unknown", "a slow upload still gets the benefit of the doubt");
+  assert.deepEqual(earlyEvents, []);
+
+  const lateEvents: string[] = [];
+  const late = await reconcileActiveAnthropicBatch({
+    ...options,
+    abandon: async () => {
+      lateEvents.push("abandon");
+    },
+    store: fakeStore(lateEvents, neverSubmitted),
+    now: () => new Date("2026-09-01T00:00:00.000Z").getTime() + UNSUBMITTED_BATCH_GRACE_MS
+  });
+  assert.equal(late.status, "failed");
+  assert.deepEqual(lateEvents, ["abandon", "finish:failed"]);
+  assert.ok(UNSUBMITTED_BATCH_GRACE_MS < 24 * 60 * 60 * 1_000);
+});
+
+test("fits requests to a payload budget in priority order, always keeping the first", () => {
+  const documents = ["a", "b", "c", "d"].map((id) => ({ id, text: "x".repeat(1_000) }));
+  const toRequest = (document: { id: string; text: string }, index: number) => ({
+    custom_id: anthropicBatchCustomId("t", index, document.id),
+    params: {
+      model: "test-model",
+      max_tokens: 10,
+      messages: [{ role: "user" as const, content: document.text }]
+    }
+  });
+  const oneRequestBytes = Buffer.byteLength(JSON.stringify(toRequest(documents[0], 0)));
+
+  const fitted = fitRequestsToByteBudget(documents, toRequest, oneRequestBytes * 2 + 64);
+  assert.deepEqual(fitted.items.map((document) => document.id), ["a", "b"]);
+  assert.equal(fitted.requests.length, 2);
+  assert.equal(fitted.dropped, 2);
+  assert.equal(
+    fitted.requestBytes,
+    Buffer.byteLength(JSON.stringify({ requests: fitted.requests })),
+    "reported bytes match the encoded payload"
+  );
+
+  const tiny = fitRequestsToByteBudget(documents, toRequest, 10);
+  assert.deepEqual(tiny.items.map((document) => document.id), ["a"], "progress is guaranteed");
+
+  const all = fitRequestsToByteBudget(documents, toRequest);
+  assert.equal(all.dropped, 0);
+  assert.equal(resolveTargetBatchBytes(undefined), DEFAULT_TARGET_BATCH_BYTES);
+  assert.equal(resolveTargetBatchBytes("1048576"), 1_048_576);
+  assert.equal(resolveTargetBatchBytes("nope"), DEFAULT_TARGET_BATCH_BYTES);
+  assert.equal(resolveTargetBatchBytes(String(10 * 1024 ** 3)), 256 * 1024 * 1024);
 });
 
 test("a workload below its in-flight limit reports capacity while a slow batch is still processing", async () => {

@@ -20,9 +20,23 @@ import {
 } from "@market-themes/db";
 
 const BATCH_EXPIRATION_GRACE_MS = 25 * 60 * 60 * 1_000;
+/**
+ * A batch still in `submitting` never reached a provider call outcome: the process
+ * died while building or uploading the request (the 512 MiB cron OOMs on a 50 MB
+ * payload). Nothing can be reconciled without a provider id, and a real submit
+ * takes minutes, so release its slot and its documents after this long instead of
+ * holding both for the provider's 24-hour window.
+ */
+export const UNSUBMITTED_BATCH_GRACE_MS = 2 * 60 * 60 * 1_000;
 const RESULT_RETENTION_MS = 29 * 24 * 60 * 60 * 1_000;
 const DEFAULT_MAX_BATCH_BYTES = 240 * 1024 * 1024;
 const PROVIDER_MAX_BATCH_BYTES = 256 * 1024 * 1024;
+/**
+ * Soft per-batch payload target. The provider accepts 256 MB, but the request
+ * array, its JSON encoding, and the persisted item rows all live in the cron's
+ * memory at once; 400 classification documents (52 MB of JSON) exceeded 512 MiB.
+ */
+export const DEFAULT_TARGET_BATCH_BYTES = 16 * 1024 * 1024;
 
 type BatchRuntimeStore = {
   prune?(workload: string): Promise<unknown>;
@@ -106,6 +120,41 @@ export function assertAnthropicBatchRequestLimits(
     );
   }
   return requestBytes;
+}
+
+export function resolveTargetBatchBytes(
+  value: string | undefined = process.env.ANTHROPIC_BATCH_TARGET_BYTES
+) {
+  const parsed = value === undefined ? Number.NaN : Number(value);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(parsed, PROVIDER_MAX_BATCH_BYTES)
+    : DEFAULT_TARGET_BATCH_BYTES;
+}
+
+/**
+ * Builds requests for `items` in order and stops once the encoded payload would
+ * exceed `targetBytes`, so a wave of large backfill documents yields a smaller
+ * batch rather than one the process cannot hold. Items are expected in priority
+ * order; the first item is always kept so progress is guaranteed.
+ */
+export function fitRequestsToByteBudget<T>(
+  items: T[],
+  toRequest: (item: T, index: number) => AnthropicBatchRequest,
+  targetBytes = resolveTargetBatchBytes()
+) {
+  const kept: T[] = [];
+  const requests: AnthropicBatchRequest[] = [];
+  // JSON.stringify({ requests }) costs the wrapper plus one comma per boundary.
+  let requestBytes = Buffer.byteLength(JSON.stringify({ requests: [] }));
+  for (const [index, item] of items.entries()) {
+    const request = toRequest(item, index);
+    const size = Buffer.byteLength(JSON.stringify(request)) + (index > 0 ? 1 : 0);
+    if (kept.length > 0 && requestBytes + size > targetBytes) break;
+    kept.push(item);
+    requests.push(request);
+    requestBytes += size;
+  }
+  return { items: kept, requests, requestBytes, dropped: items.length - kept.length };
 }
 
 export async function submitPersistedAnthropicBatch(options: {
@@ -285,18 +334,24 @@ async function reconcileOneBatch(
 ): Promise<SingleReconcileResult> {
   const ageMs = now() - new Date(batch.createdAt).getTime();
   if (!batch.providerBatchId) {
-    if (ageMs < BATCH_EXPIRATION_GRACE_MS) {
+    const neverSubmitted = batch.status === "submitting";
+    const graceMs = neverSubmitted ? UNSUBMITTED_BATCH_GRACE_MS : BATCH_EXPIRATION_GRACE_MS;
+    if (ageMs < graceMs) {
       return { status: "submission_unknown", batchId: batch.id };
     }
     const error = new Error(
-      "Batch submission outcome remained unknown beyond the provider's 24-hour processing window."
+      neverSubmitted
+        ? "Batch was never submitted: the process exited before the provider call completed."
+        : "Batch submission outcome remained unknown beyond the provider's 24-hour processing window."
     );
     await options.abandon(batch, error);
     await store.finish({
       id: batch.id,
       status: "failed",
       errorMessage: error.message,
-      metadata: { abandonedAfterUnknownSubmission: true }
+      metadata: neverSubmitted
+        ? { abandonedNeverSubmitted: true }
+        : { abandonedAfterUnknownSubmission: true }
     });
     return { status: "failed", batchId: batch.id };
   }

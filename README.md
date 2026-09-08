@@ -466,6 +466,15 @@ classification and discovery at 3 because a single provider batch has taken two
 to three hours and would otherwise skip every following hour), while
 `poll-anthropic-batches` reconciles provider state and applies results every ten
 minutes.
+The classification submit builds requests newest-first and stops at
+`ANTHROPIC_BATCH_TARGET_BYTES` (default 16 MB) so a wave of large backfill
+documents yields a smaller batch rather than one the 512 MiB cron cannot hold;
+the remainder waits for the next hour. A batch record that never reached a
+provider call (the process died while building or uploading, leaving it in
+`submitting` with no provider id) is abandoned after two hours, releasing its
+slot and its documents; a submission whose outcome is genuinely unknown (the
+call was made but no response arrived) still waits out the provider's 24-hour
+window before being abandoned.
 Provider IDs, custom-ID mappings, item outcomes, and usage are stored in
 `anthropic_message_batches` and `anthropic_message_batch_items`; raw model
 responses are not stored. Completed records are retained for 35 days by default.
@@ -583,7 +592,11 @@ ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ANTHROPIC_PROMPT_CACHING=true
 # In-flight Message Batches allowed per workload before the hourly submit skips.
 ANTHROPIC_BATCH_MAX_ACTIVE=1
+# Hard payload limit (the provider accepts 256 MB) and the soft per-batch target
+# the classification submit trims its document list to. A 400-document, 52 MB
+# classification payload exceeded the cron's 512 MiB; 16 MB leaves headroom.
 ANTHROPIC_BATCH_MAX_BYTES=251658240
+ANTHROPIC_BATCH_TARGET_BYTES=16777216
 ANTHROPIC_BATCH_RETENTION_DAYS=35
 NARRATIVE_PROMOTION_VALIDATION_MODEL=claude-haiku-4-5-20251001
 CLAUDE_PROMPT_VERSION=market_signal_extraction_v2
