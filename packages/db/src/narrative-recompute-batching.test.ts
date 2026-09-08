@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
+  countNarrativeClassificationBacklog,
   createDatabaseClient,
   getActiveNarrativeDefinitions,
   persistDocuments,
@@ -110,6 +111,11 @@ test(
     const promptVersion = sourceId;
     const client = createDatabaseClient();
     await client.connect();
+    const before = await countNarrativeClassificationBacklog({
+      model,
+      promptVersion,
+      maxAttempts: 2
+    });
     try {
       await persistDocuments(
         Array.from({ length: 7 }, (_, i) => ({
@@ -183,6 +189,22 @@ test(
         limit: 1000,
         maxAttempts: 2
       });
+      const backlog = await countNarrativeClassificationBacklog({
+        model,
+        promptVersion,
+        maxAttempts: 2
+      });
+      assert.equal(backlog.total, before.total + 4);
+      const limited = await selectDocumentsForNarrativeClassification({
+        model,
+        promptVersion,
+        limit: 2,
+        maxAttempts: 2
+      });
+      assert.deepEqual(
+        limited.map((d) => d.id),
+        selected.slice(0, 2).map((d) => d.id)
+      );
       assert.deepEqual(
         selected
           .filter((d) => d.sourceId === sourceId)
