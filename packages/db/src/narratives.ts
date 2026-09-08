@@ -130,7 +130,16 @@ export async function selectDocumentsForNarrativeClassification(
       content: string;
       text_hash: string;
     }>(
-      `with eligible as (
+      `with exhausted_documents as materialized (
+         select mbi.document_id
+         from anthropic_message_batch_items mbi
+         join anthropic_message_batches mb on mb.id = mbi.batch_id
+         where mb.workload = 'narrative_classification'
+           and mb.prompt_version = $7
+           and mbi.status not in ('submitted', 'completed')
+         group by mbi.document_id
+         having count(*) >= $8::int
+       ), eligible as (
          select d.id, d.source_id, d.source_class, d.title, d.publisher, d.url,
                 d.published_at, d.created_at, d.tickers, d.summary, d.metadata,
                 dt.content, dt.content_hash as text_hash,
@@ -143,7 +152,7 @@ export async function selectDocumentsForNarrativeClassification(
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
            and d.published_at >= now() - ($5::int * interval '1 day')
            and not (d.id = any($4::text[]))
-           and ${classificationAttemptsRemainingSql("$7", "$8")}
+           and not exists (select 1 from exhausted_documents exhausted where exhausted.document_id = d.id)
            and not exists (
              select 1
              from anthropic_message_batch_items mbi
@@ -1453,7 +1462,7 @@ export async function recomputeNarrativeTrends(
       documentId: row.document_id,
       sourceClass: row.source_class
     }));
-    const rows = await client.query<{
+    type RecomputeObservation = {
       narrative_definition_id: string;
       date: string;
       document_id: string;
@@ -1468,11 +1477,32 @@ export async function recomputeNarrativeTrends(
       affected_entities: string[];
       review_status: NarrativeReviewStatus;
       evidence_current: boolean;
-    }>(
-      `with latest_observations as (
+    };
+    const rowsByDefinition = new Map<string, RecomputeObservation[]>();
+    const observationDocuments = await client.query<{ id: string }>(
+      `select d.id from documents d
+       where d.published_at >= $1::date
+         and d.published_at < $2::date + interval '1 day'
+         and exists (select 1 from document_texts dt where dt.document_id = d.id)
+       order by d.id`,
+      [startDate, asOfDate]
+    );
+    // Bound each statement and keep nearby document observations together.
+    // All batches share the same repeatable-read snapshot.
+    for (
+      let offset = 0;
+      offset < observationDocuments.rows.length;
+      offset += 250
+    ) {
+      const documentIds = observationDocuments.rows
+        .slice(offset, offset + 250)
+        .map((row) => row.id);
+      const rows = await client.query<RecomputeObservation>(
+        `with latest_observations as (
          select distinct on (narrative_definition_id, document_id) *
          from narrative_observations
          where ${recomputeVersionSql.predicate}
+           and document_id = any($5::text[])
          order by narrative_definition_id, document_id, ${recomputeVersionSql.order}
        )
        select no.narrative_definition_id, d.published_at::date::text as date,
@@ -1502,14 +1532,14 @@ export async function recomputeNarrativeTrends(
          and exists (
            select 1 from document_texts dt where dt.document_id = d.id
          )`,
-      [startDate, asOfDate, observationVersions, promptVersion]
-    );
+        [startDate, asOfDate, observationVersions, promptVersion, documentIds]
+      );
 
-    const rowsByDefinition = new Map<string, typeof rows.rows>();
-    for (const row of rows.rows) {
-      const group = rowsByDefinition.get(row.narrative_definition_id);
-      if (group) group.push(row);
-      else rowsByDefinition.set(row.narrative_definition_id, [row]);
+      for (const row of rows.rows) {
+        const group = rowsByDefinition.get(row.narrative_definition_id);
+        if (group) group.push(row);
+        else rowsByDefinition.set(row.narrative_definition_id, [row]);
+      }
     }
 
     let rowsWritten = 0;

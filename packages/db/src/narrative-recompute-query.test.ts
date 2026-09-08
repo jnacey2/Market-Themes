@@ -46,7 +46,11 @@ test("observation version SQL stays index-ordered for a single version", () => {
   const single = observationVersionSql(["v7"], "$3", "$4");
   assert.equal(single.order, "observed_at desc, prompt_version desc");
   assert.match(single.predicate, /prompt_version = \$4/);
-  assert.match(single.predicate, /any\(\$3::text\[\]\)/, "array parameter stays referenced");
+  assert.match(
+    single.predicate,
+    /any\(\$3::text\[\]\)/,
+    "array parameter stays referenced"
+  );
 
   const multi = observationVersionSql(["v7", "v6"], "$3", "$4");
   assert.match(multi.predicate, /^prompt_version = any\(\$3::text\[\]\)$/);
@@ -54,10 +58,15 @@ test("observation version SQL stays index-ordered for a single version", () => {
 
   const recompute = narratives.slice(
     narratives.indexOf("const recomputeVersionSql = observationVersionSql"),
-    narratives.indexOf("[startDate, asOfDate, observationVersions, promptVersion]")
+    narratives.indexOf(
+      "[startDate, asOfDate, observationVersions, promptVersion, documentIds]"
+    )
   );
   assert.match(recompute, /\$\{recomputeVersionSql\.predicate\}/);
-  assert.match(recompute, /order by narrative_definition_id, document_id, \$\{recomputeVersionSql\.order\}/);
+  assert.match(
+    recompute,
+    /order by narrative_definition_id, document_id, \$\{recomputeVersionSql\.order\}/
+  );
 });
 
 test("compatible prompt versions always lead with the current version and dedupe", () => {
