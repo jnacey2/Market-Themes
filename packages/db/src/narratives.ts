@@ -92,6 +92,28 @@ async function getNarrativeDefinitionsByStatuses(
   }
 }
 
+function classificationEligibilityCtes(
+  promptVersionParam: string,
+  maxAttemptsParam: string
+) {
+  return `covered_definitions as materialized (
+    select document_id, array_agg(narrative_definition_id) as definition_ids
+    from narrative_observations
+    where model = $1 and prompt_version = any($2::text[])
+      and coalesce(metadata->>'promotionSeed', 'false') <> 'true'
+    group by document_id
+  ), exhausted_documents as materialized (
+    select mbi.document_id
+    from anthropic_message_batch_items mbi
+    join anthropic_message_batches mb on mb.id = mbi.batch_id
+    where mb.workload = 'narrative_classification'
+      and mb.prompt_version = ${promptVersionParam}
+      and mbi.status not in ('submitted', 'completed')
+    group by mbi.document_id
+    having count(*) >= ${maxAttemptsParam}::int
+  )`;
+}
+
 export async function selectDocumentsForNarrativeClassification(
   options: {
     model: string;
@@ -130,25 +152,15 @@ export async function selectDocumentsForNarrativeClassification(
       content: string;
       text_hash: string;
     }>(
-      `with exhausted_documents as materialized (
-         select mbi.document_id
-         from anthropic_message_batch_items mbi
-         join anthropic_message_batches mb on mb.id = mbi.batch_id
-         where mb.workload = 'narrative_classification'
-           and mb.prompt_version = $7
-           and mbi.status not in ('submitted', 'completed')
-         group by mbi.document_id
-         having count(*) >= $8::int
-       ), eligible as (
-         select d.id, d.source_id, d.source_class, d.title, d.publisher, d.url,
-                d.published_at, d.created_at, d.tickers, d.summary, d.metadata,
-                dt.content, dt.content_hash as text_hash,
+      `with ${classificationEligibilityCtes("$7", "$8")}, eligible as (
+         select d.id, d.source_class, d.published_at, d.created_at,
                 row_number() over (
                   partition by d.source_class
                   order by d.published_at desc, d.created_at desc, d.id
                 ) as source_rank
          from documents d
          join document_texts dt on dt.document_id = d.id
+         left join covered_definitions coverage on coverage.document_id = d.id
          where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
            and d.published_at >= now() - ($5::int * interval '1 day')
            and not (d.id = any($4::text[]))
@@ -172,26 +184,29 @@ export async function selectDocumentsForNarrativeClassification(
              from narrative_definitions nd
              where nd.status in ('active', 'probationary')
                and d.published_at >= now() - (coalesce(nd.history_backfill_days, $5)::int * interval '1 day')
-               and not exists (
-                 select 1
-                 from narrative_observations no
-                 where no.narrative_definition_id = nd.id
-                   and no.document_id = d.id
-                   and no.model = $1
-                   and no.prompt_version = any($2::text[])
-                   and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
-               )
+               and not (nd.id = any(coalesce(coverage.definition_ids, array[]::text[])))
            )
        )
-       select id, source_id, source_class, title, publisher, url,
-              published_at::text, tickers, summary, metadata, content, text_hash
-       from eligible
+       , selected as materialized (
+       select * from eligible
        order by
          (published_at >= now() - ($6::int * interval '1 day')) desc,
          case when published_at >= now() - ($6::int * interval '1 day')
               then published_at end desc nulls last,
          source_rank, published_at desc, source_class, id
-       limit $3`,
+       limit $3
+       )
+       select d.id, d.source_id, d.source_class, d.title, d.publisher, d.url,
+              d.published_at::text, d.tickers, d.summary, d.metadata,
+              dt.content, dt.content_hash as text_hash
+       from selected s
+       join documents d on d.id = s.id
+       join document_texts dt on dt.document_id = s.id
+       order by
+         (s.published_at >= now() - ($6::int * interval '1 day')) desc,
+         case when s.published_at >= now() - ($6::int * interval '1 day')
+              then s.published_at end desc nulls last,
+         s.source_rank, s.published_at desc, s.source_class, s.id`,
       [
         options.model,
         resolveCompatibleClassificationPromptVersions(options.promptVersion),
@@ -354,12 +369,14 @@ export async function countNarrativeClassificationBacklog(
       source_class: SourceClass;
       count: string;
     }>(
-      `select d.source_class, count(*)::text as count
+      `with ${classificationEligibilityCtes("$4", "$5")}
+       select d.source_class, count(*)::text as count
        from documents d
        join document_texts dt on dt.document_id = d.id
+       left join covered_definitions coverage on coverage.document_id = d.id
        where coalesce(d.retention_policy, 'full_text') <> 'metadata_only'
          and d.published_at >= now() - ($3::int * interval '1 day')
-         and ${classificationAttemptsRemainingSql("$4", "$5")}
+         and not exists (select 1 from exhausted_documents exhausted where exhausted.document_id = d.id)
          and not exists (
            select 1
            from anthropic_message_batch_items mbi
@@ -379,15 +396,7 @@ export async function countNarrativeClassificationBacklog(
            from narrative_definitions nd
            where nd.status in ('active', 'probationary')
              and d.published_at >= now() - (coalesce(nd.history_backfill_days, $3)::int * interval '1 day')
-             and not exists (
-               select 1
-               from narrative_observations no
-               where no.narrative_definition_id = nd.id
-                 and no.document_id = d.id
-                 and no.model = $1
-                 and no.prompt_version = any($2::text[])
-                 and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
-             )
+             and not (nd.id = any(coalesce(coverage.definition_ids, array[]::text[])))
          )
        group by d.source_class
        order by d.source_class`,
