@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import pg from "pg";
+import { acquireTrendDatabaseLock } from "./trend-database-lock";
 import type {
   AnalysisDocument,
   AnalysisRunStatus,
@@ -1898,6 +1899,7 @@ export async function recomputeThemeTrends(
   await client.connect();
 
   try {
+    await acquireTrendDatabaseLock(client, "exclusive", { onWait: options.onProgress });
     const windows = options.windows ?? ["7d", "30d"];
     const lookbackDays = options.lookbackDays ?? 120;
     const lowHistoryDays = options.lowHistoryDays ?? 14;
