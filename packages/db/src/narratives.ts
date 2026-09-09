@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { acquireTrendDatabaseLock } from "./trend-database-lock";
 import { closeDatabaseClient, createDatabaseClient } from "./persistence";
 import {
   calculateNarrativeTrendSeries,
@@ -138,6 +139,7 @@ export async function selectDocumentsForNarrativeClassification(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
+    await acquireTrendDatabaseLock(client, "shared");
     const result = await client.query<{
       id: string;
       source_id: string;
@@ -365,6 +367,7 @@ export async function countNarrativeClassificationBacklog(
   const client = createDatabaseClient(databaseUrl);
   await client.connect();
   try {
+    await acquireTrendDatabaseLock(client, "shared");
     const result = await client.query<{
       source_class: SourceClass;
       count: string;

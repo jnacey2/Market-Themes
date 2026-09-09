@@ -394,3 +394,22 @@ test("classification rejects malformed, duplicate, unknown, and invented evidenc
     assert.throws(() => normalize(payload));
   }
 });
+
+test("classification persists original source punctuation after formatting recovery", () => {
+  const source = { ...document, text: "The firm’s demand rose &#x2014; capacity is constrained." };
+  const message = {
+    stop_reason: "end_turn",
+    content: [{ type: "text", text: JSON.stringify({ observations: [{
+      narrativeDefinitionId: definition.id, matched: true, matchScore: 95,
+      stance: "bullish", riskTone: 0, bullishTone: 90, contractSatisfied: true,
+      inclusionCriteriaSatisfied: ["Demand"], exclusionCriteriaTriggered: [],
+      evidenceSnippet: "firm's demand rose — capacity is constrained",
+      interpretation: "Demand", affectedEntities: []
+    }] }) }]
+  } as Parameters<typeof normalizeNarrativeClassificationMessage>[0];
+  const [observation] = normalizeNarrativeClassificationMessage(message, source, [definition], "fixture", "v7");
+  assert.equal(observation.matched, true);
+  assert.equal(observation.evidenceSnippet, "firm’s demand rose &#x2014; capacity is constrained");
+  assert.ok(source.text.includes(observation.evidenceSnippet));
+  assert.equal(observation.metadata?.textHash, source.textHash);
+});

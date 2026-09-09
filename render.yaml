@@ -384,9 +384,9 @@ services:
   - type: cron
     name: recompute-theme-trends
     runtime: node
-    # Runs ~26 minutes and rewrites ~700k rows. Starting at :32 keeps it clear
-    # of the :25 narrative recompute; it overlaps the :55 run only in its last
-    # minutes, which the narrative job's ten-minute query budget absorbs.
+    # Rewrites ~725k rows and can run through the next hour's :18. The DB
+    # rewrite and classification eligibility reads share an advisory lock, so
+    # overlapping classification waits without consuming its SQL timeout.
     schedule: "32 */4 * * *"
     buildCommand: npm ci --no-audit --no-fund
     startCommand: npm run themes:normalize:backfill --workspace @market-themes/workers && npm run trends:recompute --workspace @market-themes/workers

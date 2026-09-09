@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolveSourceQuotation } from "./source-quotation";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   Message,
@@ -41,6 +42,10 @@ exclusions. Never return a match when an exclusion is triggered.
 Every returned observation must use matched=true, contractSatisfied=true,
 matchScore 70-100, and an evidenceSnippet copied exactly from the source. Return an
 empty observations array when no definitions match. When uncertain, omit the definition.
+Quote only document.text; document.title and the definition examples are context, not evidence.
+Copy one contiguous passage, preserving punctuation and wording. Never join fragments
+with ellipses, reorder clauses, or paraphrase. If document.text does not contain a
+sufficient quotation, omit that definition even when the title suggests a match.
 Do not make trade recommendations.
 Stance is risk, bullish, mixed, or neutral.`;
 
@@ -199,14 +204,15 @@ export function normalizeNarrativeClassificationMessage(
     ) {
       throw new Error("Narrative classification contains malformed fields.");
     }
-    if (
-      raw.matched &&
-      (!raw.evidenceSnippet?.trim() ||
-        !document.text.includes(raw.evidenceSnippet.trim()))
-    ) {
-      throw new Error(
-        "Narrative classification quotation is absent from the source."
-      );
+    if (raw.matched) {
+      const sourceQuotation = resolveSourceQuotation(document.text, raw.evidenceSnippet ?? "");
+      if (!sourceQuotation) {
+        throw new Error(
+          "Narrative classification quotation is absent from the source."
+        );
+      }
+      // Persist the original bytes so downstream exact-source checks still apply.
+      raw.evidenceSnippet = sourceQuotation;
     }
   }
   const byDefinition = new Map(
