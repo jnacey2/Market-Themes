@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import pg from "pg";
 import { acquireTrendDatabaseLock } from "./trend-database-lock";
+import { loadSignalsForTrendComputation, type SignalTrendInput } from "./trend-signals";
 import type {
   AnalysisDocument,
   AnalysisRunStatus,
@@ -137,18 +138,6 @@ type RecomputeThemeTrendsOptions = {
 type SelectThemeGroupsOptions = {
   promptVersion: string;
   limit?: number;
-};
-
-type SignalTrendInput = {
-  signalId: string;
-  documentId: string;
-  themeId: string;
-  themeLabel: string;
-  trendLevel: "market" | "sector" | "unmapped";
-  signalDate: string;
-  sourceClass: SourceClass;
-  affectedEntities: string[];
-  scoreContribution: number;
 };
 
 export type DailyTrendBucket = {
@@ -1911,7 +1900,8 @@ export async function recomputeThemeTrends(
     const signals = await loadSignalsForTrendComputation(
       client,
       startDate,
-      asOfDate
+      asOfDate,
+      options.onProgress
     );
     options.onProgress?.(`loaded ${signals.length} signals`);
     const themes = groupSignalsByTheme(signals, startDate, asOfDate);
@@ -2534,58 +2524,6 @@ async function upgradeSubstackPreview(
     );
   }
   return chunks.length;
-}
-
-async function loadSignalsForTrendComputation(
-  client: DbClient,
-  startDate: string,
-  endDate: string
-) {
-  const result = await client.query<SignalTrendInput>(
-    `with trend_signal_rows as (
-      select
-        s.id,
-        s.document_id,
-        coalesce(s.canonical_theme_id, s.theme_id) as trend_theme_id,
-        case when s.canonical_theme_id is null then 'unmapped' else 'market' end as trend_level,
-        d.published_at,
-        d.source_class,
-        s.affected_entities,
-        s.score_contribution
-      from signals s
-      join documents d on d.id = s.document_id
-      where d.published_at::date between $1::date and $2::date
-      union all
-      select
-        s.id,
-        s.document_id,
-        s.canonical_subtheme_id as trend_theme_id,
-        'sector' as trend_level,
-        d.published_at,
-        d.source_class,
-        s.affected_entities,
-        s.score_contribution
-      from signals s
-      join documents d on d.id = s.document_id
-      where s.canonical_subtheme_id is not null
-        and d.published_at::date between $1::date and $2::date
-    )
-    select
-      tsr.id as "signalId",
-      tsr.document_id as "documentId",
-      tsr.trend_theme_id as "themeId",
-      t.label as "themeLabel",
-      tsr.trend_level as "trendLevel",
-      tsr.published_at::date::text as "signalDate",
-      tsr.source_class as "sourceClass",
-      tsr.affected_entities as "affectedEntities",
-      tsr.score_contribution::float as "scoreContribution"
-     from trend_signal_rows tsr
-     join themes t on t.id = tsr.trend_theme_id`,
-    [startDate, endDate]
-  );
-
-  return result.rows;
 }
 
 async function insertTrendRows(
