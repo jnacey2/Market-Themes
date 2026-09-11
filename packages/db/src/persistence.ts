@@ -1881,7 +1881,9 @@ export async function recomputeThemeTrends(
     process.env.TREND_DB_QUERY_TIMEOUT_MS ?? DEFAULT_TREND_QUERY_TIMEOUT_MS
   );
   const client = createDatabaseClient(databaseUrl, {
-    queryTimeoutMs: trendQueryTimeoutMs,
+    // SQL statements retain their server-side bound. Publication below gets a
+    // five-minute budget for the two sequential joins, with a longer client timer.
+    queryTimeoutMs: Math.max(trendQueryTimeoutMs, 300_000) + 5000,
     statementTimeoutMs: trendQueryTimeoutMs
   });
   options.onProgress?.("connecting");
@@ -1913,9 +1915,12 @@ export async function recomputeThemeTrends(
     const latestTrends: TrendSummary[] = [];
     await pruneTrendRowsBefore(client, storageStartDate, options.onProgress);
     await client.query("begin");
-    await client.query("create temporary table expected_trend_rows (id text primary key, date date not null) on commit drop");
+    await client.query(`create temporary table staged_theme_trends on commit drop as
+      select id, theme_id, trend_window, date, intensity, baseline_mean,
+             baseline_stddev, z_score, percentile_rank, source_mix
+      from theme_trends with no data`);
     const pendingRows: TrendRowInput[] = [];
-    let trendRowsChanged = 0;
+
 
     const seriesStartDate =
       storageStartDate < startDate ? storageStartDate : startDate;
@@ -1973,7 +1978,7 @@ export async function recomputeThemeTrends(
 
           trendRowsWritten += 1;
           if (pendingRows.length >= 1000) {
-            trendRowsChanged += await insertTrendRows(client, pendingRows);
+            await stageTrendRows(client, pendingRows);
             pendingRows.length = 0;
           }
 
@@ -2015,12 +2020,16 @@ export async function recomputeThemeTrends(
       }
     }
 
-    trendRowsChanged += await insertTrendRows(client, pendingRows);
-    // Temporary tables are not auto-analyzed. Date-scoped anti-joins avoid scanning
-    // all expected IDs again for each retained date.
-    await client.query("create index on expected_trend_rows (date)");
-    await client.query("analyze expected_trend_rows");
-    await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
+    await stageTrendRows(client, pendingRows);
+    // Publish with sequential joins over the complete staged snapshot. Repeating
+    // indexed heap lookups per batch thrashed the production database's small cache.
+    await client.query("analyze staged_theme_trends");
+    options.onProgress?.(`publishing ${trendRowsWritten} staged trend rows`);
+    const publicationTimeoutMs = Math.max(trendQueryTimeoutMs, 300_000);
+    await client.query("select set_config('statement_timeout', $1, true)", [String(publicationTimeoutMs)]);
+    const trendRowsChanged = await publishTrendRows(client);
+    await deleteObsoleteTrendRows(client, storageStartDate, asOfDate);
+    options.onProgress?.("removed obsolete trend rows");
     await client.query("commit");
     options.onProgress?.(
       `trend rows committed (${trendRowsWritten} retained, ${trendRowsChanged} inserted/updated, ${skippedEmptyRows} empty windows skipped)`
@@ -2533,46 +2542,20 @@ async function upgradeSubstackPreview(
   return chunks.length;
 }
 
-/** Keep unchanged history untouched; record every expected row for stale-row removal.
- * The caller holds the trend lock and one transaction across every batch and deletion.
- */
-async function insertTrendRows(client: DbClient, rows: TrendRowInput[]) {
+/** Stage bounded batches without touching the persistent heap or its indexes. */
+async function stageTrendRows(client: DbClient, rows: TrendRowInput[]) {
   const configuredBatchSize = Number(process.env.TREND_INSERT_BATCH_SIZE ?? 1000);
   const batchSize = Number.isInteger(configuredBatchSize) && configuredBatchSize > 0
     ? Math.min(configuredBatchSize, 1000) : 1000;
-  let changed = 0;
   for (let index = 0; index < rows.length; index += batchSize) {
     const batch = rows.slice(index, index + batchSize);
-    const result = await client.query(
-      `with incoming as materialized (
-         select * from unnest(
-           $1::text[], $2::text[], $3::text[], $4::date[],
-           $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[],
-           $9::numeric[], $10::jsonb[]
-         ) as r(id, theme_id, trend_window, date, intensity, baseline_mean,
-                baseline_stddev, z_score, percentile_rank, source_mix)
-       ), expected as (
-         insert into expected_trend_rows (id, date) select id, date from incoming
-       )
-       insert into theme_trends (
-         id, theme_id, trend_window, date, intensity, baseline_mean,
-         baseline_stddev, z_score, percentile_rank, source_mix
-       )
-       select incoming.* from incoming
-       left join theme_trends old using (theme_id, trend_window, date)
-       where old.id is distinct from incoming.id or
-         (old.intensity, old.baseline_mean, old.baseline_stddev, old.z_score,
-          old.percentile_rank, old.source_mix) is distinct from
-         (incoming.intensity, incoming.baseline_mean, incoming.baseline_stddev,
-          incoming.z_score, incoming.percentile_rank, incoming.source_mix)
-       on conflict (theme_id, trend_window, date) do update set
-         id = excluded.id,
-         intensity = excluded.intensity,
-         baseline_mean = excluded.baseline_mean,
-         baseline_stddev = excluded.baseline_stddev,
-         z_score = excluded.z_score,
-         percentile_rank = excluded.percentile_rank,
-         source_mix = excluded.source_mix`,
+    await client.query(
+      `insert into staged_theme_trends
+       select * from unnest(
+         $1::text[], $2::text[], $3::text[], $4::date[],
+         $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[],
+         $9::numeric[], $10::jsonb[]
+       )`,
       [
         batch.map((row) => row.id),
         batch.map((row) => row.themeId),
@@ -2586,33 +2569,45 @@ async function insertTrendRows(client: DbClient, rows: TrendRowInput[]) {
         batch.map((row) => JSON.stringify(row.sourceMix))
       ]
     );
-    changed += result.rowCount ?? 0;
   }
-  return changed;
 }
 
-async function deleteTrendRowsForDateRange(
+async function publishTrendRows(client: DbClient) {
+  const result = await client.query({
+    text: `insert into theme_trends (
+      id, theme_id, trend_window, date, intensity, baseline_mean,
+      baseline_stddev, z_score, percentile_rank, source_mix
+    )
+    select incoming.* from staged_theme_trends incoming
+    left join theme_trends old using (theme_id, trend_window, date)
+    where old.id is distinct from incoming.id or
+      (old.intensity, old.baseline_mean, old.baseline_stddev, old.z_score,
+       old.percentile_rank, old.source_mix) is distinct from
+      (incoming.intensity, incoming.baseline_mean, incoming.baseline_stddev,
+       incoming.z_score, incoming.percentile_rank, incoming.source_mix)
+    on conflict (theme_id, trend_window, date) do update set
+      id = excluded.id,
+      intensity = excluded.intensity,
+      baseline_mean = excluded.baseline_mean,
+      baseline_stddev = excluded.baseline_stddev,
+      z_score = excluded.z_score,
+      percentile_rank = excluded.percentile_rank,
+      source_mix = excluded.source_mix`
+  });
+  return result.rowCount ?? 0;
+}
+
+async function deleteObsoleteTrendRows(
   client: DbClient,
   startDate: string,
-  endDate: string,
-  onProgress?: (message: string) => void
+  endDate: string
 ) {
-  const dates = enumerateDates(startDate, endDate);
-
-  for (const [index, date] of dates.entries()) {
-    await client.query(
-      `delete from theme_trends
-       where date = $1::date
-         and not exists (select 1 from expected_trend_rows expected where expected.date = $1::date and expected.id = theme_trends.id)`,
-      [date]
-    );
-
-    if ((index + 1) % 10 === 0 || index === dates.length - 1) {
-      onProgress?.(
-        `removed obsolete trend rows for ${index + 1}/${dates.length} stored dates`
-      );
-    }
-  }
+  await client.query({
+    text: `delete from theme_trends
+      where date between $1::date and $2::date
+        and not exists (select 1 from staged_theme_trends expected where expected.id = theme_trends.id)`,
+    values: [startDate, endDate]
+  });
 }
 
 /**
