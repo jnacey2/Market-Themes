@@ -400,11 +400,11 @@ services:
       - key: TREND_LOW_HISTORY_DAYS
         value: "30"
       # Readers use at most 30 points of history; 45 days keeps a margin while
-      # halving the rows the four-hourly rewrite has to delete and insert.
+      # limiting retained history; unchanged rows are preserved on recompute.
       - key: TREND_STORAGE_DAYS
         value: "45"
       - key: TREND_INSERT_BATCH_SIZE
-        value: "250"
+        value: "1000"
       - key: NODE_OPTIONS
         value: --max-old-space-size=384
       - key: DB_QUERY_TIMEOUT_MS

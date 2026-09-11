@@ -8,6 +8,13 @@ const SEC_ARCHIVES_BASE_URL = "https://www.sec.gov/Archives/edgar/data";
 const DEFAULT_USER_AGENT = "MarketThemesBot/0.1 contact@example.com";
 const DEFAULT_RATE_LIMIT_MS = 220;
 const coreNarrativeForms = new Set(["10-K", "10-Q", "8-K"]);
+const foreignReportForms = new Set(["20-F", "40-F", "6-K"]);
+const foreignCapitalForms = new Set(["F-1", "F-1/A", "F-3", "F-3/A", "F-4", "F-4/A"]);
+const foreignStressForms = new Set(["20-F/A", "40-F/A", "6-K/A", "NT 20-F"]);
+
+// Complement the domestic index universe without expanding news/transcript API calls.
+export const DEFAULT_SEC_ADDITIONAL_TICKERS = ["TSM", "ASML", "NVO", "TM", "SONY", "SAP", "SHEL", "TTE", "BHP", "RIO", "UL", "HSBC"];
+
 const periodicReportForms = new Set(["10-K", "10-Q"]);
 const proxyForms = new Set(["DEF 14A", "DEFA14A", "PRE 14A"]);
 const capitalMarketsForms = new Set([
@@ -47,6 +54,8 @@ type FilingCategory =
 
 type SecFormConfig = {
   includeCoreForms: boolean;
+  includeForeignForms: boolean;
+  include6kExhibits: boolean;
   /** When false, core forms are only the periodic reports (10-K, 10-Q); 8-Ks are skipped. */
   include8kForms: boolean;
   includeProxyForms: boolean;
@@ -59,6 +68,7 @@ type SecFormConfig = {
 
 export type SecConnectorOptions = {
   tickers?: string[];
+  additionalTickers?: string[];
   lookbackMonths?: number;
   lookbackDays?: number;
   maxFilingsPerTicker?: number;
@@ -157,7 +167,10 @@ export function createSecFilingsConnector(options: SecConnectorOptions = {}) {
     sourceClass: "filing" as const,
     description: "Official SEC submissions and filing document connector.",
     async poll() {
-      const tickers = await resolveTargetTickers({ explicit: options.tickers });
+      const baseTickers = await resolveTargetTickers({ explicit: options.tickers });
+      const additional = options.additionalTickers ?? (options.tickers ? [] :
+        process.env.SEC_ADDITIONAL_TICKERS?.split(",") ?? DEFAULT_SEC_ADDITIONAL_TICKERS);
+      const tickers = normalizeTickers([...baseTickers, ...additional]);
       return fetchSecFilings({
         tickers,
         userAgent,
@@ -199,7 +212,13 @@ export async function fetchSecFilings({
     }
 
     await sleep(rateLimitMs);
-    const submission = await fetchCompanySubmission(company.cik, userAgent);
+    let submission: SecSubmissionResponse;
+    try {
+      submission = await fetchCompanySubmission(company.cik, userAgent);
+    } catch (error) {
+      console.warn(`[sec] skipping issuer ${ticker}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
     const filings = selectFilings({
       ticker,
       companyName: company.companyName,
@@ -231,8 +250,16 @@ export async function fetchSecFilings({
 
       documents.push(toPersistableDocument(filing, body));
 
-      if (formConfig.include8kExhibits && filing.form === "8-K") {
-        const exhibits = await fetchRelevantExhibits(filing, userAgent);
+      if ((formConfig.include8kExhibits && filing.form === "8-K") ||
+          (formConfig.include6kExhibits && filing.form === "6-K")) {
+        let exhibits: SecFilingTarget[];
+        try {
+          await sleep(rateLimitMs);
+          exhibits = await fetchRelevantExhibits(filing, userAgent);
+        } catch (error) {
+          console.warn(`[sec] skipping exhibit index ${filing.accessionNumber}: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
 
         for (const exhibit of exhibits) {
           await sleep(rateLimitMs);
@@ -490,7 +517,7 @@ function classifyRelevance(
 ): "high" | "medium" | "low" {
   const filingCategory = categorizeForm(form);
 
-  if (form === "10-K" || form === "10-Q" || filingCategory === "stress") {
+  if (periodicReportForms.has(form) || foreignReportForms.has(form) || filingCategory === "stress") {
     return "high";
   }
 
@@ -568,6 +595,8 @@ export function resolveSecFormConfig(
   overrides: Partial<SecFormConfig> = {}
 ): SecFormConfig {
   return {
+    includeForeignForms: envFlag("SEC_INCLUDE_FOREIGN_FORMS", true),
+    include6kExhibits: envFlag("SEC_INCLUDE_6K_EXHIBITS", true),
     includeCoreForms: envFlag("SEC_INCLUDE_CORE_FORMS", true),
     include8kForms: envFlag("SEC_INCLUDE_8K_FORMS", true),
     includeProxyForms: envFlag("SEC_INCLUDE_PROXY_FORMS", true),
@@ -588,6 +617,12 @@ export function getEnabledForms(config: SecFormConfig) {
 
   if (config.includeCoreForms) {
     addForms(forms, config.include8kForms ? coreNarrativeForms : periodicReportForms);
+  }
+
+  if (config.includeForeignForms) {
+    if (config.includeCoreForms) addForms(forms, foreignReportForms);
+    if (config.includeCapitalMarketsForms) addForms(forms, foreignCapitalForms);
+    if (config.includeStressForms) addForms(forms, foreignStressForms);
   }
 
   if (config.includeProxyForms) {
@@ -628,7 +663,7 @@ function categorizeForm(form: string): FilingCategory {
     return "proxy";
   }
 
-  if (capitalMarketsForms.has(form)) {
+  if (capitalMarketsForms.has(form) || foreignCapitalForms.has(form)) {
     return "capital_markets";
   }
 
@@ -636,7 +671,7 @@ function categorizeForm(form: string): FilingCategory {
     return "ownership";
   }
 
-  if (stressForms.has(form)) {
+  if (stressForms.has(form) || foreignStressForms.has(form)) {
     return "stress";
   }
 

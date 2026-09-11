@@ -28,6 +28,7 @@ type FeedItem = {
   link?: string | { "#text"?: string; "@_href"?: string };
   guid?: string | { "#text"?: string };
   pubDate?: string;
+  "dc:date"?: string;
   published?: string;
   updated?: string;
   description?: string;
@@ -110,7 +111,8 @@ function extractItems(parsed: Record<string, unknown>): FeedItem[] {
   const rss = object(parsed.rss);
   const channel = object(rss?.channel);
   const feed = object(parsed.feed);
-  const value = channel?.item ?? feed?.entry ?? [];
+  const rdf = object(parsed["rdf:RDF"]);
+  const value = channel?.item ?? feed?.entry ?? rdf?.item ?? [];
   return (Array.isArray(value) ? value : [value]).filter(isFeedItem);
 }
 
@@ -121,7 +123,7 @@ function toDocument(
   const title = cleanHtml(text(item.title));
   const url = text(item.link) || text(item.guid);
   const publishedAt = normalizeDate(
-    item.pubDate ?? item.published ?? item.updated
+    item.pubDate ?? item.published ?? item.updated ?? item["dc:date"]
   );
   const fullBody = cleanHtml(
     text(item["content:encoded"]) ||
