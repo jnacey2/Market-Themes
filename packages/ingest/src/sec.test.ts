@@ -51,14 +51,14 @@ test("SEC keeps foreign issuer reports and 6-K exhibits when a different issuer 
       filingDate: [new Date().toISOString().slice(0, 10), new Date().toISOString().slice(0, 10)],
       reportDate: ["", ""], items: ["", ""], primaryDocument: ["report.htm", "annual.htm"], primaryDocDescription: ["Results", "Annual report"]
     }}});
-    if (url.endsWith("index.json")) return Response.json({directory:{item:[{name:"ex991.htm",type:"EX-99.1"}]}});
+    if (url.endsWith("index.json")) return Response.json({directory:{item:[{name:"ex991.htm",type:"text/html"}]}});
     return new Response("<p>Operating results and capital expenditure increased.</p>");
   });
   const docs = await createSecFilingsConnector({tickers:["BAD"], additionalTickers:["TSM", "tsm"], rateLimitMs:0}).poll();
   assert.equal(docs.length, 3);
   assert.equal(requested.filter(url => url.includes("CIK0000000002")).length, 1, "supplemental tickers are deduplicated");
   assert.ok(docs.every(doc => doc.tickers.includes("TSM")));
-  assert.ok(docs.some(doc => doc.metadata?.parentForm === "6-K" && doc.metadata?.documentKind === "exhibit"));
+  assert.ok(docs.some(doc => doc.metadata?.parentForm === "6-K" && doc.metadata?.documentKind === "exhibit" && doc.metadata?.exhibitType === "EX-99.1"));
   assert.ok(docs.some(doc => doc.metadata?.form === "20-F" && doc.metadata?.relevanceTier === "high"));
 
   context.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {

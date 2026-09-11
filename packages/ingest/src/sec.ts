@@ -389,7 +389,7 @@ async function fetchRelevantExhibits(
       continue;
     }
 
-    const exhibitType = normalizeExhibitType(item.type ?? inferExhibitType(item.name));
+    const exhibitType = resolveExhibitType(item);
 
     exhibits.push({
       ...filing,
@@ -724,7 +724,7 @@ function isRelevantExhibit(
     return false;
   }
 
-  const exhibitType = normalizeExhibitType(item.type ?? inferExhibitType(item.name));
+  const exhibitType = resolveExhibitType(item);
 
   if (relevantExhibitTypes.has(exhibitType)) {
     return true;
@@ -742,6 +742,13 @@ function isRelevantExhibit(
   ].some((signal) => name.includes(signal));
 }
 
+// EDGAR directory index.json usually supplies a MIME type (e.g. text/html),
+// not an exhibit form. Only actual EX-* labels should override filename inference.
+function resolveExhibitType(item: { name: string; type?: string }) {
+  const declared = normalizeExhibitType(item.type ?? "");
+  return /^EX-\d/.test(declared) ? declared : inferExhibitType(item.name);
+}
+
 function normalizeExhibitType(type: string) {
   return type.trim().toUpperCase().replace(/\s+/g, "");
 }
@@ -749,9 +756,8 @@ function normalizeExhibitType(type: string) {
 function inferExhibitType(name: string) {
   const lower = name.toLowerCase();
 
-  if (lower.includes("ex99") || lower.includes("ex-99")) {
-    return "EX-99";
-  }
+  const exhibit99 = lower.match(/ex(?:hibit)?[-_]?99(?:[._-]?([12]))?/);
+  if (exhibit99) return exhibit99[1] ? `EX-99.${exhibit99[1]}` : "EX-99";
 
   if (lower.includes("ex10") || lower.includes("ex-10")) {
     return "EX-10";
