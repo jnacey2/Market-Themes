@@ -90,6 +90,27 @@ test(
       rows.rows.length < 45,
       `no-information windows are not stored (${rows.rows.length} of 45 dates kept)`
     );
+    const snapshot = () => client.query(
+      "select id, xmin::text as version, intensity::text, source_mix from theme_trends where theme_id = $1 order by id",
+      [themeId]
+    );
+    const before = (await snapshot()).rows;
+    const options = { asOfDate, lookbackDays: 60, lowHistoryDays: 14, storageDays: 45, windows: ["7d" as const] };
+    const unchanged = await recomputeThemeTrends(options);
+    assert.equal(unchanged.trendRowsChanged, 0);
+    assert.deepEqual((await snapshot()).rows, before, "identical runs do not rewrite rows (including MVCC versions)");
+    await client.query("update signals set score_contribution = 3 where id = $1", [`integration:signal:${suffix}`]);
+    await recomputeThemeTrends(options);
+    const changed = (await snapshot()).rows;
+    assert.ok(changed.some((row, index) => row.intensity !== before[index].intensity), "changed evidence updates scores");
+    await client.query("update signals set score_contribution = 5 where id = $1", [`integration:signal:${suffix}`]);
+    await assert.rejects(recomputeThemeTrends({ ...options, onProgress(message) {
+      if (message.startsWith("removed obsolete")) throw new Error("publication interrupted");
+    }}), /publication interrupted/);
+    assert.deepEqual((await snapshot()).rows, changed, "failed publication rolls back writes and deletions");
+    await client.query("delete from signals where theme_id = $1", [themeId]);
+    await recomputeThemeTrends(options);
+    assert.equal((await snapshot()).rows.length, 0, "disappearing themes leave no stale trends");
     for (const row of rows.rows) {
       if (row.date === asOfDate) continue;
       assert.ok(

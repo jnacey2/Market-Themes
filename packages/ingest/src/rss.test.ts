@@ -58,3 +58,22 @@ test("attributes syndicated RSS copy to its wire origin", () => {
     null
   );
 });
+
+test("RSS 1.0 central-bank feeds preserve dates, body, ownership and poll bounds", async () => {
+  const recent = new Date().toISOString();
+  const xml = `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel><title>Central bank</title></channel>
+    <item><title>Policy decision</title><link>https://bank.example/decision</link><dc:date>${recent}</dc:date><description>Policy rate held steady.</description></item>
+    <item><title>Old decision</title><link>https://bank.example/old</link><dc:date>2001-01-01</dc:date><description>Old policy.</description></item>
+    <item><title>No evidence</title><link>https://bank.example/empty</link><dc:date>${recent}</dc:date></item>
+  </rdf:RDF>`;
+  const connector = createRssConnector({ id: "central-bank", name: "Central bank", url: "https://bank.example/feed",
+    sourceClass: "central_bank", publisherOwner: "Central bank", lookbackHours: 24, maxPostsPerPoll: 20,
+    fetchImpl: (async () => new Response(xml)) as typeof fetch });
+  const docs = await connector.poll();
+  assert.equal(docs.length, 1);
+  assert.equal(docs[0].publishedAt, recent);
+  assert.equal(docs[0].sourceClass, "central_bank");
+  assert.equal(docs[0].publisherOwner, "central-bank");
+  assert.equal(docs[0].body, "Policy rate held steady.");
+});

@@ -97,7 +97,13 @@ function classificationEligibilityCtes(
   promptVersionParam: string,
   maxAttemptsParam: string
 ) {
-  return `covered_definitions as materialized (
+  return `pending_documents as materialized (
+    select distinct mbi.document_id
+    from anthropic_message_batches mb
+    join anthropic_message_batch_items mbi on mbi.batch_id = mb.id
+    where mb.workload = 'narrative_classification'
+      and mb.status in ('submitting', 'submission_unknown', 'in_progress', 'canceling', 'processing_results')
+  ), covered_definitions as materialized (
     select document_id, array_agg(narrative_definition_id) as definition_ids
     from narrative_observations
     where model = $1 and prompt_version = any($2::text[])
@@ -168,18 +174,7 @@ export async function selectDocumentsForNarrativeClassification(
            and not (d.id = any($4::text[]))
            and not exists (select 1 from exhausted_documents exhausted where exhausted.document_id = d.id)
            and not exists (
-             select 1
-             from anthropic_message_batch_items mbi
-             join anthropic_message_batches mb on mb.id = mbi.batch_id
-             where mbi.document_id = d.id
-               and mb.workload = 'narrative_classification'
-               and mb.status in (
-                 'submitting',
-                 'submission_unknown',
-                 'in_progress',
-                 'canceling',
-                 'processing_results'
-               )
+             select 1 from pending_documents pending where pending.document_id = d.id
            )
            and exists (
              select 1
@@ -381,18 +376,7 @@ export async function countNarrativeClassificationBacklog(
          and d.published_at >= now() - ($3::int * interval '1 day')
          and not exists (select 1 from exhausted_documents exhausted where exhausted.document_id = d.id)
          and not exists (
-           select 1
-           from anthropic_message_batch_items mbi
-           join anthropic_message_batches mb on mb.id = mbi.batch_id
-           where mbi.document_id = d.id
-             and mb.workload = 'narrative_classification'
-             and mb.status in (
-               'submitting',
-               'submission_unknown',
-               'in_progress',
-               'canceling',
-               'processing_results'
-             )
+           select 1 from pending_documents pending where pending.document_id = d.id
          )
          and exists (
            select 1
@@ -1114,15 +1098,19 @@ export async function autoApproveNarrativeObservations(
       ? ` ending ${windowEnd.toISOString().slice(0, 10)}`
       : "") +
     ".";
-  const client = createDatabaseClient(databaseUrl);
+  const client = createDatabaseClient(databaseUrl, {
+    queryTimeoutMs: 95_000,
+    statementTimeoutMs: 90_000
+  });
   await client.connect();
   try {
+    await acquireTrendDatabaseLock(client, "shared");
     const result = await client.query<{
       approved_count: string;
       narratives_touched: string;
       observation_ids: string[];
     }>(
-      `with eligible as (
+      `with candidates as materialized (
          select no.id, no.narrative_definition_id, no.document_id,
                 lower(coalesce(
                   nullif(d.publisher_owner, ''),
@@ -1134,11 +1122,10 @@ export async function autoApproveNarrativeObservations(
                   nullif(d.metadata->>'wireStoryId', ''),
                   md5(lower(regexp_replace(d.title, '[^a-z0-9]+', ' ', 'g')))
                 ) as story_fingerprint,
-                no.match_score,
+                no.match_score, no.evidence_snippet,
                 d.published_at
          from narrative_observations no
          join documents d on d.id = no.document_id
-         join document_texts dt on dt.document_id = d.id
          join narrative_definitions nd on nd.id = no.narrative_definition_id
          where no.matched
            and nd.status in ('active', 'probationary')
@@ -1147,7 +1134,6 @@ export async function autoApproveNarrativeObservations(
            and no.prompt_version = $2
            and no.match_score >= $3
            and no.evidence_snippet <> ''
-           and position(no.evidence_snippet in dt.content) > 0
            and coalesce(no.metadata->>'promotionSeed', 'false') <> 'true'
            and no.metadata->'contractValidation'->>'satisfied' = 'true'
            and d.published_at >= $11::timestamptz - ($4::text || ' days')::interval
@@ -1169,6 +1155,11 @@ export async function autoApproveNarrativeObservations(
                 or lower(d.url) like '%//' || blocked.value || ':%/%'
                 or lower(d.url) like '%.' || blocked.value || ':%/%'
            )
+       ),
+       eligible as (
+         select candidates.* from candidates
+         join document_texts dt on dt.document_id = candidates.document_id
+         where position(candidates.evidence_snippet in dt.content) > 0
        ),
        corroborating as (
          select id, narrative_definition_id, document_id,

@@ -315,7 +315,10 @@ export type ThemeDetailStatus = {
 
 export type RecomputeThemeTrendsResult = {
   themesProcessed: number;
+  /** Expected rows retained in the published snapshot, including unchanged rows. */
   trendRowsWritten: number;
+  /** Physical inserts and updates; identical reruns should write zero rows. */
+  trendRowsChanged: number;
   /** Windows with no evidence, zero intensity, and zero z-score that were not stored. */
   skippedEmptyRows: number;
   lowHistoryRows: number;

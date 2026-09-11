@@ -1913,12 +1913,9 @@ export async function recomputeThemeTrends(
     const latestTrends: TrendSummary[] = [];
     await pruneTrendRowsBefore(client, storageStartDate, options.onProgress);
     await client.query("begin");
-    await deleteTrendRowsForDateRange(
-      client,
-      storageStartDate,
-      asOfDate,
-      options.onProgress
-    );
+    await client.query("create temporary table expected_trend_rows (id text primary key, date date not null) on commit drop");
+    const pendingRows: TrendRowInput[] = [];
+    let trendRowsChanged = 0;
 
     const seriesStartDate =
       storageStartDate < startDate ? storageStartDate : startDate;
@@ -1927,7 +1924,6 @@ export async function recomputeThemeTrends(
     const firstStorageIndex = allDates.indexOf(storageDates[0]);
     const baselineStartIndex = allDates.indexOf(startDate);
     for (const theme of themes.values()) {
-      const themeTrendRows: TrendRowInput[] = [];
       const series = buildThemeTrendSeries(theme.buckets, allDates);
       for (const [offset, date] of storageDates.entries()) {
         for (const trendWindow of windows) {
@@ -1962,7 +1958,7 @@ export async function recomputeThemeTrends(
             continue;
           }
 
-          themeTrendRows.push({
+          pendingRows.push({
             id: trendId(theme.themeId, trendWindow, date),
             themeId: theme.themeId,
             trendWindow,
@@ -1974,6 +1970,12 @@ export async function recomputeThemeTrends(
             percentileRank: score.percentileRank,
             sourceMix: score.sourceMix
           });
+
+          trendRowsWritten += 1;
+          if (pendingRows.length >= 1000) {
+            trendRowsChanged += await insertTrendRows(client, pendingRows);
+            pendingRows.length = 0;
+          }
 
           if (date === asOfDate) {
             latestTrends.push({
@@ -2005,24 +2007,29 @@ export async function recomputeThemeTrends(
         }
       }
 
-      await insertTrendRows(client, themeTrendRows);
-      trendRowsWritten += themeTrendRows.length;
       themesStored += 1;
-      if (themesStored % 25 === 0 || themesStored === themes.size) {
+      if (themesStored % 250 === 0 || themesStored === themes.size) {
         options.onProgress?.(
-          `stored ${trendRowsWritten} trend rows for ${themesStored}/${themes.size} themes`
+          `prepared ${trendRowsWritten} trend rows for ${themesStored}/${themes.size} themes`
         );
       }
     }
 
+    trendRowsChanged += await insertTrendRows(client, pendingRows);
+    // Temporary tables are not auto-analyzed. Date-scoped anti-joins avoid scanning
+    // all expected IDs again for each retained date.
+    await client.query("create index on expected_trend_rows (date)");
+    await client.query("analyze expected_trend_rows");
+    await deleteTrendRowsForDateRange(client, storageStartDate, asOfDate, options.onProgress);
     await client.query("commit");
     options.onProgress?.(
-      `trend rows committed (${trendRowsWritten} written, ${skippedEmptyRows} empty windows skipped)`
+      `trend rows committed (${trendRowsWritten} retained, ${trendRowsChanged} inserted/updated, ${skippedEmptyRows} empty windows skipped)`
     );
 
     return {
       themesProcessed: themes.size,
       trendRowsWritten,
+      trendRowsChanged,
       skippedEmptyRows,
       lowHistoryRows,
       topTrends: latestTrends
@@ -2526,40 +2533,46 @@ async function upgradeSubstackPreview(
   return chunks.length;
 }
 
-async function insertTrendRows(
-  client: DbClient,
-  rows: TrendRowInput[],
-  onProgress?: (message: string) => void
-) {
-  const batchSize = Number(process.env.TREND_INSERT_BATCH_SIZE ?? 250);
-
+/** Keep unchanged history untouched; record every expected row for stale-row removal.
+ * The caller holds the trend lock and one transaction across every batch and deletion.
+ */
+async function insertTrendRows(client: DbClient, rows: TrendRowInput[]) {
+  const configuredBatchSize = Number(process.env.TREND_INSERT_BATCH_SIZE ?? 1000);
+  const batchSize = Number.isInteger(configuredBatchSize) && configuredBatchSize > 0
+    ? Math.min(configuredBatchSize, 1000) : 1000;
+  let changed = 0;
   for (let index = 0; index < rows.length; index += batchSize) {
     const batch = rows.slice(index, index + batchSize);
-    await client.query(
-      `insert into theme_trends (
-        id,
-        theme_id,
-        trend_window,
-        date,
-        intensity,
-        baseline_mean,
-        baseline_stddev,
-        z_score,
-        percentile_rank,
-        source_mix
-      )
-      select * from unnest(
-        $1::text[],
-        $2::text[],
-        $3::text[],
-        $4::date[],
-        $5::numeric[],
-        $6::numeric[],
-        $7::numeric[],
-        $8::numeric[],
-        $9::numeric[],
-        $10::jsonb[]
-      )`,
+    const result = await client.query(
+      `with incoming as materialized (
+         select * from unnest(
+           $1::text[], $2::text[], $3::text[], $4::date[],
+           $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[],
+           $9::numeric[], $10::jsonb[]
+         ) as r(id, theme_id, trend_window, date, intensity, baseline_mean,
+                baseline_stddev, z_score, percentile_rank, source_mix)
+       ), expected as (
+         insert into expected_trend_rows (id, date) select id, date from incoming
+       )
+       insert into theme_trends (
+         id, theme_id, trend_window, date, intensity, baseline_mean,
+         baseline_stddev, z_score, percentile_rank, source_mix
+       )
+       select incoming.* from incoming
+       left join theme_trends old using (theme_id, trend_window, date)
+       where old.id is distinct from incoming.id or
+         (old.intensity, old.baseline_mean, old.baseline_stddev, old.z_score,
+          old.percentile_rank, old.source_mix) is distinct from
+         (incoming.intensity, incoming.baseline_mean, incoming.baseline_stddev,
+          incoming.z_score, incoming.percentile_rank, incoming.source_mix)
+       on conflict (theme_id, trend_window, date) do update set
+         id = excluded.id,
+         intensity = excluded.intensity,
+         baseline_mean = excluded.baseline_mean,
+         baseline_stddev = excluded.baseline_stddev,
+         z_score = excluded.z_score,
+         percentile_rank = excluded.percentile_rank,
+         source_mix = excluded.source_mix`,
       [
         batch.map((row) => row.id),
         batch.map((row) => row.themeId),
@@ -2573,11 +2586,9 @@ async function insertTrendRows(
         batch.map((row) => JSON.stringify(row.sourceMix))
       ]
     );
-
-    onProgress?.(
-      `inserted ${Math.min(index + batch.length, rows.length)}/${rows.length} trend rows`
-    );
+    changed += result.rowCount ?? 0;
   }
+  return changed;
 }
 
 async function deleteTrendRowsForDateRange(
@@ -2591,13 +2602,14 @@ async function deleteTrendRowsForDateRange(
   for (const [index, date] of dates.entries()) {
     await client.query(
       `delete from theme_trends
-       where date = $1::date`,
+       where date = $1::date
+         and not exists (select 1 from expected_trend_rows expected where expected.date = $1::date and expected.id = theme_trends.id)`,
       [date]
     );
 
     if ((index + 1) % 10 === 0 || index === dates.length - 1) {
       onProgress?.(
-        `deleted trend rows for ${index + 1}/${dates.length} stored dates`
+        `removed obsolete trend rows for ${index + 1}/${dates.length} stored dates`
       );
     }
   }

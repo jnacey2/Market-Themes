@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node --import tsx src/worker.ts",
+    "sources:broaden": "node --import tsx src/jobs/broaden-sources.ts",
     "poll:sources": "node --import tsx src/jobs/poll-sources.ts",
     "sec:smoke": "node --import tsx src/jobs/sec-smoke.ts",
     "sec:backfill": "node --import tsx src/jobs/sec-backfill.ts",

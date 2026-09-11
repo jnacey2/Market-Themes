@@ -1149,3 +1149,43 @@ by one noisy source or by real breadth across publisher owners.
 ## Repository
 
 GitHub: `https://github.com/jnacey2/Market-Themes.git`
+
+### Broader narrative sources
+
+The official connector defaults now also cover Bank of England news and speeches,
+Bank of Canada releases, Reserve Bank of Australia releases, Census economic
+indicators, Department of Labor releases, and SEC press releases. These feeds keep
+at most 20 items per poll over a 14-day overlap; existing document deduplication
+prevents repeated evidence. RSS 1.0/RDF and `dc:date` are supported alongside RSS 2.0
+and Atom. Feed summaries remain summaries: no title-only evidence or invented
+article text is introduced. `OFFICIAL_FEEDS_JSON` still overrides the default list.
+
+Register the complementary sector news feeds once per environment:
+
+```bash
+npm run sources:broaden --workspace @market-themes/workers
+```
+
+This adds Utility Dive, Banking Dive, Supply Chain Dive, Healthcare Dive,
+FreightWaves, Semiconductor Engineering, and The Register, retaining only public
+RSS summaries (20 items per feed per poll). Existing registrations and disabled
+feeds retain their settings. Industry Dive publications share one publisher owner
+for corroboration; adding its publications does not manufacture independent sources.
+
+SEC polling also appends TSM, ASML, NVO, TM, SONY, SAP, SHEL, TTE, BHP, RIO, UL and
+HSBC to the domestic universe. Override `SEC_ADDITIONAL_TICKERS`, or set it to an
+empty string to opt out. This does not expand FMP news/transcript API requests.
+Explicit connector ticker lists remain scoped unless `additionalTickers` is supplied.
+`SEC_INCLUDE_FOREIGN_FORMS=false` disables the additional 20-F, 40-F, 6-K, F-1/F-3/F-4
+and amendment forms. Each category still respects its existing switch.
+`SEC_INCLUDE_6K_EXHIBITS` controls accompanying results/announcement exhibits.
+An unavailable issuer or exhibit index no longer discards other successfully fetched
+filings. Existing request timeouts and SEC rate limiting remain in force.
+
+Feed references: [Bank of England](https://www.bankofengland.co.uk/rss),
+[Bank of Canada](https://www.bankofcanada.ca/rss-feeds/),
+[Reserve Bank of Australia](https://www.rba.gov.au/rss/),
+[Census indicators](https://www.census.gov/economic-indicators/indicator.xml),
+[Labor releases](https://www.dol.gov/rss/releases.xml),
+[SEC releases](https://www.sec.gov/news/pressreleases.rss), and
+[SEC foreign issuer reporting](https://www.investor.gov/introduction-investing/getting-started/researching-investments/using-edgar-research-investments).
