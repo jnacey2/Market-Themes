@@ -1882,7 +1882,7 @@ export async function recomputeThemeTrends(
   );
   const client = createDatabaseClient(databaseUrl, {
     // SQL statements retain their server-side bound. Publication below gets a
-    // five-minute budget for the two sequential joins, with a longer client timer.
+    // five-minute statement budget for bulk comparisons and bounded writes.
     queryTimeoutMs: Math.max(trendQueryTimeoutMs, 300_000) + 5000,
     statementTimeoutMs: trendQueryTimeoutMs
   });
@@ -2027,7 +2027,7 @@ export async function recomputeThemeTrends(
     options.onProgress?.(`publishing ${trendRowsWritten} staged trend rows`);
     const publicationTimeoutMs = Math.max(trendQueryTimeoutMs, 300_000);
     await client.query("select set_config('statement_timeout', $1, true)", [String(publicationTimeoutMs)]);
-    const trendRowsChanged = await publishTrendRows(client);
+    const trendRowsChanged = await publishTrendRows(client, options.onProgress);
     await deleteObsoleteTrendRows(client, storageStartDate, asOfDate);
     options.onProgress?.("removed obsolete trend rows");
     await client.query("commit");
@@ -2572,19 +2572,35 @@ async function stageTrendRows(client: DbClient, rows: TrendRowInput[]) {
   }
 }
 
-async function publishTrendRows(client: DbClient) {
-  const result = await client.query({
-    text: `insert into theme_trends (
-      id, theme_id, trend_window, date, intensity, baseline_mean,
-      baseline_stddev, z_score, percentile_rank, source_mix
-    )
-    select incoming.* from staged_theme_trends incoming
+async function publishTrendRows(client: DbClient, onProgress?: (message: string) => void) {
+  // Compare the full snapshot once, then bound the writes. At UTC rollover the
+  // baseline changes most history rows; one giant upsert exceeded five minutes.
+  await client.query(`create temporary table changed_theme_trends on commit drop as
+    select row_number() over () as sequence, incoming.*
+    from staged_theme_trends incoming
     left join theme_trends old using (theme_id, trend_window, date)
     where old.id is distinct from incoming.id or
       (old.intensity, old.baseline_mean, old.baseline_stddev, old.z_score,
        old.percentile_rank, old.source_mix) is distinct from
       (incoming.intensity, incoming.baseline_mean, incoming.baseline_stddev,
-       incoming.z_score, incoming.percentile_rank, incoming.source_mix)
+       incoming.z_score, incoming.percentile_rank, incoming.source_mix)`);
+  await client.query("create index on changed_theme_trends (sequence)");
+  await client.query("analyze changed_theme_trends");
+  const count = await client.query<{ count: string }>("select count(*)::text as count from changed_theme_trends");
+  const total = Number(count.rows[0].count);
+  const configured = Number(process.env.TREND_PUBLICATION_BATCH_SIZE ?? 2000);
+  const batchSize = Number.isInteger(configured) && configured > 0 ? Math.min(configured, 5000) : 2000;
+  let written = 0;
+  onProgress?.(`identified ${total} changed trend rows`);
+  for (let offset = 0; offset < total; offset += batchSize) {
+    const result = await client.query(`insert into theme_trends (
+      id, theme_id, trend_window, date, intensity, baseline_mean,
+      baseline_stddev, z_score, percentile_rank, source_mix
+    )
+    select id, theme_id, trend_window, date, intensity, baseline_mean,
+           baseline_stddev, z_score, percentile_rank, source_mix
+    from changed_theme_trends where sequence > $1 and sequence <= $2
+    order by sequence
     on conflict (theme_id, trend_window, date) do update set
       id = excluded.id,
       intensity = excluded.intensity,
@@ -2592,9 +2608,11 @@ async function publishTrendRows(client: DbClient) {
       baseline_stddev = excluded.baseline_stddev,
       z_score = excluded.z_score,
       percentile_rank = excluded.percentile_rank,
-      source_mix = excluded.source_mix`
-  });
-  return result.rowCount ?? 0;
+      source_mix = excluded.source_mix`, [offset, offset + batchSize]);
+    written += result.rowCount ?? 0;
+    onProgress?.(`published ${written}/${total} changed trend rows`);
+  }
+  return written;
 }
 
 async function deleteObsoleteTrendRows(

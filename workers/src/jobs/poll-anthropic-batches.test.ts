@@ -60,3 +60,12 @@ test("reconciles workloads independently when one poller fails", async () => {
     console.error = originalError;
   }
 });
+
+test("records partial progress even when a batch has not finished", async () => {
+  const result = await pollAnthropicBatches({pollers: [{name: "classification", poll: async () => ({
+    status: "in_progress", summary: {documentsProcessed: 16, failedDocuments: 1}
+  })}]});
+  assert.equal(result.batchesCompleted, 0);
+  assert.equal(result.documentsProcessed, 16);
+  assert.equal(result.failedWorkloads, 1, "rejected evidence remains visible");
+});

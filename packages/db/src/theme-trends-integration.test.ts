@@ -91,7 +91,7 @@ test(
       `no-information windows are not stored (${rows.rows.length} of 45 dates kept)`
     );
     const snapshot = () => client.query(
-      "select id, xmin::text as version, intensity::text, source_mix from theme_trends where theme_id = $1 order by id",
+      "select id, date::text, xmin::text as version, intensity::text, source_mix from theme_trends where theme_id = $1 order by id",
       [themeId]
     );
     const before = (await snapshot()).rows;
@@ -108,8 +108,28 @@ test(
       if (message.startsWith("removed obsolete")) throw new Error("publication interrupted");
     }}), /publication interrupted/);
     assert.deepEqual((await snapshot()).rows, changed, "failed publication rolls back writes and deletions");
+    await client.query("update signals set score_contribution = 3 where id = $1", [`integration:signal:${suffix}`]);
+    const priorBatchSize = process.env.TREND_PUBLICATION_BATCH_SIZE;
+    process.env.TREND_PUBLICATION_BATCH_SIZE = "3";
+    context.after(() => {
+      if (priorBatchSize === undefined) delete process.env.TREND_PUBLICATION_BATCH_SIZE;
+      else process.env.TREND_PUBLICATION_BATCH_SIZE = priorBatchSize;
+    });
+    const nextDay = isoDate(-1);
+    const progress: string[] = [];
+    await assert.rejects(recomputeThemeTrends({ ...options, asOfDate: nextDay, onProgress(message) {
+      if (message.startsWith("published ")) throw new Error("rollover batch interrupted");
+    }}), /rollover batch interrupted/);
+    assert.deepEqual((await snapshot()).rows, changed, "even an interrupted rollover batch leaves the prior snapshot intact");
+    const rollover = await recomputeThemeTrends({ ...options, asOfDate: nextDay, onProgress: message => progress.push(message) });
+    assert.ok(rollover.trendRowsChanged > 3);
+    assert.ok(progress.filter(message => message.startsWith("published ")).length > 1, "rollover spans multiple bounded writes");
+    const advanced = (await snapshot()).rows;
+    assert.ok(advanced.some(row => row.date === nextDay), "rollover publishes the next day");
+    assert.ok(advanced.some(row => row.source_mix.baselineDays !== changed.find(old => old.id === row.id)?.source_mix.baselineDays), "historical baselines reflect the new calculation date");
+    assert.equal((await recomputeThemeTrends({ ...options, asOfDate: nextDay })).trendRowsChanged, 0, "retry after rollover is a no-op");
     await client.query("delete from signals where theme_id = $1", [themeId]);
-    await recomputeThemeTrends(options);
+    await recomputeThemeTrends({ ...options, asOfDate: nextDay });
     assert.equal((await snapshot()).rows.length, 0, "disappearing themes leave no stale trends");
     for (const row of rows.rows) {
       if (row.date === asOfDate) continue;

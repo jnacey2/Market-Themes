@@ -24,20 +24,18 @@ export async function pollAnthropicBatches(options: {
   const results: Record<string, unknown> = {};
   let batchesCompleted = 0;
   let failedWorkloads = 0;
+  let documentsProcessed = 0;
 
   for (const workload of workloads) {
     try {
       const result = await workload.poll();
       results[workload.name] = result;
       if (result.status === "completed") batchesCompleted += 1;
-      const failedDocuments = Number(
-        "summary" in result &&
-          result.summary &&
-          typeof result.summary === "object" &&
-          "failedDocuments" in result.summary
-          ? result.summary.failedDocuments
-          : 0
-      );
+      const summary = "summary" in result && result.summary && typeof result.summary === "object"
+        ? result.summary as Record<string, unknown> : {};
+      const processed = Number(summary.documentsProcessed ?? summary.completedDocuments ?? 0);
+      if (Number.isFinite(processed) && processed > 0) documentsProcessed += processed;
+      const failedDocuments = Number(summary.failedDocuments ?? 0);
       if (result.status === "failed" || failedDocuments > 0) {
         failedWorkloads += 1;
       }
@@ -55,7 +53,7 @@ export async function pollAnthropicBatches(options: {
     }
   }
 
-  return { batchesCompleted, failedWorkloads, workloads: results };
+  return { batchesCompleted, documentsProcessed, failedWorkloads, workloads: results };
 }
 
 function defaultPollers(): BatchPoller[] {
@@ -80,7 +78,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const result = await runRecordedJob(
     "anthropic_batch_poll",
     () => pollAnthropicBatches(),
-    (value) => value.batchesCompleted,
+    (value) => value.documentsProcessed || value.batchesCompleted,
     (value) => value.failedWorkloads
   );
   console.log(`[anthropic-batch-poll] ${JSON.stringify(result)}`);
