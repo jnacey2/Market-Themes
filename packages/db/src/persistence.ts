@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import pg from "pg";
+import { rebuildTrendSnapshot } from "./trend-snapshot";
 import { acquireTrendDatabaseLock } from "./trend-database-lock";
 import { loadSignalsForTrendComputation, type SignalTrendInput } from "./trend-signals";
 import type {
@@ -2027,8 +2028,14 @@ export async function recomputeThemeTrends(
     options.onProgress?.(`publishing ${trendRowsWritten} staged trend rows`);
     const publicationTimeoutMs = Math.max(trendQueryTimeoutMs, 300_000);
     await client.query("select set_config('statement_timeout', $1, true)", [String(publicationTimeoutMs)]);
-    const trendRowsChanged = await publishTrendRows(client, options.onProgress);
-    await deleteObsoleteTrendRows(client, storageStartDate, asOfDate);
+    const rebuildThreshold = Number(process.env.TREND_SNAPSHOT_REBUILD_MIN_ROWS ?? 50_000);
+    const latest = await client.query<{ date: string | null }>("select max(date)::text as date from theme_trends");
+    const rebuild = Number.isFinite(rebuildThreshold) && rebuildThreshold > 0 &&
+      trendRowsWritten >= rebuildThreshold && (!latest.rows[0].date || latest.rows[0].date < asOfDate);
+    const trendRowsChanged = rebuild
+      ? await rebuildTrendSnapshot(client, storageStartDate, asOfDate, options.onProgress)
+      : await publishTrendRows(client, options.onProgress);
+    if (!rebuild) await deleteObsoleteTrendRows(client, storageStartDate, asOfDate);
     options.onProgress?.("removed obsolete trend rows");
     await client.query("commit");
     options.onProgress?.(

@@ -128,8 +128,50 @@ test(
     assert.ok(advanced.some(row => row.date === nextDay), "rollover publishes the next day");
     assert.ok(advanced.some(row => row.source_mix.baselineDays !== changed.find(old => old.id === row.id)?.source_mix.baselineDays), "historical baselines reflect the new calculation date");
     assert.equal((await recomputeThemeTrends({ ...options, asOfDate: nextDay })).trendRowsChanged, 0, "retry after rollover is a no-op");
+    const previousThreshold = process.env.TREND_SNAPSHOT_REBUILD_MIN_ROWS;
+    process.env.TREND_SNAPSHOT_REBUILD_MIN_ROWS = "1";
+    context.after(() => {
+      if (previousThreshold === undefined) delete process.env.TREND_SNAPSHOT_REBUILD_MIN_ROWS;
+      else process.env.TREND_SNAPSHOT_REBUILD_MIN_ROWS = previousThreshold;
+    });
+    const followingDay = isoDate(-2);
+    const tableShape = async () => ({
+      constraints: (await client.query("select conname, contype, pg_get_constraintdef(oid) as definition from pg_constraint where conrelid = 'theme_trends'::regclass order by conname")).rows,
+      indexes: (await client.query("select indexname, indexdef from pg_indexes where tablename = 'theme_trends' order by indexname")).rows
+    });
+    const shape = await tableShape();
+    const createdAt = (await client.query("select id, created_at::text from theme_trends where theme_id = $1 order by id", [themeId])).rows;
+    const oidBefore = (await client.query("select 'theme_trends'::regclass::oid as oid")).rows[0].oid;
+    const reader = createDatabaseClient(databaseUrl!);
+    await reader.connect();
+    try {
+      await assert.rejects(recomputeThemeTrends({ ...options, asOfDate: followingDay, onProgress(message) {
+        if (message === "replacement trend snapshot switched") throw new Error("snapshot switch interrupted");
+      }}), /snapshot switch interrupted/);
+      assert.deepEqual((await snapshot()).rows, advanced, "even a failure after table replacement rolls back the whole snapshot");
+      assert.equal((await client.query("select 'theme_trends'::regclass::oid as oid")).rows[0].oid, oidBefore);
+      assert.deepEqual(await tableShape(), shape, "failed replacement restores all constraints and indexes");
+      const rebuiltProgress: string[] = [];
+      const rebuilt = await recomputeThemeTrends({ ...options, asOfDate: followingDay, onProgress: message => rebuiltProgress.push(message) });
+      assert.ok(rebuilt.trendRowsChanged > 0);
+      assert.ok(rebuiltProgress.includes("replacement trend snapshot switched"));
+      assert.notEqual((await client.query("select 'theme_trends'::regclass::oid as oid")).rows[0].oid, oidBefore);
+      assert.deepEqual(await tableShape(), shape, "replacement preserves constraint/index definitions and canonical names");
+      const datesAfter = (await reader.query("select id, created_at::text from theme_trends where theme_id = $1 order by id", [themeId])).rows;
+      for (const row of createdAt) assert.equal(datesAfter.find(item => item.id === row.id)?.created_at, row.created_at, "retained rows keep their original creation date");
+      assert.equal((await recomputeThemeTrends({ ...options, asOfDate: followingDay })).trendRowsChanged, 0, "same-day retry returns to no-op incremental publication");
+      await client.query("create view integration_trend_dependency as select id from theme_trends");
+      try {
+        await assert.rejects(recomputeThemeTrends({ ...options, asOfDate: isoDate(-3) }), /without custom grants, views/);
+      } finally {
+        await client.query("drop view integration_trend_dependency");
+      }
+      assert.equal((await client.query("select count(*)::int as count from pg_tables where tablename like 'theme_trends_next_%' or tablename like 'theme_trends_old_%'")).rows[0].count, 0, "no abandoned snapshot tables remain");
+    } finally {
+      await reader.end();
+    }
     await client.query("delete from signals where theme_id = $1", [themeId]);
-    await recomputeThemeTrends({ ...options, asOfDate: nextDay });
+    await recomputeThemeTrends({ ...options, asOfDate: followingDay });
     assert.equal((await snapshot()).rows.length, 0, "disappearing themes leave no stale trends");
     for (const row of rows.rows) {
       if (row.date === asOfDate) continue;
