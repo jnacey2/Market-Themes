@@ -19,17 +19,21 @@ export type NormalizeThemesOptions = {
   model?: string;
   promptVersion?: string;
   maxTokens?: number;
+  /** Injectable transport for deterministic protocol/retry tests. */
+  fetch?: typeof fetch;
 };
 
 export async function normalizeThemeGroups(
   groups: ThemeGroupForNormalization[],
   options: NormalizeThemesOptions = {}
 ): Promise<ThemeNormalizationMapping[]> {
+  if (groups.length === 0) return [];
   const model = options.model ?? process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
   const promptVersion =
     options.promptVersion ?? process.env.THEME_NORMALIZATION_PROMPT_VERSION ?? themeNormalizationPromptVersion;
   const client = new Anthropic({
-    apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY
+    apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY,
+    fetch: options.fetch
   });
   const message = await client.messages.create({
     model,
@@ -44,6 +48,16 @@ export async function normalizeThemeGroups(
     ]
   });
   logAnthropicUsage("theme-normalization", model, message.usage);
+  if (message.stop_reason === "max_tokens" && groups.length > 1) {
+    const middle = Math.ceil(groups.length / 2);
+    console.warn(`[theme-normalization] truncated ${groups.length} groups; retrying halves of ${middle} and ${groups.length - middle}`);
+    // Discard the partial payload completely. Sequential halves preserve rate
+    // limits and terminate at a single group if even that cannot fit the budget.
+    return [
+      ...await normalizeThemeGroups(groups.slice(0, middle), options),
+      ...await normalizeThemeGroups(groups.slice(middle), options)
+    ];
+  }
   return validateMappings(
     parseStructuredOutput(message, "Theme normalization"),
     {
