@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import { validateCandidateForPromotion } from "@market-themes/analysis";
 import {
   autoApproveNarrativeObservations,
+  auditNarrativeEvidenceQuality,
   autoPromoteNarrativeCandidates,
   listRecentlyObservedEvidenceWindows,
   reconcileNarrativeDefinitionLifecycle,
@@ -49,6 +50,7 @@ export async function autoReviewNarratives() {
     return result;
   }
 
+  const evidenceQuality = await auditNarrativeEvidenceQuality();
   const result = await autoApproveNarrativeObservations();
   const structuralOptions = resolveStructuralAutoReviewOptions();
   const structuralResult = structuralOptions
@@ -79,6 +81,7 @@ export async function autoReviewNarratives() {
       result.approvedObservations +
       (structuralResult?.approvedObservations ?? 0) +
       historical.approvedObservations,
+    evidenceQuality,
     structuralTier: structuralResult
       ? {
           approvedObservations: structuralResult.approvedObservations,

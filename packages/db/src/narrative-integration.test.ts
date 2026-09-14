@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   createDatabaseClient,
+  auditNarrativeEvidenceQuality,
   getActiveNarrativeDefinitions,
   getTrackedNarrativeDefinitions,
   getNarrativeBoardStatus,
@@ -225,6 +226,36 @@ test(
       process.env.DATABASE_URL,
       "integration-v1"
     );
+    const fallbackClient = createDatabaseClient(process.env.DATABASE_URL!);
+    await fallbackClient.connect();
+    try {
+      await fallbackClient.query(`update narrative_trends set coverage_state=case when matched_documents>0 then 'measured' else 'measured_zero' end,
+        classification_coverage_pct=100 where prompt_version='integration-v1' and trend_window='7d' and date='2026-08-27'`);
+      for (const actor of ["automatic","human"]) {
+        await fallbackClient.query(`insert into narrative_observations
+          select (jsonb_populate_record(null::narrative_observations,to_jsonb(no) ||
+            jsonb_build_object('id',$2::text,'model',$2::text,'prompt_version','narrative_classification_v7',
+              'evidence_snippet','insatiable demand for AI compute power','interpretation','Revenue growth proves strong demand.',
+              'matched',true,'review_status','approved','metadata',jsonb_build_object('reviewProvenance',jsonb_build_object('actorType',$3::text))))).*
+          from narrative_observations no where no.id=$1`,
+          [`integration:observation:${suffix}`,`integration:quality:${actor}:${suffix}`,actor]);
+      }
+      await auditNarrativeEvidenceQuality(process.env.DATABASE_URL,new Date("2026-08-28T00:00:00Z"));
+      const qualityRows = (await fallbackClient.query("select id,review_status from narrative_observations where id like $1",[`integration:quality:%:${suffix}`])).rows;
+      assert.equal(qualityRows.find(row=>row.id.includes(':automatic:')).review_status,'rejected');
+      assert.equal(qualityRows.find(row=>row.id.includes(':human:')).review_status,'approved');
+      assert.equal((await fallbackClient.query("select count(*)::int as count from narrative_review_events where observation_id=$1 and actor_type='system'",[`integration:quality:automatic:${suffix}`])).rows[0].count,1);
+      await fallbackClient.query(`insert into narrative_trends
+        select (jsonb_populate_record(null::narrative_trends,to_jsonb(nt) ||
+          jsonb_build_object('id',nt.id || ':pending','date','2026-08-28',
+            'coverage_state','backfill_pending','classification_coverage_pct',97.5))).*
+        from narrative_trends nt where prompt_version='integration-v1' and trend_window='7d' and date='2026-08-27'`);
+      const retained = await getNarrativeHomepageStatus(process.env.DATABASE_URL,"integration-v1");
+      assert.equal(retained.latestDate,"2026-08-27");
+      assert.equal(retained.pendingMeasurementDate,"2026-08-28");
+      assert.equal(retained.pendingCoveragePercent,97.5);
+      assert.ok(retained.narratives.some(item => item.id === definition.id && item.matchedDocuments > 0));
+    } finally { await fallbackClient.end(); }
     assert.equal(homepage.degraded, false);
     assert.equal(homepage.latestDate, "2026-08-27");
     assert.equal(homepage.trackedNarrativeCount, trackedDefinitions.length);

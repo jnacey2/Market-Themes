@@ -54,27 +54,47 @@ export async function rebuildTrendSnapshot(
     "select relacl is not null as customized from pg_class where oid = $1::regclass", [next]
   );
   if (grants.rows[0]?.customized) throw new Error("Trend snapshot replacement cannot inherit custom default grants.");
-  await client.query(`alter table ${next} add column publication_changed boolean`);
   onProgress?.("building replacement trend snapshot");
-  const inserted = await client.query<{ changed: string }>(`with copied as (
-    insert into ${next} (
-      id, theme_id, trend_window, date, intensity, baseline_mean, baseline_stddev,
-      z_score, percentile_rank, source_mix, created_at, publication_changed
-    )
-    select incoming.*, coalesce(old.created_at, now()),
+  // A cursor bounds each read and write statement while preserving one snapshot.
+  // Prefer the full-scan plan: a fast-start nested loop thrashes the small DB cache.
+  await client.query("set local cursor_tuple_fraction = 1.0");
+  await client.query(`declare trend_snapshot_rows no scroll cursor for
+    select incoming.id, incoming.theme_id, incoming.trend_window, incoming.date::text,
+      incoming.intensity, incoming.baseline_mean, incoming.baseline_stddev,
+      incoming.z_score, incoming.percentile_rank, incoming.source_mix,
+      coalesce(old.created_at, now())::text as created_at,
       old.id is distinct from incoming.id or
       (old.intensity, old.baseline_mean, old.baseline_stddev, old.z_score,
        old.percentile_rank, old.source_mix) is distinct from
       (incoming.intensity, incoming.baseline_mean, incoming.baseline_stddev,
-       incoming.z_score, incoming.percentile_rank, incoming.source_mix)
+       incoming.z_score, incoming.percentile_rank, incoming.source_mix) as publication_changed
     from staged_theme_trends incoming
     left join ${current} old using (theme_id, trend_window, date)
     union all
-    select old.*, false from ${current} old
-    where old.date < $1::date or old.date > $2::date
-    returning publication_changed
-  ) select count(*) filter (where publication_changed)::text as changed from copied`, [startDate, endDate]);
-  await client.query(`alter table ${next} drop column publication_changed`);
+    select old.id, old.theme_id, old.trend_window, old.date::text, old.intensity,
+      old.baseline_mean, old.baseline_stddev, old.z_score, old.percentile_rank,
+      old.source_mix, old.created_at::text, false from ${current} old
+    where old.date < $1::date or old.date > $2::date`, [startDate, endDate]);
+  let changed = 0;
+  let copied = 0;
+  while (true) {
+    const batch = await client.query("fetch forward 1000 from trend_snapshot_rows");
+    if (batch.rows.length === 0) break;
+    await client.query(`insert into ${next} (
+      id, theme_id, trend_window, date, intensity, baseline_mean, baseline_stddev,
+      z_score, percentile_rank, source_mix, created_at
+    ) select id, theme_id, trend_window, date, intensity, baseline_mean, baseline_stddev,
+      z_score, percentile_rank, source_mix, created_at
+      from jsonb_to_recordset($1::jsonb) as r(
+        id text, theme_id text, trend_window text, date date, intensity numeric,
+        baseline_mean numeric, baseline_stddev numeric, z_score numeric,
+        percentile_rank numeric, source_mix jsonb, created_at timestamptz
+      )`, [JSON.stringify(batch.rows)]);
+    changed += batch.rows.filter(row => row.publication_changed).length;
+    copied += batch.rows.length;
+    onProgress?.(`loaded replacement trend rows ${copied}`);
+  }
+  await client.query("close trend_snapshot_rows");
   onProgress?.("loaded replacement trend snapshot; building constraints and indexes");
   const renames: Array<{ temporary: string; original: string; constraint: boolean }> = [];
   for (const [index, constraint] of constraints.rows.entries()) {
@@ -104,5 +124,5 @@ export async function rebuildTrendSnapshot(
       : `alter index ${schema}.${identifier(rename.temporary)} rename to ${identifier(rename.original)}`);
   }
   onProgress?.("replacement trend snapshot switched");
-  return Number(inserted.rows[0].changed);
+  return changed;
 }

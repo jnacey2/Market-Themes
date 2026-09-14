@@ -133,6 +133,13 @@ keyword, article summary, trade recommendation, or restatement of an already
 tracked narrative.
 
 Rules:
+- Separate the observable fact from a hypothesis. A financing transaction, insider sale,
+  or canceled sale does not establish conviction, undervaluation, returns or AI monetization.
+- Investor demand for securities is not customer demand for operating capacity.
+- Do not append claims such as "validates returns" or "independent of prior concerns"
+  unless the quoted passage itself establishes them. Shorten the proposition instead.
+- A reversal or cancellation belongs to the same underlying event, with updated facts;
+  do not treat contradictory versions as independent corroboration.
 - Return at most three candidates. Return an empty candidates array when the document
   has no strong new proposition.
 - Do not return a candidate covered by trackedNarratives.
@@ -194,6 +201,11 @@ Classify the candidate:
   is supported beyond one underlying event.
 
 For every evidence item:
+- A sale plan and its cancellation cannot both prove conviction in business returns.
+  Reject unsupported motivations and valuation conclusions regardless of publisher count.
+- Securities demand is not operating demand. A quotation must establish the actual metric.
+- Group issuer releases, exhibits, transcripts and reporting about the same quarter or
+  announcement under one eventKey. Distinct publishers are not distinct business events.
 - supportsProposition is true only when the exact quotation and local context
   directly entail the candidate proposition.
 - violatesExclusion is true when the evidence falls within the candidate's

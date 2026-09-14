@@ -14,3 +14,5 @@ export * from "./narrative-eval-cases";
 export * from "./narrative-backtest";
 export * from "./ingestion-funnel";
 export * from "./narrative-evidence";
+export * from "./research-queue";
+export * from "./evidence-quality";

@@ -50,7 +50,7 @@ test("requires matched evidence to be an exact source quote", () => {
       contractSatisfied: true,
       inclusionCriteriaSatisfied: ["Direct evidence"],
       exclusionCriteriaTriggered: [],
-      evidenceSnippet: "Demand is rising quickly",
+      evidenceSnippet: document.text,
       interpretation: "Demand is accelerating.",
       affectedEntities: ["Example"]
     },

@@ -1,3 +1,4 @@
+import { evidenceQualityReasons } from "@market-themes/db";
 import { createHash } from "node:crypto";
 import { resolveSourceQuotation } from "./source-quotation";
 import Anthropic from "@anthropic-ai/sdk";
@@ -308,7 +309,8 @@ export function normalizeObservation(
     requestedMatch &&
     evidence.length > 0 &&
     document.text.includes(evidence) &&
-    passesNarrativeEvidenceContract(definition, evidence);
+    passesNarrativeEvidenceContract(definition, evidence) &&
+    evidenceQualityReasons(evidence, String(raw?.interpretation ?? ""), definition.proposition).length === 0;
   const stance = isStance(raw?.stance) ? raw.stance : "neutral";
 
   return {
@@ -339,6 +341,7 @@ export function normalizeObservation(
     model,
     promptVersion,
     metadata: {
+      evidenceQualityPolicy: "evidence_quality_v1",
       definitionVersion: definition.version,
       textHash: document.textHash,
       contractValidation: {

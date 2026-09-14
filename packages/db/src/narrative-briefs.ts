@@ -239,6 +239,11 @@ export async function generateDailyBrief(
       reason: "No published narrative measurements yet"
     };
   }
+  // Never mix a retained complete board with today's incomplete change report.
+  if (homepage.pendingMeasurementDate) {
+    return { brief: null, alertsWritten: 0, skipped: true,
+      reason: `Retaining the last complete brief while ${homepage.pendingMeasurementDate} classification finishes.` };
+  }
   const draft = buildDailyBrief(homepage.lanes, report, date);
   const alerts = deriveNarrativeAlerts(report, homepage.lanes);
   const client = createDatabaseClient(databaseUrl);

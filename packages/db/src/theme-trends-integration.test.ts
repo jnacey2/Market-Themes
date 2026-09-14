@@ -135,6 +135,10 @@ test(
       else process.env.TREND_SNAPSHOT_REBUILD_MIN_ROWS = previousThreshold;
     });
     const followingDay = isoDate(-2);
+    await assert.rejects(recomputeThemeTrends({ ...options, asOfDate: followingDay, onProgress(message) {
+      if (message.startsWith("loaded replacement trend rows")) throw new Error("snapshot copy interrupted");
+    }}), /snapshot copy interrupted/);
+    assert.deepEqual((await snapshot()).rows, advanced, "a failed copy batch leaves published data untouched");
     const tableShape = async () => ({
       constraints: (await client.query("select conname, contype, pg_get_constraintdef(oid) as definition from pg_constraint where conrelid = 'theme_trends'::regclass order by conname")).rows,
       indexes: (await client.query("select indexname, indexdef from pg_indexes where tablename = 'theme_trends' order by indexname")).rows

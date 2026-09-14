@@ -1990,7 +1990,9 @@ export async function getNarrativeHomepageStatus(
       [promptVersion]
     );
     const trackedNarrativeCount = Number(overview.rows[0]?.tracked_count ?? 0);
-    const latestDate = overview.rows[0]?.latest_date ?? null;
+    let latestDate = overview.rows[0]?.latest_date ?? null;
+    let pendingMeasurementDate: string | undefined;
+    let pendingCoveragePercent: number | undefined;
     let trendRows: Array<DefinitionRow & TrendRow> = [];
     if (latestDate) {
       const trends = await client.query<DefinitionRow & TrendRow>(
@@ -2008,6 +2010,28 @@ export async function getNarrativeHomepageStatus(
         [promptVersion, latestDate]
       );
       trendRows = trends.rows;
+    }
+    if (latestDate && trendRows.some(row => row.coverage_state === "backfill_pending")) {
+      const complete = await client.query<{ date: string }>(
+        `select nt.date::text from narrative_trends nt
+         join narrative_definitions nd on nd.id = nt.narrative_definition_id
+         where nt.prompt_version = $1 and nt.trend_window = '7d'
+           and nt.date < $2::date and nt.date >= $2::date - interval '7 days'
+           and nd.status in ('active', 'probationary')
+         group by nt.date having bool_and(nt.coverage_state in ('measured', 'measured_zero'))
+         order by nt.date desc limit 1`, [promptVersion, latestDate]);
+      if (complete.rows[0]) {
+        pendingMeasurementDate = latestDate;
+        pendingCoveragePercent = Math.min(...trendRows.map(row => Number(row.classification_coverage_pct)));
+        latestDate = complete.rows[0].date;
+        trendRows = (await client.query<DefinitionRow & TrendRow>(
+          `select ${DEFINITION_COLUMNS}, ${TREND_COLUMNS} from narrative_trends nt
+           join narrative_definitions nd on nd.id = nt.narrative_definition_id
+           left join narrative_definitions parent on parent.id = nd.parent_definition_id
+           where nt.date = $2::date and nt.trend_window = '7d' and nt.prompt_version = $1
+             and nd.status in ('active', 'probationary')
+           order by nt.attention_z_score desc, nt.story_breadth desc`, [promptVersion, latestDate])).rows;
+      }
     }
     const evidenceNarrativeIds = trendRows
       .filter((row) => row.matched_documents > 0)
@@ -2127,13 +2151,15 @@ export async function getNarrativeHomepageStatus(
       .sort(compareByKindThenSurprise);
     const structuralThemes = narratives
       .filter((item) => (item.kind ?? "structural") === "structural")
-      .sort(compareBySurprise);
+      .sort((a, b) => Number(b.storyBreadth > 0) - Number(a.storyBreadth > 0) || compareBySurprise(a, b));
 
     return {
       databaseConfigured: true,
       degraded: evidenceDegraded,
       latestDate,
       trackedNarrativeCount,
+      pendingMeasurementDate,
+      pendingCoveragePercent,
       narratives: measured,
       structuralThemes,
       lanes: buildHomepageLanes(narratives, latestDate),
