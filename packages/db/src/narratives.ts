@@ -1886,7 +1886,7 @@ export function compareBySurprise(
   );
 }
 
-/** Structural themes first, then the same surprise ordering within each kind. */
+/** Reviewed coverage first, then structural themes and surprise within each kind. */
 export function compareByKindThenSurprise(
   left: Pick<
     NarrativeTrendSummary,
@@ -1898,6 +1898,7 @@ export function compareByKindThenSurprise(
   >
 ) {
   return (
+    Number(right.storyBreadth > 0) - Number(left.storyBreadth > 0) ||
     kindRank(left.kind) - kindRank(right.kind) || compareBySurprise(left, right)
   );
 }

@@ -200,7 +200,7 @@ export default async function HomePage() {
       <section className="section" id="narratives">
         <p className="eyebrow">Most surprising versus own history</p>
         <p className="lane-empty">
-          Structural themes first, then event narratives, each ranked by attention
+          Themes with approved coverage first, then structural and event narratives ranked by attention
           z-score.
         </p>
         {dashboard.degraded && !summaryUnavailable ? (
@@ -273,7 +273,7 @@ function pickLeadNarrative(dashboard: NarrativeHomepageStatus) {
     dashboard.lanes.peaking.find(structural) ??
     dashboard.lanes.rising[0] ??
     dashboard.lanes.peaking[0] ??
-    dashboard.narratives[0] ??
+    dashboard.narratives.find(item => item.storyBreadth > 0) ??
     null
   );
 }

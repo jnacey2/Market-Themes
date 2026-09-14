@@ -3,10 +3,20 @@ import test from "node:test";
 import {
   buildHomepageLanes,
   compareBySurprise,
+  compareByKindThenSurprise,
   deriveNarrativeChanges,
   type ChangeSnapshotRow
 } from "./narratives";
 import type { NarrativeHomepageItem } from "./types";
+
+test("reviewed evidence outranks zero-story themes even when its surprise is negative", () => {
+  const sorted = [
+    item({ id: "empty", kind: "structural", storyBreadth: 0, attentionZScore: 0 }),
+    item({ id: "event", kind: "event", storyBreadth: 3, attentionZScore: 2 }),
+    item({ id: "covered", kind: "structural", storyBreadth: 12, attentionZScore: -1 })
+  ].sort(compareByKindThenSurprise);
+  assert.deepEqual(sorted.map(row => row.id), ["covered", "event", "empty"]);
+});
 
 test("homepage lanes group narratives by lifecycle state and rank by surprise", () => {
   const items = [
