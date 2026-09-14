@@ -1,3 +1,4 @@
+import { evidenceQualityReasons } from "@market-themes/db";
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
@@ -283,6 +284,7 @@ function normalizeCandidate(
   const matchScore = score(raw.matchScore);
   if (!name || !proposition || !evidenceSnippet || matchScore < 75) return null;
   if (!containsSnippet(document.text, evidenceSnippet)) return null;
+  if (evidenceQualityReasons(evidenceSnippet, String(raw.interpretation ?? ""), proposition).length) return null;
 
   const requestedKey = slugifyCandidateKey(
     cleanString(raw.clusterKey, 80) || name
@@ -357,7 +359,7 @@ function normalizeCandidate(
         matchScore,
         model: options.model,
         promptVersion: options.promptVersion,
-        metadata: { textHash: document.textHash }
+        metadata: { textHash: document.textHash, evidenceQualityPolicy: "evidence_quality_v1" }
       }
     ]
   };

@@ -1,3 +1,4 @@
+import { evidenceQualityReasons } from "./evidence-quality";
 import { createHash, randomUUID } from "node:crypto";
 import { createDatabaseClient } from "./persistence";
 
@@ -2282,6 +2283,7 @@ function isAllowedPromotionEvidence(
   const evidenceTextHash = row.evidence_metadata.textHash;
   const matchScore = Number(row.match_score);
   if (
+    evidenceQualityReasons(row.evidence_snippet, row.interpretation, candidate.proposition).length > 0 ||
     !Number.isFinite(matchScore) ||
     matchScore < policy.minimumMatchScore ||
     matchScore > 100 ||

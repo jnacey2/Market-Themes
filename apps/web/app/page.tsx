@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ResearchQueue } from "../components/ResearchQueue";
 import {
   getNarrativeHomepageStatus,
   type NarrativeHomepageItem,
@@ -62,6 +63,7 @@ export default async function HomePage() {
     <div className="shell">
       <nav className="page-jump-nav" aria-label="On this page">
         <span>On this page</span>
+        <a href="#research">Research queue</a>
         <a href="#themes">Structural themes</a>
         <a href="#lanes">Lifecycle lanes</a>
         <a href="#narratives">Most surprising</a>
@@ -70,6 +72,12 @@ export default async function HomePage() {
         <HowToReadLink>How to read</HowToReadLink>
       </nav>
 
+      {dashboard.pendingMeasurementDate ? <div className="panel" role="status">
+        <strong>Latest complete measurements: {formatMeasurementDate(dashboard.latestDate)}</strong>
+        <p>The {formatMeasurementDate(dashboard.pendingMeasurementDate)} update is still processing
+          ({dashboard.pendingCoveragePercent?.toFixed(1)}% classified). The board retains the last complete
+          measurements; current evidence is available in the research queue.</p>
+      </div> : null}
       <section className="hero">
         <div>
           <p className="eyebrow">Narrative Intelligence</p>
@@ -166,6 +174,7 @@ export default async function HomePage() {
         </div>
       </section>
 
+      <ResearchQueue />
       <section className="section" id="themes">
         <p className="eyebrow">Structural themes</p>
         <StructuralThemes
@@ -293,8 +302,8 @@ function StructuralThemes({
   return (
     <div className="panel theme-strip">
       <p className="lane-empty">
-        The long-running propositions the board exists to track, ranked by how unusual
-        this week is against each theme&apos;s own history. Event narratives (headline
+        Themes with approved coverage appear first, ranked by how unusual
+        the measured week is against each theme&apos;s own history. Event narratives (headline
         stories) are listed separately below.
       </p>
       <div className="theme-rows">
@@ -314,7 +323,7 @@ function StructuralThemes({
                 <span>
                   <MetricTerm term="density">Density</MetricTerm>
                 </span>
-                <strong>{measured ? theme.density.toFixed(1) : "—"}</strong>
+                <strong>{measured ? `${theme.density.toFixed(2)}%` : "—"}</strong>
               </div>
               <div className="theme-row-metric">
                 <span>
@@ -567,7 +576,7 @@ function NarrativeCard({
           <span className="label">
             <MetricTerm term="density" />
           </span>
-          <strong>{narrative.density.toFixed(1)}</strong>
+          <strong>{narrative.density.toFixed(2)}</strong>
         </div>
         <Link className="pill" href={narrativeDataPath(narrative.slug)}>
           Details
@@ -587,7 +596,7 @@ function narrativeSummary(narrative: NarrativeHomepageItem) {
     ].join(" ");
   }
   return [
-    `Reviewed seven-day density is ${narrative.density.toFixed(1)}% (${signed(narrative.change)} vs the prior window); raw attention density is ${narrative.attentionDensity.toFixed(1)}% across ${narrative.attentionMatchedDocuments} classifier matches.`,
+    `Reviewed seven-day density is ${narrative.density.toFixed(2)}% (${signed(narrative.change)} vs the prior window); raw attention density is ${narrative.attentionDensity.toFixed(1)}% across ${narrative.attentionMatchedDocuments} classifier matches.`,
     `${narrative.storyBreadth} unique ${narrative.storyBreadth === 1 ? "story spans" : "stories span"} ${narrative.publisherOwnerBreadth} publisher ${narrative.publisherOwnerBreadth === 1 ? "group" : "groups"} and ${narrative.sourceClassBreadth} source ${narrative.sourceClassBreadth === 1 ? "class" : "classes"}.`,
     narrative.lowHistory
       ? `The baseline has ${narrative.baselineWindows} comparison windows so far; z-scores are provisional.`

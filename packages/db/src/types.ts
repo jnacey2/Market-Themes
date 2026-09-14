@@ -852,6 +852,8 @@ export type NarrativeHomepageItem = Omit<
 export type NarrativeHomepageLane = "rising" | "peaking" | "fading" | "emerging";
 
 export type NarrativeHomepageStatus = {
+  pendingMeasurementDate?: string;
+  pendingCoveragePercent?: number;
   databaseConfigured: boolean;
   degraded: boolean;
   latestDate: string | null;

@@ -344,6 +344,8 @@ services:
           property: connectionString
       - key: FMP_API_KEY
         sync: false
+      - key: SEC_USER_AGENT
+        sync: false
       - key: TARGET_UNIVERSE
         value: sp500
       - key: FMP_RATE_LIMIT_MS

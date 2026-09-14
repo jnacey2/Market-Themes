@@ -11,7 +11,7 @@
     "sec:backfill": "node --import tsx src/jobs/sec-backfill.ts",
     "fmp:smoke": "node --import tsx src/jobs/fmp-smoke.ts",
     "fmp:backfill": "node --import tsx src/jobs/fmp-backfill.ts",
-    "fmp:poll": "node --import tsx src/jobs/fmp-poll.ts",
+    "fmp:poll": "node --import tsx src/jobs/poll-research-sources.ts",
     "fmp:news:poll": "node --import tsx src/jobs/fmp-news-poll.ts",
     "fmp:news:backfill": "node --import tsx src/jobs/fmp-news-backfill.ts",
     "pipeline": "node --import tsx src/jobs/run-pipeline.ts",
@@ -39,7 +39,9 @@
     "premium:capture-session": "node --import tsx src/tools/capture-publisher-session.ts",
     "substack:capture-session": "node --import tsx src/tools/capture-substack-session.ts",
     "substack:scrape": "node --import tsx src/jobs/scrape-substack.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "research:publish": "node --import tsx src/jobs/generate-research-queue.ts",
+    "research:sources": "node --import tsx src/jobs/poll-research-sources.ts"
   },
   "dependencies": {
     "@market-themes/analysis": "0.1.0",

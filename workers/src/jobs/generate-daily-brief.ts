@@ -1,12 +1,15 @@
 import { pathToFileURL } from "node:url";
-import { generateDailyBrief } from "@market-themes/db";
+import { generateDailyBrief, generateResearchQueue } from "@market-themes/db";
 import { runRecordedJob } from "./recorded-job";
 
 export async function runDailyBrief() {
+  const research = await generateResearchQueue();
   const result = await generateDailyBrief({
     date: process.env.BRIEF_DATE || undefined
   });
   return {
+    researchLeads: research.leads.length,
+    researchDocumentsScanned: research.documentsScanned,
     skipped: result.skipped,
     reason: result.reason ?? null,
     briefDate: result.brief?.date ?? null,
